@@ -203,6 +203,19 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# aite runtime artifacts
+aite.db
+aite.db-shm
+aite.db-wal
+reports/
+.e2e/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# IDE
+.idea/
+
 # Ruff stuff:
 .ruff_cache/
 

@@ -1,0 +1,3 @@
+{"id": "task-1", "input": "查询北京明天的天气，如果会下雨就提醒我带伞，否则告诉我适合户外活动。", "expected": {"tools": ["weather_api"], "success_markers": ["雨", "伞"]}, "metadata": {"kind": "weather"}}
+{"id": "task-2", "input": "计算 (128 * 46) + 992 的结果并告诉我是否大于 6000。", "expected": {"tools": ["calculator"], "success_markers": ["6880", "6879"]}, "metadata": {"kind": "math"}}
+{"id": "task-3", "input": "在知识库中搜索 aite 的安装方式，总结成两句话。", "expected": {"tools": ["knowledge_search"], "success_markers": ["pip", "install"]}, "metadata": {"kind": "search"}}

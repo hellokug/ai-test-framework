@@ -1,0 +1,29 @@
+run_name: reliability-demo
+description: >
+  可靠性评测：repeats=5 计算 repeat_consistency，
+  perturbations 计算 perturbation_robustness / stability。
+  引擎会物化 repeat-N / perturb-<kind> 衍生用例并聚合回原用例。
+
+target:
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:7b
+  params: {temperature: 0.7}
+  stream: false
+
+datasets:
+  - type: local
+    path: ./examples/data/business_qa.jsonl
+    sample: {n: 5, seed: 3}
+    repeats: 4                           # 1 base + 3 重跑
+    perturbations: [typo, paraphrase]
+
+metrics:
+  - repeat_consistency: {threshold: 0.6}
+  - perturbation_robustness: {threshold: 0.5}
+  - stability: {threshold: 0.5}
+  - latency_p95_ms: {threshold: 30000}
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

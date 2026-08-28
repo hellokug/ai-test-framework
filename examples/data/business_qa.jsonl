@@ -1,0 +1,8 @@
+{"id": "biz-1", "question": "我们公司的退款政策是多少天？", "answer": "30天", "metadata": {"topic": "policy"}}
+{"id": "biz-2", "question": "标准版套餐每月多少钱？", "answer": "199元", "metadata": {"topic": "pricing"}}
+{"id": "biz-3", "question": "客服的工作时间是什么？", "answer": "9:00-21:00", "metadata": {"topic": "support"}}
+{"id": "biz-4", "question": "发票多久能开好？", "answer": "7个工作日", "metadata": {"topic": "finance"}}
+{"id": "biz-5", "question": "你们支持哪些付款方式？", "answer": "支付宝、微信、银行卡", "metadata": {"topic": "pricing"}}
+{"id": "biz-6", "question": "如何重置我的账号密码？", "answer": "通过邮箱验证码重置", "metadata": {"topic": "account"}}
+{"id": "biz-7", "question": "数据可以导出吗？", "answer": "可以，支持CSV导出", "metadata": {"topic": "data"}}
+{"id": "biz-8", "question": "免费试用多少天？", "answer": "14天", "metadata": {"topic": "pricing"}}

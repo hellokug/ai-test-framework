@@ -1,0 +1,29 @@
+run_name: agent-eval-demo
+description: >
+  Agent 评测（HTTP 约定）：被测 agent 服务在响应 JSON 中返回
+  {output, trace: {steps: [{type: tool|llm, name, input, output}]}}，
+  aite 据此计算 tool_call_correctness / agent_efficiency / task_completion。
+  LangChain 用户改用 type: langchain_agent（需要 aite[agent]）。
+
+target:
+  type: custom_http
+  base_url: http://localhost:9000
+  template:
+    method: POST
+    path: /agent/run
+    body: |
+      {"task": {{ case.input | tojson }}, "stream": false}
+  extract: output                       # data.output 为最终答复；trace 同层返回
+
+datasets:
+  - type: local
+    path: ./examples/data/agent_tasks.jsonl
+
+metrics:
+  - tool_call_correctness: {threshold: 0.8, mode: ordered}
+  - task_completion: {threshold: 0.7}
+  - agent_efficiency: {threshold: 0.5, expected_steps: 4}
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

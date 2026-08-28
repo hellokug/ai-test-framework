@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite report - {{ report.run_name }}</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1f2329;--muted:#8a919f;--line:#e5e7eb;
+--pass:#16a34a;--fail:#dc2626;--accent:#2f6fed;--chip:#eef2ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;color:#fff}
+.badge.passed{background:var(--pass)}.badge.failed{background:var(--fail)}.badge.error{background:#d97706}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px;color:#374151}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;background:#fafbfc}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;padding:1px 8px;border-radius:4px;background:var(--chip);color:var(--accent);font-size:12px;margin-right:6px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .v{font-size:22px;font-weight:700}
+.kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
+details{margin-bottom:6px}summary{cursor:pointer;font-weight:600;color:var(--accent)}
+pre{background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.mono{font-family:Consolas,monospace;font-size:12px}
+footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>aite · {{ report.run_name }}
+    <span class="badge {{ report.status }}">{{ report.status | upper }}</span></h1>
+  <div class="sub">
+    run_id <span class="mono">{{ report.run_id or '-' }}</span> ·
+    strategy <b>{{ report.pass_strategy }}</b> ·
+    {{ report.started_at }} → {{ report.finished_at or '…' }} ·
+    cost ${{ '%.4f' % report.total_cost_usd if report.total_cost_usd is not none else '0' }}
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">{{ report.total_cases }}</div><div class="l">cases</div></div>
+    <div class="kpi"><div class="v">{{ report.error_cases }}</div><div class="l">errors</div></div>
+    <div class="kpi"><div class="v">{{ overall | length }}</div><div class="l">metrics</div></div>
+    <div class="kpi"><div class="v">{{ report.details.get('overall_score', '-') }}</div><div class="l">overall score</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Metric summaries (overall)</h2>
+    <table>
+      <tr><th>metric</th><th class="num">value</th><th class="num">threshold</th>
+          <th>agg</th><th class="num">n</th><th class="num">pass rate</th><th>result</th></tr>
+      {% for s in overall %}
+      <tr>
+        <td><b>{{ s.metric }}</b></td>
+        <td class="num">{{ '%.4f' % s.value if s.value is not none else '—' }}</td>
+        <td class="num">{{ s.threshold if s.threshold is not none else '—' }}</td>
+        <td><span class="tag">{{ s.aggregation }}</span></td>
+        <td class="num">{{ s.count }}</td>
+        <td class="num">{{ '%.1f' % (s.pass_rate * 100) if s.pass_rate is not none else '—' }}%</td>
+        <td>{% if s.passed is none %}—{% elif s.passed %}<span class="badge passed">PASS</span>{% else %}<span class="badge failed">FAIL</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if grouped %}
+  <div class="card">
+    <h2>Grouped breakdown (dataset × group)</h2>
+    <table>
+      <tr><th>metric</th><th>dataset / group</th><th class="num">value</th>
+          <th class="num">threshold</th><th class="num">n</th><th>result</th></tr>
+      {% for s in grouped %}
+      <tr>
+        <td>{{ s.metric }}</td>
+        <td><span class="tag">{{ s.dataset or '—' }}</span>{% if s.group %}<span class="tag">{{ s.group }}</span>{% endif %}</td>
+        <td class="num">{{ '%.4f' % s.value if s.value is not none else '—' }}</td>
+        <td class="num">{{ s.threshold if s.threshold is not none else '—' }}</td>
+        <td class="num">{{ s.count }}</td>
+        <td>{% if s.passed is none %}—{% elif s.passed %}<span class="badge passed">PASS</span>{% else %}<span class="badge failed">FAIL</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Failing cases ({{ failed_count }})</h2>
+    {% if not failed_cases %}<p style="color:var(--muted)">none 🎉</p>{% endif %}
+    {% for r in failed_cases[:200] %}
+    <details>
+      <summary>{{ r.case_id }} — {{ r.metric }}
+        {% if r.value is not none %} = {{ '%.4f' % r.value }}{% endif %}</summary>
+      {% if r.error %}<p style="color:var(--fail)">{{ r.error }}</p>{% endif %}
+      <pre>{{ r.raw | tojson(indent=2) }}</pre>
+    </details>
+    {% endfor %}
+  </div>
+
+  <footer>generated by aite · {{ report.finished_at or now }}</footer>
+</div>
+</body>
+</html>

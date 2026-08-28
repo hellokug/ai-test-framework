@@ -1,0 +1,20 @@
+{"id": "ceval-0", "question": "下列哪一项是中国四大发明之一？", "choices": ["地动仪", "造纸术", "算盘", "青花瓷"], "answer": "B", "subject": "history"}
+{"id": "ceval-1", "question": "《红楼梦》的作者是谁？", "choices": ["曹雪芹", "罗贯中", "吴承恩", "施耐庵"], "answer": "A", "subject": "chinese_literature"}
+{"id": "ceval-2", "question": "一个三角形内角和为多少度？", "choices": ["90", "180", "270", "360"], "answer": "B", "subject": "math"}
+{"id": "ceval-3", "question": "光在真空中的传播速度约为：", "choices": ["3×10^5 m/s", "3×10^8 m/s", "3×10^10 m/s", "无限大"], "answer": "B", "subject": "physics"}
+{"id": "ceval-4", "question": "下列哪种元素在常温常压下是液态金属？", "choices": ["铁", "汞", "铝", "钠"], "answer": "B", "subject": "chemistry"}
+{"id": "ceval-5", "question": "中国的国土面积约为多少万平方公里？", "choices": ["680", "960", "1200", "540"], "answer": "B", "subject": "geography"}
+{"id": "ceval-6", "question": "GDP 的中文全称是：", "choices": ["国内生产总值", "国民生产总值", "消费者物价指数", "采购经理指数"], "answer": "A", "subject": "economics"}
+{"id": "ceval-7", "question": "《中华人民共和国民法典》自哪一年施行？", "choices": ["2019", "2020", "2021", "2022"], "answer": "C", "subject": "law"}
+{"id": "ceval-8", "question": "以下哪个不是 Python 的内置数据类型？", "choices": ["list", "dict", "array", "tuple"], "answer": "C", "subject": "computer"}
+{"id": "ceval-9", "question": "“己所不欲，勿施于人”出自哪部经典？", "choices": ["《论语》", "《道德经》", "《孟子》", "《庄子》"], "answer": "A", "subject": "chinese_classics"}
+{"id": "ceval-10", "question": "人体最大的器官是：", "choices": ["肝脏", "皮肤", "大脑", "肺"], "answer": "B", "subject": "biology"}
+{"id": "ceval-11", "question": "下列哪个属于可再生能源？", "choices": ["煤炭", "石油", "风能", "天然气"], "answer": "C", "subject": "environment"}
+{"id": "ceval-12", "question": "进程与线程的主要区别是：", "choices": ["进程更轻量", "线程是资源分配的基本单位", "进程是资源分配的基本单位", "没有区别"], "answer": "C", "subject": "computer"}
+{"id": "ceval-13", "question": "马斯洛需求层次理论中最高层是：", "choices": ["安全需求", "社交需求", "尊重需求", "自我实现需求"], "answer": "D", "subject": "psychology"}
+{"id": "ceval-14", "question": "会计恒等式是：", "choices": ["资产=负债+所有者权益", "利润=收入-费用", "资产=负债", "收入=资产"], "answer": "A", "subject": "accounting"}
+{"id": "ceval-15", "question": "TCP 协议工作在 OSI 模型的哪一层？", "choices": ["物理层", "数据链路层", "传输层", "应用层"], "answer": "C", "subject": "computer"}
+{"id": "ceval-16", "question": "下列哪个朝代修建了京杭大运河的主体？", "choices": ["汉朝", "隋朝", "唐朝", "宋朝"], "answer": "B", "subject": "history"}
+{"id": "ceval-17", "question": "普通话以北京语音为标准音，以什么为基础方言？", "choices": ["北京话", "北方话", "官话", "中原话"], "answer": "B", "subject": "chinese"}
+{"id": "ceval-18", "question": "1 摩尔水（H₂O）的质量约为多少克？", "choices": ["16", "18", "20", "22"], "answer": "B", "subject": "chemistry"}
+{"id": "ceval-19", "question": "完全竞争市场中，单个厂商面临的需求曲线是：", "choices": ["向右下方倾斜", "水平线", "垂直线", "抛物线"], "answer": "B", "subject": "economics"}

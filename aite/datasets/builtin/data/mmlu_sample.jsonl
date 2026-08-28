@@ -1,0 +1,24 @@
+{"id": "mmlu-0", "question": "What is the powerhouse of the cell?", "choices": ["Ribosome", "Mitochondrion", "Nucleus", "Golgi apparatus"], "answer": "B", "subject": "high_school_biology"}
+{"id": "mmlu-1", "question": "Which gas do plants primarily absorb for photosynthesis?", "choices": ["Oxygen", "Nitrogen", "Carbon dioxide", "Hydrogen"], "answer": "C", "subject": "high_school_biology"}
+{"id": "mmlu-2", "question": "The derivative of x^2 with respect to x is:", "choices": ["x", "2x", "x^2/2", "2"], "answer": "B", "subject": "calculus"}
+{"id": "mmlu-3", "question": "What is the integral of 1/x dx (x > 0)?", "choices": ["ln x + C", "x + C", "1/x^2 + C", "-1/x^2 + C"], "answer": "A", "subject": "calculus"}
+{"id": "mmlu-4", "question": "In economics, a good whose demand rises as income rises is called:", "choices": ["Inferior good", "Normal good", "Giffen good", "Substitute good"], "answer": "B", "subject": "econometrics"}
+{"id": "mmlu-5", "question": "GDP stands for:", "choices": ["Gross Domestic Product", "General Domestic Price", "Global Demand Parity", "Gross Demand Percentage"], "answer": "A", "subject": "macroeconomics"}
+{"id": "mmlu-6", "question": "Which data structure uses LIFO (Last In, First Out)?", "choices": ["Queue", "Stack", "Heap", "Linked list"], "answer": "B", "subject": "computer_science"}
+{"id": "mmlu-7", "question": "The time complexity of binary search on a sorted array of n elements is:", "choices": ["O(n)", "O(n log n)", "O(log n)", "O(1)"], "answer": "C", "subject": "computer_science"}
+{"id": "mmlu-8", "question": "Who wrote the play 'Hamlet'?", "choices": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"], "answer": "B", "subject": "miscellaneous"}
+{"id": "mmlu-9", "question": "The chemical symbol for gold is:", "choices": ["Go", "Gd", "Au", "Ag"], "answer": "C", "subject": "chemistry"}
+{"id": "mmlu-10", "question": "How many chromosomes does a typical human cell contain?", "choices": ["23", "42", "46", "48"], "answer": "C", "subject": "biology"}
+{"id": "mmlu-11", "question": "The First Law of Thermodynamics is a statement of:", "choices": ["Entropy increase", "Energy conservation", "Momentum conservation", "Charge conservation"], "answer": "B", "subject": "conceptual_physics"}
+{"id": "mmlu-12", "question": "Which planet is known as the Red Planet?", "choices": ["Venus", "Mars", "Jupiter", "Mercury"], "answer": "B", "subject": "astronomy"}
+{"id": "mmlu-13", "question": "In statistics, the median of {1, 3, 5, 7, 9} is:", "choices": ["3", "5", "7", "25"], "answer": "B", "subject": "statistics"}
+{"id": "mmlu-14", "question": "A Type I error means:", "choices": ["Rejecting a true null hypothesis", "Failing to reject a false null hypothesis", "Using the wrong test", "Sampling error"], "answer": "A", "subject": "statistics"}
+{"id": "mmlu-15", "question": "The Big O of accessing an element in an array by index is:", "choices": ["O(1)", "O(log n)", "O(n)", "O(n^2)"], "answer": "A", "subject": "computer_science"}
+{"id": "mmlu-16", "question": "Which amendment of the US Constitution protects freedom of speech?", "choices": ["First", "Second", "Fifth", "Tenth"], "answer": "A", "subject": "jurisprudence"}
+{"id": "mmlu-17", "question": "Supply and demand intersect at the:", "choices": ["Equilibrium point", "Surplus point", "Shortage point", "Elasticity point"], "answer": "A", "subject": "microeconomics"}
+{"id": "mmlu-18", "question": "The pH of a neutral solution at 25 C is:", "choices": ["0", "7", "10", "14"], "answer": "B", "subject": "chemistry"}
+{"id": "mmlu-19", "question": "Which organ produces insulin?", "choices": ["Liver", "Pancreas", "Kidney", "Spleen"], "answer": "B", "subject": "biology"}
+{"id": "mmlu-20", "question": "HTTP status code 404 means:", "choices": ["Server error", "Not found", "Unauthorized", "Redirect"], "answer": "B", "subject": "computer_science"}
+{"id": "mmlu-21", "question": "The speed of light in vacuum is approximately:", "choices": ["3 x 10^5 m/s", "3 x 10^8 m/s", "3 x 10^10 m/s", "3 x 10^6 m/s"], "answer": "B", "subject": "conceptual_physics"}
+{"id": "mmlu-22", "question": "Which is NOT a programming language?", "choices": ["Python", "Java", "HTTP", "Rust"], "answer": "C", "subject": "computer_science"}
+{"id": "mmlu-23", "question": "Opportunity cost refers to:", "choices": ["Accounting profit", "The value of the next-best forgone alternative", "Sunk cost", "Fixed cost"], "answer": "B", "subject": "econometrics"}

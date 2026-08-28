@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · AI 测试评测平台</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body>
+<div id="app" v-cloak>
+  <aside class="sidebar">
+    <div class="logo">⚡ aite</div>
+    <nav>
+      <a :class="{active: view==='runs'}" @click="go('runs')">▸ 运行 Runs</a>
+      <a :class="{active: view==='trends'}" @click="go('trends')">📈 趋势 Trends</a>
+      <a :class="{active: view==='suites'}" @click="go('suites')">🧩 套件 Suites</a>
+      <a :class="{active: view==='cases'}" @click="go('cases')">📋 用例 Cases</a>
+      <a :class="{active: view==='models'}" @click="go('models')">🔌 模型 Models</a>
+      <a :class="{active: view==='manual'}" @click="go('manual')">👤 人工评测</a>
+      <a :class="{active: view==='tasks'}" @click="go('tasks')">⚙️ 任务 Tasks</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="token-box">
+        <input v-model="token" type="password" placeholder="Bearer Token (可选)" @change="saveToken">
+      </div>
+      <div class="hint">aite v0.1 · <a href="/docs" target="_blank">API Docs</a></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ============ RUNS LIST ============ -->
+    <section v-if="view==='runs'">
+      <header class="page-head">
+        <h1>评测运行</h1>
+        <button class="btn primary" @click="showLaunch=true">+ 新建运行</button>
+      </header>
+      <div class="stats-row" v-if="stats">
+        <div class="stat"><b>{{ stats.runs_total }}</b><span>总运行数</span></div>
+        <div class="stat"><b class="ok">{{ stats.runs_by_status.passed||0 }}</b><span>通过</span></div>
+        <div class="stat"><b class="bad">{{ stats.runs_by_status.failed||0 }}</b><span>失败</span></div>
+        <div class="stat"><b>${{ stats.total_cost_usd }}</b><span>累计成本</span></div>
+      </div>
+      <table class="tbl">
+        <thead><tr><th>Run</th><th>状态</th><th>用例</th><th>错误</th><th>成本</th><th>开始时间</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="r in runs" :key="r.id" class="click" @click="openRun(r.id)">
+            <td><b>{{ r.run_name }}</b><div class="dim mono">{{ r.id.slice(0,8) }}</div></td>
+            <td><span :class="['badge', r.status]">{{ r.status }}</span></td>
+            <td class="num">{{ r.total_cases }}</td>
+            <td class="num">{{ r.error_cases }}</td>
+            <td class="num">${{ (r.cost_usd||0).toFixed(4) }}</td>
+            <td class="dim">{{ fmtTime(r.started_at) }}</td>
+            <td><a :href="apiBase+'/runs/'+r.id+'/report.html'" target="_blank" class="lnk" @click.stop>报告 ↗</a></td>
+          </tr>
+          <tr v-if="!runs.length"><td colspan="7" class="empty">暂无运行 — 点击右上角「新建运行」或使用 CLI: <code>aite run -c suite.yaml</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="modal-mask" v-if="showLaunch" @click.self="showLaunch=false">
+        <div class="modal">
+          <h3>新建运行</h3>
+          <label>套件 YAML</label>
+          <textarea v-model="launchYaml" rows="16" class="mono" spellcheck="false"></textarea>
+          <div class="row">
+            <label>每数据集上限 <input v-model.number="launchLimit" type="number" min="1" style="width:90px"></label>
+          </div>
+          <div class="row right">
+            <button class="btn" @click="showLaunch=false">取消</button>
+            <button class="btn primary" @click="launchRun" :disabled="launching">{{ launching?'启动中…':'启动' }}</button>
+          </div>
+          <div v-if="launchProgress" class="progress-wrap">
+            <div class="progress-note">{{ launchProgress }}</div>
+            <div class="bar"><div class="bar-fill" :style="{width: launchPct+'%'}"></div></div>
+          </div>
+          <div v-if="launchError" class="err">{{ launchError }}</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RUN DETAIL ============ -->
+    <section v-if="view==='run-detail' && run">
+      <header class="page-head">
+        <div>
+          <h1>{{ run.run_name }} <span :class="['badge', run.status]">{{ run.status }}</span></h1>
+          <div class="dim mono">run_id: {{ run.id }}</div>
+        </div>
+        <div>
+          <a class="btn" :href="apiBase+'/runs/'+run.id+'/report.html'" target="_blank">HTML 报告 ↗</a>
+          <button class="btn" @click="go('runs')">← 返回</button>
+        </div>
+      </header>
+      <div class="stats-row">
+        <div class="stat"><b>{{ run.total_cases }}</b><span>用例</span></div>
+        <div class="stat"><b class="bad">{{ run.error_cases }}</b><span>错误</span></div>
+        <div class="stat"><b>${{ (run.cost_usd||0).toFixed(4) }}</b><span>成本</span></div>
+        <div class="stat"><b>{{ fmtTime(run.started_at) }}</b><span>开始</span></div>
+      </div>
+      <div class="card">
+        <h3>指标汇总</h3>
+        <table class="tbl">
+          <thead><tr><th>指标</th><th>数据集/分组</th><th>聚合</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr v-for="(s,i) in run.summaries" :key="i" :class="{dim: s.dataset||s.group}">
+              <td><b>{{ s.metric }}</b></td>
+              <td>{{ s.dataset||'overall' }}<span v-if="s.group"> / {{ s.group }}</span></td>
+              <td><code>{{ s.aggregation }}</code></td>
+              <td class="num">{{ fmt4(s.value) }}</td>
+              <td class="num">{{ s.threshold==null?'—':s.threshold }}</td>
+              <td class="num">{{ s.count }}</td>
+              <td><span v-if="s.passed!=null" :class="['badge', s.passed?'passed':'failed']">{{ s.passed?'PASS':'FAIL' }}</span><span v-else class="dim">—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>用例结果 <span class="dim">({{ runCases.length }})</span></h3>
+        <input v-model="caseFilter" placeholder="按 case id / 文本过滤…" style="width:280px;margin-bottom:8px">
+        <table class="tbl small">
+          <thead><tr><th style="width:24px"></th><th>Case</th><th>指标</th><th>输出</th></tr></thead>
+          <tbody>
+            <template v-for="c in filteredRunCases" :key="c.id">
+              <tr class="click" @click="c._open=!c._open">
+                <td>{{ c._open?'▾':'▸' }}</td>
+                <td><b>{{ c.external_key }}</b><div class="dim">{{ c.variant }} <span v-if="c.dataset">· {{ c.dataset }}</span></div></td>
+                <td>
+                  <span v-for="m in c.metrics" :key="m.metric" :class="['mini', m.passed===false?'mini-bad':(m.passed===true?'mini-ok':'')]">
+                    {{ m.metric }} {{ m.value==null?'':m.value.toFixed(3) }}
+                  </span>
+                </td>
+                <td class="out-cell">{{ outText(c) }}</td>
+              </tr>
+              <tr v-if="c._open" class="detail-row">
+                <td></td><td colspan="3">
+                  <div v-if="c.error" class="err">{{ c.error }}</div>
+                  <div class="kv" v-if="c.timings"><span>timings</span><code>{{ JSON.stringify(c.timings) }}</code></div>
+                  <div class="kv" v-if="c.usage"><span>usage</span><code>{{ JSON.stringify(c.usage) }}</code></div>
+                  <div class="kv"><span>output</span><pre>{{ outText(c, 4000) }}</pre></div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ TRENDS ============ -->
+    <section v-if="view==='trends'">
+      <header class="page-head"><h1>历史趋势</h1></header>
+      <div class="filters">
+        <label>Run 名 <input v-model.trim="trendQuery.suite" placeholder="如 quickstart-openai" @keyup.enter="loadTrends"></label>
+        <label>指标 <input v-model.trim="trendQuery.metric" placeholder="如 exact_match" @keyup.enter="loadTrends"></label>
+        <label>天数 <input v-model.number="trendQuery.days" type="number" min="1" max="365"></label>
+        <button class="btn primary" @click="loadTrends">查询</button>
+      </div>
+      <div class="card"><div id="trendChart" class="chart"></div></div>
+      <div class="card">
+        <h3>最新运行指标雷达</h3>
+        <div id="radarChart" class="chart"></div>
+      </div>
+    </section>
+
+    <!-- ============ SUITES ============ -->
+    <section v-if="view==='suites'">
+      <header class="page-head">
+        <h1>测试套件</h1>
+        <button class="btn primary" @click="editSuite({name:'', config_yaml: templateYaml()})">+ 新建套件</button>
+      </header>
+      <table class="tbl">
+        <thead><tr><th>名称</th><th>描述</th><th>更新时间</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="s in suites" :key="s.id">
+            <td><b>{{ s.name }}</b></td>
+            <td class="dim">{{ (s.config||{}).description||'' }}</td>
+            <td class="dim">{{ fmtTime(s.updated_at) }}</td>
+            <td>
+              <button class="btn sm" @click="editSuite(s)">编辑</button>
+              <button class="btn sm" @click="runSuite(s.name)">运行</button>
+            </td>
+          </tr>
+          <tr v-if="!suites.length"><td colspan="4" class="empty">暂无保存的套件</td></tr>
+        </tbody>
+      </table>
+      <div class="modal-mask" v-if="suiteEditor.open" @click.self="suiteEditor.open=false">
+        <div class="modal wide">
+          <h3>{{ suiteEditor.name || '新建套件' }}</h3>
+          <label>名称</label>
+          <input v-model.trim="suiteEditor.name" placeholder="my-suite">
+          <label>配置 YAML（保存时校验）</label>
+          <textarea v-model="suiteEditor.yaml" rows="20" class="mono" spellcheck="false"></textarea>
+          <div class="row right">
+            <button class="btn" @click="suiteEditor.open=false">取消</button>
+            <button class="btn primary" @click="saveSuite">保存</button>
+          </div>
+          <div v-if="suiteEditor.error" class="err mono">{{ suiteEditor.error }}</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CASES ============ -->
+    <section v-if="view==='cases'">
+      <header class="page-head"><h1>用例管理</h1></header>
+      <div class="filters">
+        <label>套件
+          <select v-model="caseSuite" @change="loadCases">
+            <option value="">选择套件…</option>
+            <option v-for="s in suites" :key="s.id" :value="s.name">{{ s.name }}</option>
+          </select>
+        </label>
+      </div>
+      <table class="tbl" v-if="cases.length">
+        <thead><tr><th>ID</th><th>变体</th><th>输入</th><th>期望</th><th>数据集</th></tr></thead>
+        <tbody>
+          <tr v-for="c in cases" :key="c.id">
+            <td class="mono">{{ c.external_key }}</td>
+            <td><code>{{ c.variant }}</code></td>
+            <td class="out-cell">{{ shorten(JSON.stringify(c.input), 120) }}</td>
+            <td class="out-cell">{{ shorten(JSON.stringify(c.expected), 80) }}</td>
+            <td class="dim">{{ c.dataset||'—' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty big">选择一个套件查看已入库的用例（运行套件后自动写入）</div>
+    </section>
+
+    <!-- ============ MODELS ============ -->
+    <section v-if="view==='models'">
+      <header class="page-head">
+        <h1>模型管理</h1>
+        <button class="btn primary" @click="newModel">+ 新建模型</button>
+      </header>
+      <table class="tbl">
+        <thead><tr><th>名称</th><th>类型</th><th>Base URL</th><th>模型</th><th>Key Env</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="m in models" :key="m.id">
+            <td><b>{{ m.name }}</b></td>
+            <td><code>{{ m.type }}</code></td>
+            <td class="dim">{{ m.base_url||'—' }}</td>
+            <td>{{ m.model||'—' }}</td>
+            <td class="dim">{{ m.api_key_env||'—' }}</td>
+            <td><button class="btn sm danger" @click="deleteModel(m.id)">删除</button></td>
+          </tr>
+          <tr v-if="!models.length"><td colspan="6" class="empty">暂无模型配置（作为 judge / 目标模型别名使用）</td></tr>
+        </tbody>
+      </table>
+      <div class="modal-mask" v-if="modelEditor.open" @click.self="modelEditor.open=false">
+        <div class="modal">
+          <h3>模型配置</h3>
+          <label>名称（gateway 别名）</label><input v-model.trim="modelEditor.name">
+          <label>类型</label>
+          <select v-model="modelEditor.type">
+            <option>openai_compatible</option><option>anthropic</option><option>gemini</option>
+          </select>
+          <label>Base URL</label><input v-model.trim="modelEditor.base_url" placeholder="https://api.openai.com/v1">
+          <label>模型</label><input v-model.trim="modelEditor.model" placeholder="gpt-4o-mini">
+          <label>API Key 环境变量</label><input v-model.trim="modelEditor.api_key_env" placeholder="OPENAI_API_KEY">
+          <div class="row right">
+            <button class="btn" @click="modelEditor.open=false">取消</button>
+            <button class="btn primary" @click="saveModel">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ MANUAL EVAL ============ -->
+    <section v-if="view==='manual'">
+      <header class="page-head">
+        <h1>人工评测</h1>
+        <button class="btn" @click="exportManual">导出评分 CSV</button>
+      </header>
+      <div class="filters">
+        <label>状态
+          <select v-model="manualStatus" @change="loadManual">
+            <option value="">全部</option><option value="pending">待评</option><option value="done">已评</option>
+          </select>
+        </label>
+      </div>
+      <div v-if="!manualTasks.length" class="empty big">
+        暂无人工评测任务。从某次运行的详情页选择用例创建：<br>
+        <code>POST /api/v1/manual-eval/tasks {"run_id": "…"}</code>
+      </div>
+      <div class="manual-grid">
+        <div v-for="t in manualTasks" :key="t.id" class="card manual-card">
+          <div class="manual-head">
+            <b>{{ t.title }}</b>
+            <span :class="['badge', t.status==='done'?'passed':'error']">{{ t.status }}</span>
+          </div>
+          <div class="kv"><span>输入</span><pre>{{ shorten(JSON.stringify(t.case_input), 400) }}</pre></div>
+          <div class="kv"><span>期望</span><pre>{{ shorten(JSON.stringify(t.expected), 300) }}</pre></div>
+          <div class="kv"><span>输出</span><pre>{{ shorten(JSON.stringify(t.output), 600) }}</pre></div>
+          <div v-if="t.rubric" class="kv"><span>评分标准</span><div>{{ t.rubric }}</div></div>
+          <div v-if="t.scores.length" class="scores">
+            <div v-for="(s,i) in t.scores" :key="i" class="score-line">
+              ★ {{ s.score }} <span class="dim">{{ s.reviewer }} · {{ fmtTime(s.created_at) }}</span>
+            </div>
+          </div>
+          <div v-if="t.status!=='done'" class="score-form">
+            <input v-model.number="scoreForms[t.id].score" type="number" min="0" max="10" step="0.5" placeholder="0-10">
+            <input v-model.trim="scoreForms[t.id].reviewer" placeholder="评审人">
+            <input v-model.trim="scoreForms[t.id].comment" placeholder="备注（可选）">
+            <button class="btn primary sm" @click="submitScore(t)">提交评分</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TASKS ============ -->
+    <section v-if="view==='tasks'">
+      <header class="page-head"><h1>后台任务</h1></header>
+      <table class="tbl">
+        <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>Run</th><th>创建</th><th>错误</th></tr></thead>
+        <tbody>
+          <tr v-for="t in bgTasks" :key="t.id">
+            <td class="mono">{{ t.id.slice(0,8) }}</td>
+            <td><code>{{ t.kind }}</code></td>
+            <td><span :class="['badge', t.status==='done'?'passed':(t.status==='error'?'failed':'running')]">{{ t.status }}</span></td>
+            <td class="mono dim">{{ t.run_id ? t.run_id.slice(0,8) : '—' }}</td>
+            <td class="dim">{{ fmtTime(t.created_at) }}</td>
+            <td class="err-text">{{ t.error||'' }}</td>
+          </tr>
+          <tr v-if="!bgTasks.length"><td colspan="6" class="empty">暂无任务</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
