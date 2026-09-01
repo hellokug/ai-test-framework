@@ -161,6 +161,26 @@ class SuiteConfig(BaseModel):
         return self.model_dump(mode="json", exclude={"storage"})
 
 
+def _expand_auto_metrics(raw_datasets: Any) -> list[dict]:
+    """``metrics: auto`` —— 按数据集推荐指标自动填充（带推荐阈值）。
+
+    仅 builtin 数据集有推荐；local/hf_hub 无推荐。取并集去重后转为
+    MetricConfig 原始格式。全部无推荐时报错，避免"auto 空转"。
+    """
+    from aite.datasets.builtin import recommendations
+
+    ids = [d.get("id") for d in raw_datasets or []
+           if isinstance(d, dict) and d.get("type") == "builtin" and d.get("id")]
+    recs = recommendations(ids)
+    if not recs:
+        raise ValueError(
+            "metrics: auto found no recommended metrics (only builtin datasets have "
+            "recommendations); specify metrics explicitly")
+    return [{"name": r["name"], "threshold": r.get("threshold"),
+             **({"params": r["params"]} if r.get("params") else {})}
+            for r in recs]
+
+
 def _normalize_metrics(raw: Any) -> list[dict]:
     """``[{exact_match: {threshold: 0.8, extract: number}}, "rouge_l"]``
     -> ``[{"name": ..., "threshold": ..., "params": {...}}]``.
@@ -171,6 +191,11 @@ def _normalize_metrics(raw: Any) -> list[dict]:
     out: list[dict] = []
     if not raw:
         return out
+    if isinstance(raw, str):
+        # 防御：`metrics: auto` 这类裸字符串会被逐字符迭代成 'a','u','t','o' 四个"指标"
+        raise ValueError(
+            f"metrics must be a list, got bare string '{raw}' "
+            f"(write as [{raw}: {{threshold: ...}}] or [{raw}])")
     for item in raw:
         if isinstance(item, str):
             out.append({"name": item})
@@ -212,7 +237,11 @@ def load_suite(source: str | Path | dict[str, Any]) -> SuiteConfig:
         raise ValueError("suite config must be a mapping")
     data.setdefault("run_name", data.get("run_name") or "")
     if "metrics" in data:
-        data["metrics"] = _normalize_metrics(data["metrics"])
+        raw = data["metrics"]
+        if raw == "auto" or raw == ["auto"]:
+            data["metrics"] = _expand_auto_metrics(data.get("datasets"))
+        else:
+            data["metrics"] = _normalize_metrics(raw)
     if base_dir:
         for dataset in data.get("datasets") or []:
             dpath = dataset.get("path") if isinstance(dataset, dict) else None

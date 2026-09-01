@@ -210,6 +210,9 @@ aite.db-wal
 reports/
 .e2e/
 
+# user datasets & external registry (regenerate via scripts/, e.g. scripts/convert_ceval.py)
+data/
+
 # Claude Code local settings
 .claude/settings.local.json
 

@@ -38,6 +38,7 @@ from aite.core.types import (
     utcnow,
 )
 from aite.gateway.llm_gateway import CostLimitExceeded, InProcessRateLimiter
+from aite.reporting.renderers import report_relpath
 from aite.utils.async_utils import with_timeout
 from aite.utils.logging import get_logger
 from aite.utils.text import perturb_text, stable_seed
@@ -89,6 +90,9 @@ class ExecutionEngine:
         target = connector_override or self._build_target(config)
 
         try:
+            # 解析全部 metrics/judges 必须发生在执行用例之前：
+            # 指标名写错时在花掉 API 成本前就失败（fail fast），而不是 Phase B 才报错
+            self._metric_infos(config)
             cases = await self._load_cases(config, limit, dataset_ids)
             report.total_cases = len({c.id for c in cases})
             await self.repo.update_run(run_id, total_cases=report.total_cases)
@@ -369,7 +373,7 @@ class ExecutionEngine:
 
     # ------------------------------------------------------------------ reports
     def _render_reports(self, config: SuiteConfig, report: RunReport) -> dict[str, str]:
-        out_dir = Path(config.output_dir) / report.run_name / (report.run_id or "latest")[:8]
+        out_dir = Path(config.output_dir) / report_relpath(report)
         out_dir.mkdir(parents=True, exist_ok=True)
         written: dict[str, str] = {}
         for fmt in config.report:

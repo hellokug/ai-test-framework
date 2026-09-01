@@ -35,8 +35,11 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
 <div class="wrap">
   <h1>aite · {{ report.run_name }}
     <span class="badge {{ report.status }}">{{ report.status | upper }}</span></h1>
+  {% set tgt = (report.config or {}).get('target') or {} %}
   <div class="sub">
     run_id <span class="mono">{{ report.run_id or '-' }}</span> ·
+    target <span class="mono">{{ tgt.get('type', '?') }} / {{ tgt.get('model', '?') }}</span> ·
+    {% if datasets %}datasets <span class="mono">{{ datasets }}</span> · {% endif %}
     strategy <b>{{ report.pass_strategy }}</b> ·
     {{ report.started_at }} → {{ report.finished_at or '…' }} ·
     cost ${{ '%.4f' % report.total_cost_usd if report.total_cost_usd is not none else '0' }}

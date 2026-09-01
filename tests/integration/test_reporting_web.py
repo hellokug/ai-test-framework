@@ -1,6 +1,7 @@
 """Reporting renderers + web API tests."""
 
 import json
+import re
 
 import pytest
 
@@ -10,7 +11,7 @@ from aite.core.types import (
     RunReport,
     utcnow,
 )
-from aite.reporting.renderers import HtmlRenderer, JsonRenderer, JunitRenderer
+from aite.reporting.renderers import HtmlRenderer, JsonRenderer, JunitRenderer, RichRenderer
 
 
 def sample_report():
@@ -18,6 +19,10 @@ def sample_report():
         run_id="01234567-abcd", run_name="unit-run", status="failed",
         pass_strategy="all_of", started_at=utcnow(), finished_at=utcnow(),
         total_cases=2, error_cases=1, total_cost_usd=0.01,
+        config={"target": {"type": "openai_compatible", "model": "qwen2.5:3b",
+                           "base_url": "http://localhost:11434/v1"},
+                "datasets": [{"type": "builtin", "id": "gsm8k"},
+                             {"type": "local", "path": "./examples/data/business_qa.jsonl"}]},
         summaries=[
             MetricSummary(metric="exact_match", value=0.5, threshold=0.8,
                           passed=False, count=2),
@@ -40,6 +45,24 @@ class TestRenderers:
         path = HtmlRenderer().render(sample_report(), tmp_path)
         html = path.read_text(encoding="utf-8")
         assert "unit-run" in html and "exact_match" in html and "FAIL" in html
+        assert "qwen2.5:3b" in html          # 被测模型必须可见
+        assert "builtin/gsm8k" in html and "business_qa.jsonl" in html  # 数据集必须可见
+
+    def test_rich_renderer_shows_target(self, tmp_path):
+        path = RichRenderer().render(sample_report(), tmp_path)
+        text = path.read_text(encoding="utf-8")
+        assert "model: qwen2.5:3b" in text
+        assert "http://localhost:11434/v1" in text
+        assert "builtin/gsm8k" in text and "business_qa.jsonl" in text
+
+    def test_report_relpath_model_dataset_time(self):
+        from aite.reporting.renderers import report_relpath
+
+        p = report_relpath(sample_report())
+        model, datasets, leaf = p.parts
+        assert model == "qwen2.5-3b"                     # 第一层模型，冒号净化
+        assert datasets == "gsm8k+business_qa.jsonl"     # 第二层数据集，+ 连接
+        assert re.match(r"^\d{8}-\d{6}_01234567$", leaf)  # 第三层 时间_短id
 
     def test_junit_renderer_xml(self, tmp_path):
         import xml.etree.ElementTree as ET

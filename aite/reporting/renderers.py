@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,9 +18,46 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from aite.core.interfaces import ReportRenderer
 from aite.core.registry import register_renderer
+from aite.core.types import utcnow
 
 if TYPE_CHECKING:
     from aite.core.types import RunReport
+
+
+def _path_safe(s: str) -> str:
+    """净化 Windows 路径非法字符（如 ``qwen2.5:3b`` 的冒号 → ``qwen2.5-3b``）。"""
+    return re.sub(r'[\\/:*?"<>|]+', "-", s).strip(". ") or "unknown"
+
+
+def _dataset_ident(d: dict) -> str:
+    """数据集标识：builtin 取 id，local 取路径文件名。"""
+    return str(d.get("id") or str(d.get("path") or "").replace("\\", "/").split("/")[-1])
+
+
+def report_relpath(report: RunReport) -> Path:
+    """报告目录层级：``<模型>/<数据集>/<本地时间>_<run短id>``。
+
+    第一层模型、第二层数据集（多个用 ``+`` 连接）、第三层时间；
+    名称均做 Windows 路径净化；短 id 保证同秒不冲突。
+    """
+    started = (report.started_at or utcnow()).astimezone()  # 目录名用本地时间更直觉
+    target = report.config.get("target") or {}
+    model = _path_safe(str(target.get("model") or "unknown"))
+    idents = [_path_safe(_dataset_ident(d)) for d in report.config.get("datasets") or []]
+    ds_dir = "+".join(idents) if idents else "unknown"
+    if len(ds_dir) > 50:  # 防路径过长
+        ds_dir = f"{idents[0]}+{len(idents) - 1}more"
+    leaf = f"{started.strftime('%Y%m%d-%H%M%S')}_{(report.run_id or 'latest')[:8]}"
+    return Path(model) / ds_dir / leaf
+
+
+def datasets_label(config: dict) -> str:
+    """紧凑数据集描述：``builtin/gsm8k, local/business_qa.jsonl``。"""
+    parts = [
+        "/".join(x for x in (str(d.get("type", "?")), _dataset_ident(d)) if x)
+        for d in config.get("datasets") or []
+    ]
+    return ", ".join(parts)
 
 
 @register_renderer("json")
@@ -58,6 +96,7 @@ class HtmlRenderer(ReportRenderer):
         html = template.render(
             report=report, overall=overall, grouped=grouped,
             failed_cases=failed[:500], failed_count=len(failed),
+            datasets=datasets_label(report.config),
         )
         path.write_text(html, encoding="utf-8")
         return path
@@ -89,6 +128,15 @@ class RichRenderer(ReportRenderer):
                 "/".join(x for x in (s.dataset, s.group) if x) or "overall",
             )
         console = Console(record=True)
+        target = report.config.get("target") or {}
+        if target:
+            console.print(
+                f"target: {target.get('type')} | model: {target.get('model')}"
+                + (f" | {target['base_url']}" if target.get("base_url") else "")
+            )
+        label = datasets_label(report.config)
+        if label:
+            console.print(f"datasets: {label}")
         console.print(table)
         path = dest / "report.txt"
         path.write_text(console.export_text(), encoding="utf-8")

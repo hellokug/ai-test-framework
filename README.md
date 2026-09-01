@@ -41,6 +41,16 @@ aite serve                      # Web 平台 http://127.0.0.1:8300
 
 ## 评测维度（内置 41 指标 + 3 类 Judge）
 
+内置数据集带推荐指标（含默认阈值），可直接 `metrics: auto` 自动填充：
+
+```yaml
+datasets:
+  - {type: builtin, id: gsm8k}
+metrics: auto        # 自动展开为 exact_match {threshold: 0.5, extract: number}
+```
+
+推荐值可用 `aite dataset list` 查看；仅 builtin 数据集有推荐，local/hf_hub 需显式配置。
+
 - **LLM 功能**：exact_match（数字/多选抽取模式）、token_f1、BLEU/ROUGE-L、
   embedding 相似度、instruction_following、consistency
 - **Agent**：tool_call_correctness（ordered/unordered/subset）、task_completion、
@@ -58,6 +68,18 @@ aite serve                      # Web 平台 http://127.0.0.1:8300
 `openai_compatible`（OpenAI/DeepSeek/Qwen/vLLM/Ollama，流式 TTFT）、`anthropic`、
 `gemini`、`custom_http`（jinja2 模板 + JSON 路径提取）、`langchain_agent`
 （需 `aite[agent]`，BaseCallbackHandler 捕获轨迹）。
+
+## 离线数据集导入（HF → builtin）
+
+```bash
+pip install 'aite[bench]'                        # 一次性；国内镜像设 HF_ENDPOINT=https://hf-mirror.com
+aite dataset add-hf openai/gsm8k --name gsm8k_full -n 200   # 下载→字段映射→预采样→注册
+aite run -c suite.yaml                           # 之后 {type: builtin, id: gsm8k_full} 完全离线
+```
+
+数据文件落 `./data/datasets/`、注册表 `./data/aite_datasets.json`（不进包源码）；
+Python API 同名函数 `aite.datasets.add_hf.add_hf_dataset()`。字段自动识别
+（question/answer/choices 等），生僻字段名用 `--fields input=xxx,expected=yyy` 映射。
 
 ## Web 平台
 
@@ -87,8 +109,9 @@ pytest tests/          # 145 用例（引擎调度/规则指标/judge/安全/RAG
 ruff check aite tests
 ```
 
-文档：[架构](docs/architecture.md) · [配置参考](docs/config-reference.md) ·
-[插件指南](docs/plugin-guide.md) · [兼容策略](docs/compat.md)
+文档：[架构](docs/architecture.md) · [数据集指南](docs/dataset-guide.md) ·
+[配置参考](docs/config-reference.md) · [插件指南](docs/plugin-guide.md) · [兼容策略](docs/compat.md) ·
+[路线图](docs/roadmap.md)
 
 ## 成本与预算
 

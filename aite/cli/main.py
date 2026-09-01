@@ -15,6 +15,7 @@ from aite.core.engine import ExecutionEngine, build_repository
 from aite.core.loader import load_suite
 from aite.core.registry import registry
 from aite.reporting.rebuild import rebuild_report
+from aite.reporting.renderers import report_relpath
 from aite.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -185,7 +186,7 @@ def report_show(
                 raise SystemExit(1)
             from aite.core.registry import resolve_renderer
 
-            out_dir = Path(out) / report.run_name / run_id[:8]
+            out_dir = Path(out) / report_relpath(report)
             for fmt in [f.strip() for f in formats.split(",") if f.strip()]:
                 path = resolve_renderer(fmt)().render(report, out_dir)
                 console.print(f"[green]wrote[/green] {path}")
@@ -243,8 +244,12 @@ def dataset_list() -> None:
         table.add_column(col)
     for ds_id in builtin_ids():
         info = builtin_info(ds_id)
-        table.add_row(ds_id, info.get("task", ""),
-                      ", ".join(info.get("metrics", [])), info.get("upstream", ""))
+        recs = ", ".join(
+            f"{r.get('name')}"
+            + (f" ({', '.join(f'{k}={v}' for k, v in r['params'].items())})" if r.get("params") else "")
+            + (f" >={r.get('threshold')}" if r.get("threshold") is not None else "")
+            for r in info.get("recommend") or [])
+        table.add_row(ds_id, info.get("task", ""), recs, info.get("upstream", ""))
     console.print(table)
     extra = try_register_hf()
     if not extra:
@@ -261,6 +266,39 @@ def dataset_show(builtin_id: str = typer.Argument(...)) -> None:
         raise SystemExit(1)
     for k, v in info.items():
         console.print(f"[bold]{k}[/bold]: {v}")
+
+
+@dataset_app.command("add-hf")
+def dataset_add_hf(
+    hf_id: str = typer.Argument(..., help="HuggingFace dataset id, e.g. openai/gsm8k"),
+    name: str | None = typer.Option(None, help="builtin id (default: derived from hf_id)"),
+    split: str = typer.Option("test", help="dataset split"),
+    subset: str | None = typer.Option(None, help="config/subset name, e.g. 'main'"),
+    n: int | None = typer.Option(None, "-n", help="pre-sample N records (recommended)"),
+    seed: int = typer.Option(42, help="sample seed"),
+    fields: str | None = typer.Option(
+        None, help="field mapping, e.g. 'input=question,expected=answer'"),
+) -> None:
+    """Download a HF dataset, convert it and register as an offline builtin.
+
+    Requires network + 'aite[bench]'; result is fully offline afterwards.
+    """
+    from aite.datasets.add_hf import add_hf_dataset
+
+    fmap: dict[str, str] = {}
+    if fields:
+        for part in fields.split(","):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                fmap[k.strip()] = v.strip()
+    try:
+        path = add_hf_dataset(hf_id, name, split=split, subset=subset,
+                              n=n, seed=seed, fields=fmap)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[red]import failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]wrote[/green] {path}")
+    console.print(f"usable offline as: {{type: builtin, id: {path.stem}}}")
 
 
 bench_app = typer.Typer(help="evalscope / lm-eval compatibility tools")

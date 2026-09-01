@@ -76,6 +76,48 @@ async def test_error_cases_counted(repo, qa_file, tmp_path):
     assert report.summary_for("error_rate").value == 0.5
 
 
+def test_metrics_as_bare_string_rejected(qa_file, tmp_path):
+    """`metrics: exact_match`（裸字符串）必须在配置层报错，不能被逐字符迭代。"""
+    with pytest.raises(ValueError, match="must be a list"):
+        suite_config(tmp_path, metrics="exact_match")
+
+
+def test_metrics_auto_expands_builtin_recommendations(tmp_path):
+    """`metrics: auto` 展开为 builtin 数据集的推荐指标（带阈值与参数）。"""
+    suite = suite_config(tmp_path, metrics="auto", datasets=[
+        {"type": "builtin", "id": "gsm8k"},
+        {"type": "builtin", "id": "mmlu"},
+    ])
+    names = [m.name for m in suite.metrics]
+    assert names == ["exact_match", "choice_accuracy"]   # 并集保序
+    gsm = suite.metrics[0]
+    assert gsm.threshold == 0.5 and gsm.params.get("extract") == "number"
+
+
+def test_metrics_auto_accepts_list_form(tmp_path):
+    suite = suite_config(tmp_path, metrics=["auto"], datasets=[
+        {"type": "builtin", "id": "gsm8k"}])
+    assert [m.name for m in suite.metrics] == ["exact_match"]
+
+
+def test_metrics_auto_without_builtin_errors(qa_file, tmp_path):
+    """local 数据集没有推荐指标，auto 必须报清晰错误而非空转。"""
+    with pytest.raises(ValueError, match="no recommended metrics"):
+        suite_config(tmp_path, metrics="auto")
+
+
+@pytest.mark.asyncio
+async def test_unknown_metric_fails_before_execution(repo, qa_file, tmp_path):
+    """指标名写错时 fail-fast：不执行任何用例，run 记为 error。"""
+    suite = suite_config(tmp_path, metrics=["no_such_metric"])
+    engine = ExecutionEngine(repo)
+    report = await engine.run_suite(suite, connector_override=MockConnector())
+    assert report.status == "error"
+    assert report.total_cases == 0
+    results = await repo.list_case_results(report.run_id)
+    assert results == []          # 没有任何用例被执行（不烧 API 成本）
+
+
 @pytest.mark.asyncio
 async def test_reliability_variants_materialized(repo, qa_file, tmp_path):
     suite = suite_config(
