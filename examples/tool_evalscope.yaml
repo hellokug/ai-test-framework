@@ -1,0 +1,17 @@
+run_name: evalscope-demo
+description: 工具适配层端到端验证（evalscope 计算，aite 入库）
+
+engine: evalscope                # 路由到工具适配层，不走自研引擎
+
+target:                          # 复用平台统一 target 配置
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:3b
+  stream: false
+
+tools:
+  datasets: [gsm8k]              # evalscope 基准名（100+ 可选）
+  limit_per_subset: 2            # 注意：每科目条数；gsm8k 单科目 = 2 题
+  metric_thresholds: {mean_acc: 0.3}
+
+storage: {url: sqlite+aiosqlite:///./aite.db}

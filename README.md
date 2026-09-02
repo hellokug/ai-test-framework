@@ -81,6 +81,30 @@ aite run -c suite.yaml                           # 之后 {type: builtin, id: gs
 Python API 同名函数 `aite.datasets.add_hf.add_hf_dataset()`。字段自动识别
 （question/answer/choices 等），生僻字段名用 `--fields input=xxx,expected=yyy` 映射。
 
+## 外部评测工具（平台化：精度跑分委托专业工具）
+
+suite 带 `engine` 字段即路由到工具适配层（无 engine 走自研引擎，行为不变）。
+首个接入 **evalscope**（一个适配器同时获得 Native / OpenCompass / VLMEvalKit /
+RAGEval 四个后端，`tools.extra_args.eval_backend` 切换）：
+
+```yaml
+# examples/tool_evalscope.yaml
+engine: evalscope
+target:                       # 复用平台统一 target（OpenAI 兼容端点直连）
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:3b
+tools:
+  datasets: [ceval, gsm8k]    # evalscope 基准名（100+，5-shot 标准口径）
+  limit_per_subset: 3         # 注意：每科目条数（ceval×3 = 52×3 = 156 题）
+  metric_thresholds: {mean_acc: 0.5}
+```
+
+结果统一入 `run_metric_summary`（含 overall 行），与自研引擎的 run 在 Web 趋势中
+并列可比；evalscope 原生 HTML/JSON 报告保留在 `reports/tool/evalscope/` 下。
+运行环境：aite 与 evalscope 安装在同一环境（`pip install evalscope`，需 Python≤3.13，
+editdistance 等依赖尚无 3.14 wheel）。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、

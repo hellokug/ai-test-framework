@@ -35,10 +35,24 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 
 目标：suite 里指定外部引擎，精度基准由 evalscope 计算，结果回传 aite 统一存储。
 
-- [ ] C0 调研 evalscope 当前版本 API（run 接口/数据格式/输出报告结构）
-- [ ] C1 ToolAdapter 接口定义（prepare/execute/collect 契约级，需评审）
-- [ ] C2 evalscope 内置基准直通：yaml 指定 evalscope 任务名 + target 复用
-      （OpenAI 兼容端点），跑分结果写入 run_metric_summary
+- [x] C0 调研 evalscope 1.9.1（2026-09-01 完成）：
+      进程内 `run_task(dict) -> {dataset: Report}`；模型接入 `eval_type: openai_api` +
+      `api_url`（OpenAI 兼容端点直连）；**eval_backend 可选 Native/OpenCompass/VLMEvalKit/
+      RAGEval——一个适配器覆盖四后端**；`limit` 语义是**每科目**条数（ceval limit=3 实跑
+      52×3=156 题，适配器必须换算）；返回含 score/metrics(name,num,score) 与分科目明细，
+      另产 HTML 报告与性能表（latency/tok/s/token 用量）；本地微跑验证：ceval 156 题
+      mean_acc=0.6859，默认 5-shot 业界标准口径。用户已有独立 conda 环境
+      D:/miniconda/envs/evalscope（依赖隔离考量见 C1）
+- [x] C1 ToolAdapter 接口（aite/tools/base.py：ToolRunRequest/ToolRunResult/
+      ToolAdapter + 注册表；evalscope 适配器实现两步契约 build_config/run）
+- [x] C2 evalscope 内置基准直通（2026-09-02 完成）：suite 带 `engine: evalscope`
+      即路由工具层，`aite run` 单一入口不变；结果解析自 reports/*.json 文件契约
+      （兼容两种目录布局），写 run_metric_summary 并补 overall 行与自研引擎口径
+      对齐；CLI 汇总/阈值判定（metric_thresholds）可用。统一运行环境：
+      D:/miniconda/envs/evalscope（Python 3.10，aite+evalscope 同装，162→171 测试
+      全绿）；真实验证 gsm8k 2 题 mean_acc=1.0 端到端通过。
+      踩坑记录：evalscope no_timestamp 模式 json 布局为 reports/<model>/<ds>.json；
+      run_task 返回值不可依赖（repr 字符串），一律走文件收集。
 - [ ] C3 平台数据集 → evalscope 自定义数据格式转换（local/builtin 灌进去）
 - [ ] C4 Web/CLI 入口与文档
 

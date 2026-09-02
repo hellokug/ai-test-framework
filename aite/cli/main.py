@@ -116,6 +116,30 @@ def run(
 ) -> None:
     """Run a test suite; exit code 0 = passed, 1 = failed/error (CI friendly)."""
     setup_logging(log_level, quiet=quiet)
+
+    # 工具型 suite（engine: evalscope 等）路由到工具适配层，不走自研引擎
+    import yaml as _yaml
+
+    raw = _yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    if isinstance(raw, dict) and raw.get("engine"):
+        if limit:
+            raw.setdefault("tools", {}).setdefault("limit_per_subset", limit)
+        from aite.tools import run_tool_suite
+
+        async def _tool_run() -> int:
+            storage_url = (raw.get("storage") or {}).get(
+                "url", "sqlite+aiosqlite:///./aite.db")
+            repo = build_repository(storage_url)
+            await repo.init()
+            try:
+                report = await run_tool_suite(raw, repo)
+                _print_report_summary(report)
+                return report.exit_code
+            finally:
+                await repo.close()
+
+        raise SystemExit(asyncio.run(_tool_run()))
+
     suite = load_suite(config)
     if concurrency:
         suite.concurrency = concurrency

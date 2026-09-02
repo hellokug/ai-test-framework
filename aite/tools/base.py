@@ -1,0 +1,99 @@
+"""工具适配层契约（平台化核心：外部评测工具统一接入）。
+
+平台定位：精度基准委托 evalscope/opencompass 等专业工具计算，aite 负责
+数据集管理、工具编排、结果统一入库（run_metric_summary），与自研引擎的
+结果在 Web 趋势中并列可比。
+
+适配器两步走：
+- ``build_config``：平台统一 target/datasets 配置 → 工具原生配置
+- ``run``：执行并收集，输出统一 ToolRunResult
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import ClassVar
+
+
+@dataclass
+class ToolRunRequest:
+    run_name: str
+    target: dict                        # aite target 配置（openai_compatible 等）
+    datasets: list[str]                 # 工具侧基准名（如 evalscope 的 ceval/mmlu）
+    limit_per_subset: int | None = None  # 每科目条数（evalscope limit 语义）
+    work_dir: Path = Path("./outputs")
+    extra: dict = field(default_factory=dict)          # 透传工具原生参数
+    metric_thresholds: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class ToolMetricRow:
+    dataset: str            # "evalscope:ceval"
+    metric: str             # "mean_acc"
+    value: float
+    count: int
+    group: str | None = None
+    threshold: float | None = None
+    passed: bool | None = None
+
+
+@dataclass
+class ToolRunResult:
+    rows: list[ToolMetricRow] = field(default_factory=list)
+    report_files: dict[str, str] = field(default_factory=dict)   # 工具产出的报告文件
+    raw_score: dict[str, float] = field(default_factory=dict)    # dataset -> 总分
+    perf: dict[str, dict] = field(default_factory=dict)          # dataset -> 性能摘要
+
+
+class ToolAdapter(ABC):
+    """外部评测工具适配器。子类注册后由 ``aite run -c`` 的 engine 字段路由。"""
+
+    name: ClassVar[str]
+
+    @abstractmethod
+    def build_config(self, req: ToolRunRequest) -> dict:
+        """平台配置 → 工具原生 run 配置。"""
+
+    @abstractmethod
+    async def run(self, req: ToolRunRequest) -> ToolRunResult:
+        """执行评测并收集结果（阻塞调用应在 to_thread 中进行）。"""
+
+
+_TOOLS: dict[str, type[ToolAdapter]] = {}
+
+
+def register_tool(name: str):
+    def _wrap(cls: type[ToolAdapter]) -> type[ToolAdapter]:
+        cls.name = name
+        _TOOLS[name] = cls
+        return cls
+    return _wrap
+
+
+def get_tool(name: str) -> ToolAdapter:
+    try:
+        return _TOOLS[name]()
+    except KeyError:
+        raise KeyError(f"unknown tool engine '{name}'; available: {sorted(_TOOLS)}") from None
+
+
+def api_endpoint(target: dict, *, suffix: str = "/chat/completions") -> tuple[str, str]:
+    """openai_compatible target → (完整请求 URL, api_key)。
+
+    api_key 从 target.api_key_env 指定的环境变量读取，缺省 "EMPTY"（本地服务）。
+    """
+    if target.get("type", "openai_compatible") != "openai_compatible":
+        raise ValueError("tool adapter 目前仅支持 openai_compatible target")
+    base = str(target.get("base_url", "")).rstrip("/")
+    url = base if base.endswith(suffix) else base + suffix
+    key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
+    return url, key
+
+
+def run_sync_in_thread(fn, *args, **kwargs):
+    """阻塞的工具调用放入线程，避免卡死事件循环（Web 集成需要）。"""
+    return asyncio.to_thread(fn, *args, **kwargs)
