@@ -29,6 +29,7 @@ class ToolRunRequest:
     extra: dict = field(default_factory=dict)          # 透传工具原生参数
     metric_thresholds: dict[str, float] = field(default_factory=dict)
     auto_thresholds: bool = False  # metric_thresholds: auto → 按基准推荐阈值
+    tests_dir: str | None = None    # pytest 引擎：用户自建功能测试目录（优先于内置场景）
 
 
 @dataclass

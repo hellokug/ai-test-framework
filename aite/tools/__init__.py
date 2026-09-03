@@ -36,9 +36,13 @@ logger = get_logger(__name__)
 
 
 def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
-    """工具型 suite yaml → (ToolRunRequest, 原始配置快照)。"""
+    """工具型 suite yaml → (ToolRunRequest, 原始配置快照)。
+
+    pytest 引擎（tools.tests_dir 模式）下 datasets 可空 = 跑该目录全部场景。
+    """
     tools_cfg = raw.get("tools") or {}
-    if not tools_cfg.get("datasets"):
+    tests_dir = tools_cfg.get("tests_dir")
+    if not tools_cfg.get("datasets") and not tests_dir:
         raise ValueError("tool suite requires tools.datasets (benchmark names)")
     run_name = raw.get("run_name") or "tool-run"
     stamp = utcnow().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -48,12 +52,13 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     req = ToolRunRequest(
         run_name=run_name,
         target=raw.get("target") or {},
-        datasets=list(tools_cfg["datasets"]),
+        datasets=list(tools_cfg.get("datasets") or []),
         limit_per_subset=tools_cfg.get("limit_per_subset"),
         work_dir=work_dir,
         extra=tools_cfg.get("extra_args") or {},
         metric_thresholds=mt if isinstance(mt, dict) else {},
         auto_thresholds=(mt == "auto"),
+        tests_dir=tests_dir,
     )
     return req, raw
 
@@ -99,7 +104,10 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
         report.summaries = summaries
         n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))
                         for v in result.perf.values())
-        report.total_cases = n_samples or (result.rows[0].count if result.rows else 0)
+        # total_cases 回退：首个 metric 组的 count 总和（多数据集/多场景求和，而非首行）
+        first_group = next(iter(by_metric.values()), [])
+        total_counts = sum(r.count for r in first_group)
+        report.total_cases = n_samples or total_counts
         failed = any(r.passed is False for r in result.rows)
         report.status = "failed" if failed else "passed"
         report.details["tool"] = engine_name

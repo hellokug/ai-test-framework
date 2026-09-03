@@ -126,9 +126,42 @@ class TestToolSuiteParsing:
         with pytest.raises(ValueError, match="tools.datasets"):
             parse_tool_suite({"engine": "evalscope", "tools": {}})
 
+    def test_parse_tests_dir_allows_empty_datasets(self):
+        req, _ = parse_tool_suite({"engine": "pytest", "tools": {"tests_dir": "my_ft"}})
+        assert req.tests_dir == "my_ft"
+        assert req.datasets == []
+
+    def test_parse_without_tests_dir_keeps_datasets(self):
+        req, _ = parse_tool_suite({"engine": "pytest", "tools": {"datasets": ["basic_chat"]}})
+        assert req.tests_dir is None
+        assert req.datasets == ["basic_chat"]
+
     def test_unknown_engine(self):
         with pytest.raises(KeyError, match="unknown tool engine"):
             get_tool("no_such_tool")
+
+
+async def test_tool_suite_total_cases_sums_first_metric_group(repo, monkeypatch):
+    """total_cases 回退 = 首个 metric 组 count 总和（多数据集求和，非首行）。"""
+    from aite.tools import run_tool_suite
+    from aite.tools.base import ToolMetricRow, ToolRunResult
+    from aite.tools.evalscope_adapter import EvalscopeAdapter
+
+    async def fake_run(self, req):
+        return ToolRunResult(rows=[
+            ToolMetricRow(dataset="evalscope:ceval", metric="mean_acc",
+                          value=0.5, count=6),
+            ToolMetricRow(dataset="evalscope:mmlu", metric="mean_acc",
+                          value=1.0, count=4),
+        ])
+
+    monkeypatch.setattr(EvalscopeAdapter, "run", fake_run)
+    raw = {"engine": "evalscope", "run_name": "t",
+           "target": {"type": "openai_compatible", "base_url": "http://x/v1", "model": "m"},
+           "tools": {"datasets": ["ceval", "mmlu"]}}
+    report = await run_tool_suite(raw, repo)
+    assert report.status == "passed"
+    assert report.total_cases == 10   # 6 + 4，而非 rows[0].count=6
 
 
 async def test_tool_suite_overall_row(repo, tmp_path, monkeypatch):
