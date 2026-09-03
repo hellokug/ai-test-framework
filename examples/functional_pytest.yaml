@@ -1,0 +1,25 @@
+run_name: functional-pytest
+description: 功能测试（pytest 引擎）：真实调用模型 + 规则断言，场景级 pass_rate
+
+engine: pytest                    # 路由到 pytest 适配器
+
+target:                           # 复用平台统一 target 配置
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:3b
+  stream: false
+
+tools:
+  # 用法一（内置场景）：datasets = 场景名，可用 `aite tool benchmarks pytest` 查看
+  datasets: [basic_chat, structured_output, tool_calling, long_context]
+  metric_thresholds: {pass_rate: 1.0}   # auto 等价于 1.0（零容忍）；不配则无判定
+  # extra_args:
+  #   timeout: 1800              # 单场景总超时（秒），默认 1800
+
+  # 用法二（自建场景目录）：tests_dir 指向自己的功能测试目录，与 datasets 二选一。
+  # 目录下每个含 test_*.py 的子目录 = 一个场景；datasets 留空 = 跑全部子目录，
+  # 非空时作为子目录名筛选。用例可用 harness 的 chat / chat_raw fixture
+  # （`from aite.functional.harness import strip_fences`）。
+  # tests_dir: ./my_ft_tests
+
+storage: {url: sqlite+aiosqlite:///./aite.db}

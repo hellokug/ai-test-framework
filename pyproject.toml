@@ -41,6 +41,10 @@ dependencies = [
 [project.optional-dependencies]
 # Judges talk to model APIs over plain REST (httpx), no vendor SDK required.
 judge = []
+# 功能测试（engine: pytest）：场景用例由 pytest 子进程执行，需额外装 pytest。
+functional = [
+    "pytest>=8.2",
+]
 bench = [
     "datasets>=2.19",
     "huggingface_hub>=0.23",

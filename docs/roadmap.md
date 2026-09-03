@@ -62,6 +62,47 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 
 验证方式：真实 evalscope 跑 ceval/gsm8k 小样本，结果入库、Web 趋势可见。
 
+### 模块 D：功能测试（pytest 执行引擎，2026-09-03 完成）
+
+目标：用 pytest 覆盖模型功能常见场景（真实调用模型 + 规则断言），复用工具层
+路由 / 入库 / 阈值 / 趋势链路，不新增抽象层。首发 4 内置场景 14 例：
+basic_chat / structured_output / tool_calling / long_context。
+
+- [x] D1 契约层小改：ToolRunRequest 加 tests_dir；parse_tool_suite 支持
+      tests_dir（此时 datasets 可空）；total_cases 回退改为首个 metric 组
+      count 总和（多数据集/多场景求和）。
+- [x] D2 功能场景包（aite/functional）：harness pytest 插件（chat/chat_raw
+      fixture，AITE_FT_* 环境变量注入，网络/5xx 重试 1 次）+ 4 场景
+      （抗 flaky：约束式 prompt + 确定性目标断言）。
+- [x] D3 pytest 适配器（aite/tools/pytest_adapter.py）：逐场景 subprocess
+      `python -m pytest --junitxml`，collect 解析 junit-xml 出场景级
+      pass_rate；`aite tool benchmarks pytest` 枚举内置场景。
+- [x] D4 打包与文档：`pip install "aite[functional]"`（pytest>=8.2）；
+      examples/functional_pytest.yaml；README 功能测试章节。
+
+关键决策（设计校验结论，实现时遵循）：
+
+- **模型访问不走场景目录 conftest.py**（pytest confcutdir 陷阱：已安装环境下
+  rootdir 之上的 conftest 不加载），改用 pytest 插件模块
+  `aite.functional.harness`，subprocess 加 `-p aite.functional.harness`
+  按导入路径加载，安装/源码环境行为一致
+- `tools.datasets` 复用为场景名列表；tests_dir 模式下可省略（= 跑该目录全部
+  含 test_*.py 的子目录），非空时作为子目录名筛选
+- `limit_per_subset` 对 pytest 无语义，忽略（文档标注）
+- 阈值：显式 `metric_thresholds: {pass_rate: x}` 优先；`auto` → 1.0
+  （功能测试零容忍口径）；不配则无判定
+- `list_tasks()` 只枚举内置场景（tests_dir 用户场景运行时才解析，文档说明）
+- 结果粒度：场景级汇总——每场景一行 pass_rate 入 run_metric_summary，
+  junit-xml + 执行日志留档 work_dir；skipped 剔除分母且 count 同口径
+  （overall 加权平均才准确）；不动存储契约（storage/models.py 未改）
+- subprocess argv 细节：`-o norecursedirs=`（主套件把 fixtures 加入
+  norecursedirs 防误收集离线场景用例，pytest 对显式目录参数同样过滤，须清空
+  兜底）+ `-p no:cacheprovider`（不在 rootdir 落 .pytest_cache 污染工作区）；
+  env 必须与 os.environ 合并（Windows 缺 SystemRoot 会崩）
+
+验证方式：pytest 全量 + 离线 fixtures 端到端；真实模型
+`aite run -c examples/functional_pytest.yaml` 结果入库、CLI 汇总、趋势可见。
+
 ## 基线（已完成）
 
 - [x] pytest 全量 145 用例通过；ruff 零报错（2026-08-28）
@@ -96,3 +137,4 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 - 2026-09-01 **架构转向：平台化**。用户决策：aite 定位评测平台而非引擎，精度跑分委托 evalscope/opencompass 等专业工具，平台核心 = 数据集管理 + 工具适配 + 结果统一；自研引擎保留作性能/安全/RAG/judge 维度补充；首个接入 evalscope（进程内 API）。模块 B 收缩（对拍取消），模块 C（evalscope 适配器）立项。同日修复 hf_hub 加载器未注册进 run 链路的 bug（aite/datasets/__init__ 导入时注册）。
 - 2026-09-02 工具层支持 `metric_thresholds: auto`：选择题类基准用随机基线默认阈值（mmlu/ceval/cmmlu/arc/hellaswag=0.25，winogrande=0.5），开放生成题（gsm8k 等）不设默认避免误导；显式阈值优先。+3 单测（174 全绿）。
 - 2026-09-02 开放工具基准目录接口（C4 部分）：`aite tool benchmarks` CLI + `list_tasks()` Python API，枚举 evalscope 214 个基准的 name/metrics/tags/few_shot_num/subsets/dataset_id（经 BENCHMARK_REGISTRY），指标名归一（evalscope `acc`→报告 `mean_acc`）。数据形状 REST-ready，前端阶段加薄封装即可。+1 单测（175 全绿）。
+- 2026-09-03 **模块 D：功能测试（pytest 执行引擎）完成**。suite 写 `engine: pytest` 即用 pytest 跑功能场景（真实调用模型 + 规则断言），复用工具层路由/入库/阈值/趋势链路，不动存储契约。交付：`aite/functional`（harness 插件 + 4 内置场景 14 例：basic_chat / structured_output / tool_calling / long_context）、`aite/tools/pytest_adapter.py`（逐场景 subprocess + junit-xml 收集场景级 pass_rate）、`tools.tests_dir` 自建目录模式、`pip install "aite[functional]"`、examples/functional_pytest.yaml。关键决策与踩坑（conftest confcutdir 陷阱 → 插件模块方案；norecursedirs 对显式目录参数同样生效 → argv 清空兜底；Windows SystemRoot 必须合并 env）见模块 D 条目。+20 单测含离线 fixtures subprocess 端到端（195 全绿）。

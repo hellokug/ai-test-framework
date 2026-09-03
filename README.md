@@ -114,6 +114,45 @@ aite tool benchmarks                    # CLI：列出 evalscope 214 个基准�
 Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个基准的
 `name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id`。
 
+## 功能测试（engine: pytest）
+
+用 pytest 做执行引擎覆盖模型功能常见场景：一个场景 = 一个含 `test_*.py` 的子目录，
+用例**真实调用模型** + 规则断言（非离线打分），逐场景 subprocess 执行，场景级
+`pass_rate` 统一入 `run_metric_summary`，与精度跑分在 Web 趋势中并列可比。
+依赖：`pip install "aite[functional]"`（pytest>=8.2）。
+
+内置 4 场景（14 例，`aite tool benchmarks pytest` 可查）：
+
+| 场景 | 例数 | 覆盖 |
+|---|---|---|
+| `basic_chat` | 4 | 回复非空 / 关键词包含 / 语言+格式约束 / 简单算术 |
+| `structured_output` | 4 | JSON 可解析 / 定长数组 / 枚举字段 / 两层嵌套 |
+| `tool_calling` | 3 | 正确选工具 / arguments 可解析含关键参数 |
+| `long_context` | 3 | needle-in-a-haystack（确定性填充，4k/16k/尾部） |
+
+```yaml
+# examples/functional_pytest.yaml
+engine: pytest
+target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
+tools:
+  datasets: [basic_chat, structured_output, tool_calling, long_context]
+  metric_thresholds: {pass_rate: 1.0}   # auto 等价 1.0（零容忍）；不配则无判定
+```
+
+两种用法：**内置场景**（`tools.datasets` = 场景名）或**自建目录**（`tools.tests_dir`
+指向自己的功能测试目录；datasets 可空 = 跑全部含 `test_*.py` 的子目录，非空时作为
+子目录名筛选）。自建用例用 `chat` / `chat_raw` fixture 访问模型（适配器经
+`AITE_FT_*` 环境变量注入连接信息，不要直接 pytest 场景目录）：
+
+```python
+def test_reply_nonempty(chat):
+    assert chat([{"role": "user", "content": "用一句话介绍你自己。"}]).strip()
+```
+
+细节口径：`limit_per_subset` 对 pytest 无语义（忽略）；skipped 用例剔除分母；
+退出码 0/1 正常（有失败用例），2+ 记 run 级 error；junit-xml 与执行日志留档
+`reports/tool/pytest/<run>/<时间戳>/`；单场景超时 `tools.extra_args.timeout`（默认 1800s）。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、
