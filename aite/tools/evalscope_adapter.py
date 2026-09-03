@@ -23,6 +23,34 @@ from aite.tools.base import (
     run_sync_in_thread,
 )
 
+# metric_thresholds: auto 时的推荐阈值（选择题类 = 随机基线；开放题不设默认）。
+# 只列有客观随机基线的选择题基准，避免给开放生成题一个会误导的门槛。
+RECOMMENDED_THRESHOLDS: dict[str, dict[str, float]] = {
+    "mmlu": {"mean_acc": 0.25},       # 4 选 1
+    "ceval": {"mean_acc": 0.25},      # 4 选 1
+    "cmmlu": {"mean_acc": 0.25},      # 4 选 1
+    "arc": {"mean_acc": 0.25},        # 4 选 1
+    "hellaswag": {"mean_acc": 0.25},  # 4 选 1
+    "winogrande": {"mean_acc": 0.5},  # 2 选 1
+    "truthful_qa": {"mean_acc": 0.25},
+    # gsm8k/math 等开放生成题：无客观随机基线，不给默认（避免误导）
+}
+
+
+def _normalize_metric_names(metric_list: list) -> list[str]:
+    """evalscope metric_list → 报告可见的指标名列表。
+
+    metric_list 两种形态：``['acc']`` 或 ``[{'acc': {'numeric': True}}]``；
+    evalscope 内部名 ``acc``（accuracy）在报告/阈值中显示为 ``mean_acc``。
+    """
+    names: list[str] = []
+    for m in metric_list or []:
+        if isinstance(m, str):
+            names.append(m)
+        elif isinstance(m, dict):
+            names.extend(m.keys())
+    return ["mean_acc" if n == "acc" else n for n in names]
+
 
 @register_tool("evalscope")
 class EvalscopeAdapter(ToolAdapter):
@@ -52,6 +80,23 @@ class EvalscopeAdapter(ToolAdapter):
         await run_sync_in_thread(run_task, cfg)
         return self.collect(req)
 
+    def list_tasks(self) -> list[dict]:
+        """枚举 evalscope 全部基准：name/metrics/tags/few_shot_num/subsets。"""
+        from evalscope.api.registry import BENCHMARK_REGISTRY  # 进程内依赖
+
+        out: list[dict] = []
+        for name, meta in sorted(BENCHMARK_REGISTRY.items()):
+            out.append({
+                "name": name,
+                "pretty_name": meta.pretty_name or name,
+                "metrics": _normalize_metric_names(meta.metric_list),
+                "tags": list(meta.tags or []),
+                "few_shot_num": meta.few_shot_num,
+                "subsets": list(meta.subset_list or []),
+                "dataset_id": meta.dataset_id,
+            })
+        return out
+
     def collect(self, req: ToolRunRequest) -> ToolRunResult:
         """从 work_dir 的 reports/*.json 收集（稳定文件契约，不依赖内存返回对象）。
 
@@ -78,6 +123,8 @@ class EvalscopeAdapter(ToolAdapter):
                 out.raw_score[ds_name] = float(data["score"])
             for m in data.get("metrics") or []:
                 thr = req.metric_thresholds.get(m.get("name"))
+                if thr is None and req.auto_thresholds:
+                    thr = (RECOMMENDED_THRESHOLDS.get(ds_name) or {}).get(m.get("name"))
                 value = m.get("score")
                 if value is None:
                     continue

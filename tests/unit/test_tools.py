@@ -6,7 +6,14 @@ import pytest
 
 from aite.tools import parse_tool_suite
 from aite.tools.base import ToolRunRequest, get_tool
-from aite.tools.evalscope_adapter import EvalscopeAdapter
+from aite.tools.evalscope_adapter import EvalscopeAdapter, _normalize_metric_names
+
+
+def test_normalize_metric_names():
+    assert _normalize_metric_names(["acc"]) == ["mean_acc"]
+    assert _normalize_metric_names([{"acc": {"numeric": True}}]) == ["mean_acc"]
+    assert _normalize_metric_names(["acc", "rouge"]) == ["mean_acc", "rouge"]
+    assert _normalize_metric_names([]) == []
 
 
 def make_request(**kw):
@@ -81,6 +88,37 @@ class TestEvalscopeAdapter:
         write_report(tmp_path, "b@gsm8k.json", payload)
         result = EvalscopeAdapter().collect(make_request(work_dir=tmp_path))
         assert len(result.rows) == 1
+
+    def test_auto_thresholds_choice_baseline(self, tmp_path):
+        write_report(tmp_path, "m@mmlu.json", {
+            "dataset_name": "mmlu", "score": 0.3,
+            "metrics": [{"name": "mean_acc", "num": 10, "score": 0.3}],
+        })
+        result = EvalscopeAdapter().collect(
+            make_request(work_dir=tmp_path, auto_thresholds=True))
+        assert result.rows[0].threshold == 0.25   # 4 选 1 随机基线
+        assert result.rows[0].passed is True      # 0.3 >= 0.25
+
+    def test_auto_thresholds_open_ended_no_default(self, tmp_path):
+        write_report(tmp_path, "m@gsm8k.json", {
+            "dataset_name": "gsm8k", "score": 0.2,
+            "metrics": [{"name": "mean_acc", "num": 1, "score": 0.2}],
+        })
+        result = EvalscopeAdapter().collect(
+            make_request(work_dir=tmp_path, auto_thresholds=True))
+        assert result.rows[0].threshold is None    # 开放题不给默认
+        assert result.rows[0].passed is None
+
+    def test_explicit_threshold_wins_over_auto(self, tmp_path):
+        write_report(tmp_path, "m@mmlu.json", {
+            "dataset_name": "mmlu", "score": 0.3,
+            "metrics": [{"name": "mean_acc", "num": 10, "score": 0.3}],
+        })
+        req = make_request(work_dir=tmp_path, auto_thresholds=True,
+                           metric_thresholds={"mean_acc": 0.5})
+        result = EvalscopeAdapter().collect(req)
+        assert result.rows[0].threshold == 0.5     # 显式优先
+        assert result.rows[0].passed is False
 
 
 class TestToolSuiteParsing:

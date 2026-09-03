@@ -186,6 +186,31 @@ def _print_report_summary(report) -> None:
         console.print(f"  report [{fmt}]: {path}")
 
 
+tool_app = typer.Typer(help="external tool adapters (eval engines)")
+app.add_typer(tool_app, name="tool")
+
+
+@tool_app.command("benchmarks")
+def tool_benchmarks(
+    engine: str = typer.Argument("evalscope", help="tool engine name"),
+) -> None:
+    """List benchmarks of an external tool: name / metric / tags / few-shot."""
+    from aite.tools import get_tool
+
+    try:
+        tasks = get_tool(engine).list_tasks()
+    except ImportError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    table = Table(title=f"{engine} benchmarks ({len(tasks)})")
+    for col in ("name", "pretty_name", "metrics", "tags", "few_shot"):
+        table.add_column(col)
+    for t in tasks:
+        table.add_row(t["name"], t["pretty_name"], ", ".join(t["metrics"]),
+                      ", ".join(t["tags"]), str(t.get("few_shot_num") or "-"))
+    console.print(table)
+
+
 report_app = typer.Typer(help="re-render / inspect stored run reports")
 app.add_typer(report_app, name="report")
 

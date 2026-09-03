@@ -28,6 +28,7 @@ class ToolRunRequest:
     work_dir: Path = Path("./outputs")
     extra: dict = field(default_factory=dict)          # 透传工具原生参数
     metric_thresholds: dict[str, float] = field(default_factory=dict)
+    auto_thresholds: bool = False  # metric_thresholds: auto → 按基准推荐阈值
 
 
 @dataclass
@@ -61,6 +62,10 @@ class ToolAdapter(ABC):
     @abstractmethod
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         """执行评测并收集结果（阻塞调用应在 to_thread 中进行）。"""
+
+    @abstractmethod
+    def list_tasks(self) -> list[dict]:
+        """枚举工具可用的基准/任务目录（name/metrics/tags 等，供前端选择）。"""
 
 
 _TOOLS: dict[str, type[ToolAdapter]] = {}

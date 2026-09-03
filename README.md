@@ -97,13 +97,22 @@ target:                       # 复用平台统一 target（OpenAI 兼容端点�
 tools:
   datasets: [ceval, gsm8k]    # evalscope 基准名（100+，5-shot 标准口径）
   limit_per_subset: 3         # 注意：每科目条数（ceval×3 = 52×3 = 156 题）
-  metric_thresholds: {mean_acc: 0.5}
+  metric_thresholds: auto     # auto=选择题随机基线/开放题不打门；也可显式 {mean_acc: 0.6}
 ```
 
 结果统一入 `run_metric_summary`（含 overall 行），与自研引擎的 run 在 Web 趋势中
 并列可比；evalscope 原生 HTML/JSON 报告保留在 `reports/tool/evalscope/` 下。
 运行环境：aite 与 evalscope 安装在同一环境（`pip install evalscope`，需 Python≤3.13，
 editdistance 等依赖尚无 3.14 wheel）。
+
+基准目录（前端选择数据集/指标/阈值的接口，双形态）：
+
+```bash
+aite tool benchmarks                    # CLI：列出 evalscope 214 个基准及指标/tags
+```
+
+Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个基准的
+`name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id`。
 
 ## Web 平台
 

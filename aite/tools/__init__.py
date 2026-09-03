@@ -44,6 +44,7 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     stamp = utcnow().astimezone().strftime("%Y%m%d-%H%M%S")
     work_dir = (Path(raw.get("output_dir") or "./reports") / "tool"
                 / str(raw["engine"]) / run_name / stamp)
+    mt = tools_cfg.get("metric_thresholds")
     req = ToolRunRequest(
         run_name=run_name,
         target=raw.get("target") or {},
@@ -51,7 +52,8 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
         limit_per_subset=tools_cfg.get("limit_per_subset"),
         work_dir=work_dir,
         extra=tools_cfg.get("extra_args") or {},
-        metric_thresholds=tools_cfg.get("metric_thresholds") or {},
+        metric_thresholds=mt if isinstance(mt, dict) else {},
+        auto_thresholds=(mt == "auto"),
     )
     return req, raw
 

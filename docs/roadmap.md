@@ -54,7 +54,11 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
       踩坑记录：evalscope no_timestamp 模式 json 布局为 reports/<model>/<ds>.json；
       run_task 返回值不可依赖（repr 字符串），一律走文件收集。
 - [ ] C3 平台数据集 → evalscope 自定义数据格式转换（local/builtin 灌进去）
-- [ ] C4 Web/CLI 入口与文档
+- [ ] C4 入口与文档
+      - [x] C4a 基准目录接口：`aite tool benchmarks` CLI + `list_tasks()` Python API，
+            数据形状 REST-ready（2026-09-02，见进度记录）
+      - [ ] C4b REST 端点（`/api/v1/tools/...`，与前端阶段一并做）
+      - [ ] C4c 文档收尾（dataset-guide / README 复核）
 
 验证方式：真实 evalscope 跑 ceval/gsm8k 小样本，结果入库、Web 趋势可见。
 
@@ -90,3 +94,5 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 - 2026-08-31 C-Eval 全集落地：HF `ceval/ceval-exam` 52 科目 val(1346)+dev(260) 共 1606 题转换为离线 `ceval_full`（A/B/C/D 独立列→choices 列表，subject 入 metadata 支持 group_by 分科目统计；test split 答案不公开不取）。转换脚本 scripts/convert_ceval.py（数据本体不入库：CC BY-NC-SA 许可不再分发，用脚本再生成），抽样 10 题 choice_accuracy=0.8 验证通过。注：A-D 多列→choices 的转换模式如再遇到，可并入 add-hf CLI（backlog）。
 - 2026-09-01 沉淀《数据集使用指南》docs/dataset-guide.md（在线/离线跑法、add-hf 下载命令、特殊形状转换模式、参数速查），README 文档索引更新。实测并发结论：本地单卡 Ollama 并发 1/8/16 无显著差异（GPU 吞吐瓶颈），云端 API 才有线性加速。
 - 2026-09-01 **架构转向：平台化**。用户决策：aite 定位评测平台而非引擎，精度跑分委托 evalscope/opencompass 等专业工具，平台核心 = 数据集管理 + 工具适配 + 结果统一；自研引擎保留作性能/安全/RAG/judge 维度补充；首个接入 evalscope（进程内 API）。模块 B 收缩（对拍取消），模块 C（evalscope 适配器）立项。同日修复 hf_hub 加载器未注册进 run 链路的 bug（aite/datasets/__init__ 导入时注册）。
+- 2026-09-02 工具层支持 `metric_thresholds: auto`：选择题类基准用随机基线默认阈值（mmlu/ceval/cmmlu/arc/hellaswag=0.25，winogrande=0.5），开放生成题（gsm8k 等）不设默认避免误导；显式阈值优先。+3 单测（174 全绿）。
+- 2026-09-02 开放工具基准目录接口（C4 部分）：`aite tool benchmarks` CLI + `list_tasks()` Python API，枚举 evalscope 214 个基准的 name/metrics/tags/few_shot_num/subsets/dataset_id（经 BENCHMARK_REGISTRY），指标名归一（evalscope `acc`→报告 `mean_acc`）。数据形状 REST-ready，前端阶段加薄封装即可。+1 单测（175 全绿）。
