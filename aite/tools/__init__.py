@@ -30,6 +30,7 @@ from aite.tools.base import (
     register_tool as register_tool,
 )
 from aite.tools.evalscope_adapter import EvalscopeAdapter  # noqa: F401  (registers)
+from aite.tools.pytest_adapter import PytestAdapter  # noqa: F401  (registers)
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)

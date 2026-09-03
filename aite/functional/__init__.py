@@ -5,3 +5,7 @@
 - ``scenarios``：内置功能场景，一个子目录 = 一个场景（真实调用模型 + 规则断言）；
   用户也可通过 suite yaml 的 ``tools.tests_dir`` 指定自建场景目录
 """
+
+from pathlib import Path
+
+SCENARIOS_DIR = Path(__file__).parent / "scenarios"

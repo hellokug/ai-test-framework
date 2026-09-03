@@ -78,6 +78,12 @@ include = ["aite", "examples", "docs", "tests", "README.md", "pyproject.toml"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
+# 默认值全集 + fixtures（防主套件误收集 tests/fixtures 下的离线场景用例，
+# pytest 子进程由适配器 argv 清空该选项兜底）。写全会替换默认值，勿删默认项。
+norecursedirs = [
+    "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
+    "fixtures",
+]
 
 [tool.ruff]
 line-length = 110

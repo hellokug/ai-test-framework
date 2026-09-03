@@ -1,0 +1,164 @@
+"""pytest 适配器（模块 D：功能测试执行引擎）。
+
+suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一个含
+``test_*.py`` 的子目录（aite 内置 ``functional/scenarios/`` 或用户自建
+``tools.tests_dir``），逐场景 subprocess 跑 ``python -m pytest``，从
+junit-xml 收集 ``pass_rate``，复用平台的入库 / 阈值 / 趋势链路。
+
+- 模型访问经 ``-p aite.functional.harness`` 插件按导入路径加载（安装/源码环境
+  行为一致，规避 conftest confcutdir 陷阱）
+- 退出码 0/1 = 正常（有失败用例）；2/3/4/5 = 执行异常，抛错走 run 级 error
+- ``tools.datasets``：内置模式 = 场景名列表；tests_dir 模式可空 = 跑全部子目录，
+  非空时作为子目录名筛选
+- ``limit_per_subset`` 对 pytest 无语义，忽略
+- 阈值：显式 ``metric_thresholds: {pass_rate: x}`` 优先；``auto`` → 1.0
+  （功能测试零容忍口径）；不配则无判定
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from aite.functional import SCENARIOS_DIR
+from aite.tools.base import (
+    ToolAdapter,
+    ToolMetricRow,
+    ToolRunRequest,
+    ToolRunResult,
+    api_endpoint,
+    register_tool,
+    run_sync_in_thread,
+)
+
+DEFAULT_TIMEOUT = 1800   # 单场景总超时（秒），req.extra.timeout 可覆盖
+HARNESS_PLUGIN = "aite.functional.harness"
+PASS_RATE = "pass_rate"
+
+
+def _available_scenarios(root: Path) -> list[str]:
+    """枚举 root 下含 test_*.py 的直接子目录名（= 可用场景）。"""
+    if not root.is_dir():
+        raise ValueError(f"功能测试目录不存在: {root}")
+    names = sorted(d.name for d in root.iterdir()
+                   if d.is_dir() and any(d.glob("test_*.py")))
+    if not names:
+        raise ValueError(f"{root} 下没有含 test_*.py 的场景子目录")
+    return names
+
+
+@register_tool("pytest")
+class PytestAdapter(ToolAdapter):
+    name = "pytest"
+
+    def build_config(self, req: ToolRunRequest) -> dict:
+        """解析场景目录 → 执行计划（纯函数：argv / env / 超时映射，可单测）。"""
+        root = Path(req.tests_dir) if req.tests_dir else SCENARIOS_DIR
+        available = _available_scenarios(root)
+        if req.datasets:
+            unknown = [s for s in req.datasets if s not in available]
+            if unknown:
+                raise ValueError(f"未知功能场景: {unknown}；可用: {available}")
+            names = list(req.datasets)
+        else:   # 仅 tests_dir 模式可达（parse 层已保证二选一非空）
+            names = available
+
+        model = str(req.target.get("model") or "").strip()
+        if not model:
+            raise ValueError("pytest engine 需要 target.model")
+        url, api_key = api_endpoint(req.target)
+        env = {
+            "AITE_FT_BASE_URL": url,
+            "AITE_FT_MODEL": model,
+            "AITE_FT_API_KEY": api_key,
+            "PYTHONIOENCODING": "utf-8",   # 子进程 stdio 统一 utf-8，日志不乱码
+        }
+        timeout = int(req.extra.get("timeout", DEFAULT_TIMEOUT))
+
+        scenarios = [{
+            "name": n,
+            "dir": str(root / n),
+            "junit_xml": str(req.work_dir / "junit" / f"{n}.xml"),
+            "log": str(req.work_dir / "logs" / f"{n}.log"),
+        } for n in names]
+        argv = {s["name"]: [
+            sys.executable, "-m", "pytest", s["dir"],
+            f"--junitxml={s['junit_xml']}",
+            "-p", HARNESS_PLUGIN,
+            "-p", "no:cacheprovider",     # 不在 rootdir 落 .pytest_cache
+            # 主套件把 fixtures 列入 norecursedirs（防误收集），显式传目录仍会被拦，
+            # 统一清空兜底（pytest 行为：显式目录参数同样受 norecursedirs 过滤）
+            "-o", "norecursedirs=",
+        ] for s in scenarios}
+        return {"scenarios": scenarios, "argv": argv, "env": env, "timeout": timeout}
+
+    async def run(self, req: ToolRunRequest) -> ToolRunResult:
+        cfg = self.build_config(req)
+        for sc in cfg["scenarios"]:
+            await run_sync_in_thread(self._run_one, sc, cfg)
+        return self.collect(req)
+
+    def _run_one(self, sc: dict, cfg: dict) -> None:
+        """单场景 subprocess 执行；stdout/stderr 落日志，异常退出码抛错。"""
+        for key in ("junit_xml", "log"):
+            Path(sc[key]).parent.mkdir(parents=True, exist_ok=True)
+        env = os.environ | cfg["env"]   # 必须合并：Windows 缺 SystemRoot 会崩
+        try:
+            proc = subprocess.run(cfg["argv"][sc["name"]], capture_output=True,
+                                  env=env, timeout=cfg["timeout"])
+        except subprocess.TimeoutExpired as exc:
+            Path(sc["log"]).write_text(
+                f"TIMEOUT after {cfg['timeout']}s\n{exc}", encoding="utf-8")
+            raise RuntimeError(f"功能场景 {sc['name']} 超时（{cfg['timeout']}s）") from exc
+        out = (proc.stdout or b"").decode("utf-8", errors="replace")
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        Path(sc["log"]).write_text(out + err, encoding="utf-8", errors="replace")
+        if proc.returncode not in (0, 1):   # 0=全过 1=有失败；2+ = 执行异常
+            raise RuntimeError(
+                f"功能场景 {sc['name']} 执行异常（exit={proc.returncode}），"
+                f"日志: {sc['log']}\n{out[-2000:]}")
+
+    def collect(self, req: ToolRunRequest) -> ToolRunResult:
+        """解析各场景 junit-xml → 场景级 pass_rate 行。"""
+        cfg = self.build_config(req)   # 纯函数，重复调用无副作用
+        out = ToolRunResult()
+        for sc in cfg["scenarios"]:
+            xml_path = Path(sc["junit_xml"])
+            if not xml_path.is_file():
+                raise RuntimeError(f"缺少 junit 报告: {xml_path}")
+            tests = failures = errors = skipped = 0
+            for suite in ET.parse(xml_path).getroot().iter("testsuite"):
+                tests += int(suite.get("tests", 0))
+                failures += int(suite.get("failures", 0))
+                errors += int(suite.get("errors", 0))
+                skipped += int(suite.get("skipped", 0))
+            denom = tests - skipped   # skipped 剔除分母；count 同口径，overall 加权才准确
+            if denom <= 0:
+                raise RuntimeError(f"功能场景 {sc['name']} 未收集到用例（tests={tests}）")
+            rate = (tests - failures - errors - skipped) / denom
+            thr = req.metric_thresholds.get(PASS_RATE)
+            if thr is None and req.auto_thresholds:
+                thr = 1.0   # 功能测试零容忍口径
+            out.rows.append(ToolMetricRow(
+                dataset=f"pytest:{sc['name']}", metric=PASS_RATE,
+                value=rate, count=denom, threshold=thr,
+                passed=(rate >= thr) if thr is not None else None,
+            ))
+            out.raw_score[sc["name"]] = rate
+            out.report_files[f"{sc['name']}.xml"] = str(xml_path)
+            if Path(sc["log"]).is_file():
+                out.report_files[f"{sc['name']}.log"] = sc["log"]
+        return out
+
+    def list_tasks(self) -> list[dict]:
+        """只枚举内置场景（tests_dir 用户场景运行时才解析）。"""
+        return [{
+            "name": n,
+            "pretty_name": n,
+            "metrics": [PASS_RATE],
+            "tags": ["functional"],
+            "few_shot_num": None,
+        } for n in _available_scenarios(SCENARIOS_DIR)]
