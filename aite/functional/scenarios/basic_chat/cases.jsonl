@@ -1,4 +1,4 @@
-{"id": "intro", "desc": "开放对话：回复非空", "messages": [{"role": "user", "content": "用一句话介绍你自己。"}], "expect": {"nonempty": true}}
+{"id": "intro", "desc": "开放对话：回复非空、无乱码、无内部标签泄露", "messages": [{"role": "user", "content": "用一句话介绍你自己。"}], "expect": {"nonempty": true, "no_garbled": true, "no_leak": true}}
 {"id": "keyword", "desc": "指令遵循：回复包含指定关键词 banana", "messages": [{"role": "user", "content": "Reply with one short English sentence that contains the word 'banana'."}], "expect": {"contains": "banana", "ignore_case": true}}
 {"id": "yes_no", "desc": "语言+格式约束：一个英文词回答 yes/no", "messages": [{"role": "user", "content": "Answer with exactly one English word, yes or no: Is Paris the capital of France?"}], "expect": {"contains": "yes", "ignore_case": true}}
 {"id": "arithmetic", "desc": "简单算术：只输出数字 3+4", "messages": [{"role": "user", "content": "只输出一个数字，不要任何其他文字：3+4=?"}], "expect": {"contains": "7"}}

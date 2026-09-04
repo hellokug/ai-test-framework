@@ -19,8 +19,11 @@
   目前支持 ``{"haystack": {chars, key_at, key}}``（确定性长文填充，needle 埋点）
 - ``expect``（必填，至少一个断言）：
   ``contains`` / ``ignore_case`` / ``nonempty`` /
-  ``json{path,type,eq,in,len,nonempty,item_type,item_nonempty,fields}`` /
-  ``tool`` / ``tool_args_contains``
+  ``json{path,type,eq,in,len,nonempty,item_type,item_nonempty,fields}``（空规格
+  ``{}`` = 仅校验剥围栏后可解析，即 JSON 输出格式正确性）/
+  ``tool`` / ``tool_args_contains``，以及质量类断言：
+  ``no_garbled``（乱码）/ ``no_leak``（内部标签泄露，可 ``{extra_patterns}`` 扩展）/
+  ``no_repeat``（复读）
 
 模型连接信息从环境变量读取（由 pytest 适配器注入，不要直接 pytest 场景目录）：
 ``AITE_FT_BASE_URL`` / ``AITE_FT_MODEL`` / ``AITE_FT_API_KEY``（本地服务可缺省）。
@@ -33,6 +36,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
+from collections import Counter
 
 import httpx
 import pytest
@@ -42,7 +47,8 @@ _COMPLETIONS = "/chat/completions"
 CASES_FILENAME = "cases.jsonl"
 
 _TYPES = {"str": str, "int": int, "list": list, "dict": dict}
-_EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool", "tool_args_contains"}
+_EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool",
+                "tool_args_contains", "no_garbled", "no_leak", "no_repeat"}
 _JSON_SPEC_KEYS = {"path", "type", "eq", "in", "len", "nonempty",
                    "item_type", "item_nonempty", "fields"}
 _VAR_BUILDERS = {"haystack"}
@@ -141,6 +147,62 @@ def chat_raw(_client: httpx.Client):
 
 
 # ---------------------------------------------------------------- 数据驱动
+
+# 质量类断言（保守口径：宁可漏报不误报，正常文本一律通过）
+_GARBLED_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("替换字符 U+FFFD", re.compile("\ufffd")),
+    ("GBK 乱码『锟斤拷』", re.compile("锟斤拷")),
+    ("控制字符", re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u0080-\u009f]")),
+    # UTF-8 按 Latin-1 误解码特征（如 中文 → "æµ‹è¯•"）；正常重音字符（château）不命中
+    ("UTF-8/Latin-1 误解码", re.compile(r"[\u00c0-\u00ff][\u0080-\u00bf]")),
+]
+
+_LEAK_DEFAULT = re.compile("|".join([
+    r"<\|[^|>\n]{1,30}\|>",                   # ChatML/Qwen: <|im_start|> <|endoftext|>
+    r"<｜[^｜>\n]{1,30}｜>",                  # DeepSeek 全角变体
+    r"\[/?INST\]",                            # Mistral
+    r"<</?SYS>>",                             # Llama-2
+    r"</?(?:think|tool_call|function_call)>",  # 推理/工具标签泄露
+]))
+
+_REPEAT_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(.{6,40}?)\1{3,}", re.S), "连续复读（≥6 字符块 ×4）"),
+    (re.compile(r"(.{2,5}?)\1{9,}", re.S), "高频短块复读（×10）"),
+]
+
+
+def _garbled_evidence(text: str) -> str | None:
+    for name, rx in _GARBLED_PATTERNS:
+        hits = rx.findall(text)
+        if hits:
+            return f"{name} ×{len(hits)}"
+    return None
+
+
+def _leak_evidence(text: str, extra_patterns: list[re.Pattern]) -> str | None:
+    m = _LEAK_DEFAULT.search(text)
+    if m:
+        return m.group(0)
+    for rx in extra_patterns:
+        m = rx.search(text)
+        if m:
+            return m.group(0)
+    return None
+
+
+def _repeat_evidence(text: str) -> str | None:
+    for rx, desc in _REPEAT_PATTERNS:
+        m = rx.search(text)
+        if m:
+            block = m.group(1)
+            return f"{desc}: {block!r}"
+    lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 10]
+    if lines:
+        line, n = Counter(lines).most_common(1)[0]
+        if n >= 5:
+            return f"整行重复 ×{n}: {line[:40]!r}"
+    return None
+
 
 def build_haystack(chars: int, key_at: float, key: str) -> str:
     """确定性长文填充：chars 量级重复无意义句，key 句埋在 key_at 比例处。"""
@@ -245,6 +307,28 @@ class Case:
         if unknown:
             raise ValueError(f"{source}: 未知断言键 {sorted(unknown)}（可用: {sorted(_EXPECT_KEYS)}）")
         _validate_json_spec(expect.get("json") or {}, f"{source}: json")
+        if "no_leak" in expect:
+            leak = expect["no_leak"]
+            if leak is True:
+                extra: list[str] = []
+            elif isinstance(leak, dict):
+                unknown = set(leak) - {"extra_patterns"}
+                if unknown:
+                    raise ValueError(f"{source}: no_leak 未知配置 {sorted(unknown)}")
+                eps = leak.get("extra_patterns") or []
+                if not isinstance(eps, list) or not all(
+                        isinstance(p, str) and p for p in eps):
+                    raise ValueError(f"{source}: no_leak.extra_patterns 须为非空正则字符串列表")
+                try:
+                    for p in eps:
+                        re.compile(p)
+                except re.error as exc:
+                    raise ValueError(f"{source}: no_leak.extra_patterns 非法正则: {exc}") from None
+                extra = eps
+            else:
+                raise ValueError(f"{source}: no_leak 只接受 true 或 {{extra_patterns: [...]}}")
+        else:
+            extra = []
         self.id = str(raw["id"])
         self.desc = str(raw["desc"])
         self.messages = raw["messages"]
@@ -252,6 +336,7 @@ class Case:
         self.params: dict = raw.get("params") or {}
         self.vars: dict = raw.get("vars") or {}
         self.expect = expect
+        self._extra_leak = [re.compile(p) for p in extra]
         for spec in self.vars.values():
             _build_var(spec)   # 加载期校验生成器规格
 
@@ -284,6 +369,15 @@ class Case:
         ic = bool(self.expect.get("ignore_case"))
         if self.expect.get("nonempty"):
             assert content, "期望回复非空，实际为空"
+        if self.expect.get("no_garbled"):
+            bad = _garbled_evidence(content)
+            assert bad is None, f"期望无乱码，检测到 {bad}（回复: {_brief(content)}）"
+        if "no_leak" in self.expect:
+            hit = _leak_evidence(content, self._extra_leak)
+            assert hit is None, f"期望无内部标签泄露，检测到 {hit!r}（回复: {_brief(content)}）"
+        if self.expect.get("no_repeat"):
+            ev = _repeat_evidence(content)
+            assert ev is None, f"期望无复读，检测到 {ev}（回复: {_brief(content)}）"
         if "contains" in self.expect:
             needle = str(self.expect["contains"])
             hit = (needle.lower() in content.lower()) if ic else (needle in content)

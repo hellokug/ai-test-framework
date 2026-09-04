@@ -165,6 +165,19 @@ function calling）/ `params`（可选，其他请求参数）/ `vars`（可选�
 `tool`（应选中的工具名）/ `tool_args_contains`。数据格式错误（缺字段 / 未知断言键 /
 id 重复）在收集期即报错并指明行号。
 
+**质量类断言**（保守口径，正常文本不误报，失败信息带证据片段）：
+
+- `no_garbled: true`——乱码：U+FFFD 替换符 / 「锟斤拷」/ 控制字符（含 C1）/
+  UTF-8 按 Latin-1 误解码特征（正常重音字符如 château 不误报）
+- `no_leak: true`——内部标签泄露：ChatML `<|im_start|>` / DeepSeek 全角变体 /
+  `[INST]` / `<<SYS>>` / `<think>` / `<tool_call>` 等；普通 HTML 不误报；
+  可 `{extra_patterns: ["<正则>"]}` 追加自定义标签（加载期校验正则）
+- `no_repeat: true`——复读：≥6 字符块连续 ×4 / 短块 ×10 / 整行重复 ×5；
+  正常文本（含少量"哈哈"）不误报
+- JSON 输出格式正确性：`json: {}`（空规格 = 仅校验剥围栏后可解析）
+
+更复杂的断言逻辑走手写 `test_*.py` 场景（`chat` fixture + 任意 Python）。
+
 细节口径：`limit_per_subset` 对 pytest 无语义（忽略）；skipped 用例剔除分母；
 退出码 0/1 正常（有失败用例），2+ 记 run 级 error；junit-xml 与执行日志留档
 `reports/tool/pytest/<run>/<时间戳>/`；单场景超时 `tools.extra_args.timeout`（默认 1800s）。

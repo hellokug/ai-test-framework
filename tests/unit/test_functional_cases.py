@@ -184,3 +184,101 @@ class TestCheck:
     def test_missing_choices(self):
         with pytest.raises(AssertionError, match="没有"):
             _case({"tool": "x"}).check({})
+
+    def test_json_empty_spec_means_parse_only(self):
+        """json: {} = 仅校验剥围栏后可解析（JSON 输出格式正确性）。"""
+        _case({"json": {}}).check(_response(content='{"any": [1, 2, 3]}'))
+        _case({"json": {}}).check(_response(content='```json\n[1, 2]\n```'))
+        with pytest.raises(AssertionError, match="合法 JSON"):
+            _case({"json": {}}).check(_response(content="not json at all"))
+
+
+class TestQualityChecks:
+    """质量类断言：no_garbled / no_leak / no_repeat（保守口径，正常文本不误报）。"""
+
+    # ---- 乱码 ----
+
+    def test_garbled_clean_text_passes(self):
+        _case({"no_garbled": True}).check(_response(content="你好，世界！Hello world."))
+        _case({"no_garbled": True}).check(_response(content="château naïve café"))  # 正常重音
+
+    def test_garbled_detects_each_kind(self):
+        bad_texts = [
+            "含\ufffd乱码",                 # U+FFFD 替换符
+            "出现锟斤拷了",                  # GBK 乱码
+            "坏\x00字符",                   # C0 控制符
+            "坏\x1f字符",
+            "DEL\x7f",
+            "C1\x85控制",                   # C1 控制符
+            "æµ‹è¯•ä¸­æ–‡",                # UTF-8 按 Latin-1 误解码
+        ]
+        for bad in bad_texts:
+            with pytest.raises(AssertionError, match="乱码"):
+                _case({"no_garbled": True}).check(_response(content=bad))
+
+    # ---- 内部标签泄露 ----
+
+    def test_leak_default_patterns(self):
+        bad_texts = [
+            "<|im_start|>assistant",
+            "回答完毕<|endoftext|>",
+            "<｜begin▁of▁sentence｜>你好",   # DeepSeek 全角变体
+            "[INST] what is 2+2 [/INST]",
+            "<<SYS>>you are helpful<</SYS>>",
+            "让我想想<think>3+2=5</think>答案是 5",
+            "<tool_call>{\"name\": \"f\"}</tool_call>",
+        ]
+        for bad in bad_texts:
+            with pytest.raises(AssertionError, match="泄露"):
+                _case({"no_leak": True}).check(_response(content=bad))
+
+    def test_leak_normal_html_not_flagged(self):
+        _case({"no_leak": True}).check(
+            _response(content="可以用 <div> 或 <b> 标签写 HTML，如 <br/> 换行。"))
+
+    def test_leak_extra_patterns(self):
+        case = _case({"no_leak": {"extra_patterns": [r"<MY-TAG-\d+>"]}})
+        with pytest.raises(AssertionError, match="泄露"):
+            case.check(_response(content="x<MY-TAG-7>y"))
+        _case({"no_leak": {"extra_patterns": [r"<MY-TAG-\d+>"]}}).check(
+            _response(content="clean text"))
+
+    def test_leak_bad_shape_rejected_at_load(self, tmp_path):
+        for bad_value in ("yes", 1, {"patterns": ["x"]}, {"extra_patterns": ["("]}):
+            p = _write(tmp_path, [
+                {"id": "a", "desc": "d",
+                 "messages": [{"role": "user", "content": "hi"}],
+                 "expect": {"no_leak": bad_value}}])
+            with pytest.raises(ValueError, match="no_leak"):
+                load_cases(p)
+
+    # ---- 复读 ----
+
+    def test_repeat_long_block_loop_detected(self):
+        with pytest.raises(AssertionError, match="复读"):
+            _case({"no_repeat": True}).check(_response(content="我喜欢吃苹果和香蕉" * 4))
+
+    def test_repeat_short_block_loop_detected(self):
+        with pytest.raises(AssertionError, match="复读"):
+            _case({"no_repeat": True}).check(_response(content="哈哈哈" * 12))
+
+    def test_repeat_repeated_lines_detected(self):
+        line = "这是一行足够长的重复内容，用来触发整行复读检测。"
+        with pytest.raises(AssertionError, match="复读"):
+            _case({"no_repeat": True}).check(_response(content="\n".join([line] * 5)))
+
+    def test_repeat_normal_text_passes(self):
+        _case({"no_repeat": True}).check(_response(
+            content="哈哈，这个笑话真好笑，哈哈哈哈。总之今天天气不错，我们继续下个话题吧。"))
+        _case({"no_repeat": True}).check(_response(
+            content="第一段介绍基本能力。第二段说明测试方法。第三段给出结论与建议。总结：一切正常。"))
+        _case({"no_repeat": True}).check(_response(
+            content="repeat repeat repeat"))   # 3 次短块不触发（阈值 ≥4）
+
+    # ---- 组合 ----
+
+    def test_combined_quality_expectations(self):
+        expect = {"nonempty": True, "no_garbled": True, "no_leak": True, "no_repeat": True}
+        _case(expect).check(_response(content="正常回复：一切正常。"))
+        with pytest.raises(AssertionError, match="泄露"):
+            _case(expect).check(_response(content="<|im_end|>正常回复"))
