@@ -1,8 +1,11 @@
 """pytest 适配器单测（build_config 纯函数 / junit 解析 / 离线 subprocess 端到端）。
 
-全部离线：不发起任何模型请求；端到端用 fixtures 下的纯断言场景。
+全部离线：端到端用 fixtures 下的纯断言场景 + fake 模型服务（cases.jsonl 链路）。
 """
 
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,7 @@ from aite.tools.base import ToolRunRequest
 from aite.tools.pytest_adapter import SCENARIOS_DIR, PytestAdapter
 
 FT_FIXTURES = Path(__file__).parent.parent / "fixtures" / "ft_scenarios"
+FT_JSONL = Path(__file__).parent.parent / "fixtures" / "ft_jsonl"
 
 
 def make_request(**kw):
@@ -175,3 +179,41 @@ async def test_run_offline_end_to_end(tmp_path):
     assert (tmp_path / "junit" / "pass_all.xml").is_file()
     log = (tmp_path / "logs" / "with_failure.log").read_text(encoding="utf-8")
     assert "test_fail" in log                          # 失败详情留档
+
+
+class _FakeModelHandler(BaseHTTPRequestHandler):
+    """固定回复的 chat/completions 端点（离线验证 cases.jsonl 全链路）。"""
+
+    def do_POST(self):
+        body = json.dumps({"choices": [{"message": {"content": "hello from fake"}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+async def test_run_jsonl_scenario_against_fake_server(tmp_path):
+    """数据驱动场景（cases.jsonl、零 Python）端到端：收集→请求→断言→pass_rate。"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeModelHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = make_request(
+            datasets=[], tests_dir=str(FT_JSONL), work_dir=tmp_path,
+            target={"type": "openai_compatible",
+                    "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    "model": "fake-model"},
+            metric_thresholds={"pass_rate": 0.6})
+        result = await PytestAdapter().run(req)
+    finally:
+        server.shutdown()
+    row = result.rows[0]
+    assert row.dataset == "pytest:smoke" and row.count == 2
+    assert row.value == pytest.approx(0.5)             # smoke_fail 确定性失败
+    assert row.passed is False
+    assert result.raw_score == {"smoke": 0.5}
+    log = (tmp_path / "logs" / "smoke.log").read_text(encoding="utf-8")
+    assert "smoke_fail" in log and "goodbye" in log    # 失败详情与 desc 留档

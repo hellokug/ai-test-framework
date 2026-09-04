@@ -17,9 +17,9 @@ tools:
   #   timeout: 1800              # 单场景总超时（秒），默认 1800
 
   # 用法二（自建场景目录）：tests_dir 指向自己的功能测试目录，与 datasets 二选一。
-  # 目录下每个含 test_*.py 的子目录 = 一个场景；datasets 留空 = 跑全部子目录，
-  # 非空时作为子目录名筛选。用例可用 harness 的 chat / chat_raw fixture
-  # （`from aite.functional.harness import strip_fences`）。
+  # 目录下每个场景子目录 = 一个场景；datasets 留空 = 跑全部子目录，非空时作为
+  # 子目录名筛选。场景两种形态：cases.jsonl（推荐，一行 = 一例请求体+断言，加用例
+  # 只加行不写代码）或手写 test_*.py（chat / chat_raw fixture），详见 README。
   # tests_dir: ./my_ft_tests
 
 storage: {url: sqlite+aiosqlite:///./aite.db}

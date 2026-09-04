@@ -1,0 +1,2 @@
+{"id": "smoke_pass", "desc": "fake 模型固定回复包含 hello（应通过）", "messages": [{"role": "user", "content": "say something"}], "expect": {"contains": "hello"}}
+{"id": "smoke_fail", "desc": "fake 模型固定回复不含 goodbye（确定性失败）", "messages": [{"role": "user", "content": "say something"}], "expect": {"contains": "goodbye"}}

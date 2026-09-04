@@ -79,6 +79,14 @@ basic_chat / structured_output / tool_calling / long_context。
       pass_rate；`aite tool benchmarks pytest` 枚举内置场景。
 - [x] D4 打包与文档：`pip install "aite[functional]"`（pytest>=8.2）；
       examples/functional_pytest.yaml；README 功能测试章节。
+- [x] D5 用例数据驱动化（2026-09-04 完成）：请求体外移到每场景一个
+      `cases.jsonl`（一行 = id + 场景说明 + messages/tools/params + expect 断言），
+      场景目录零 Python；harness 插件经 `pytest_collect_file` 自定义 File/Item
+      收集，加用例只加 jsonl 行。expect 为紧凑 DSL（contains / json{path,type,
+      eq,in,len,fields...} / tool / tool_args_contains），覆盖原 14 例全部断言；
+      long_context 的确定性长文经 `vars.haystack` 占位符生成（16k 填充不进
+      jsonl 明文）。数据格式错误（缺字段/未知断言键/id 重复）收集期报错带行号。
+      手写 `test_*.py` 场景保留兼容（chat / chat_raw fixture）。
 
 关键决策（设计校验结论，实现时遵循）：
 
@@ -138,3 +146,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-02 工具层支持 `metric_thresholds: auto`：选择题类基准用随机基线默认阈值（mmlu/ceval/cmmlu/arc/hellaswag=0.25，winogrande=0.5），开放生成题（gsm8k 等）不设默认避免误导；显式阈值优先。+3 单测（174 全绿）。
 - 2026-09-02 开放工具基准目录接口（C4 部分）：`aite tool benchmarks` CLI + `list_tasks()` Python API，枚举 evalscope 214 个基准的 name/metrics/tags/few_shot_num/subsets/dataset_id（经 BENCHMARK_REGISTRY），指标名归一（evalscope `acc`→报告 `mean_acc`）。数据形状 REST-ready，前端阶段加薄封装即可。+1 单测（175 全绿）。
 - 2026-09-03 **模块 D：功能测试（pytest 执行引擎）完成**。suite 写 `engine: pytest` 即用 pytest 跑功能场景（真实调用模型 + 规则断言），复用工具层路由/入库/阈值/趋势链路，不动存储契约。交付：`aite/functional`（harness 插件 + 4 内置场景 14 例：basic_chat / structured_output / tool_calling / long_context）、`aite/tools/pytest_adapter.py`（逐场景 subprocess + junit-xml 收集场景级 pass_rate）、`tools.tests_dir` 自建目录模式、`pip install "aite[functional]"`、examples/functional_pytest.yaml。关键决策与踩坑（conftest confcutdir 陷阱 → 插件模块方案；norecursedirs 对显式目录参数同样生效 → argv 清空兜底；Windows SystemRoot 必须合并 env）见模块 D 条目。+20 单测含离线 fixtures subprocess 端到端（195 全绿）。
+- 2026-09-04 功能测试用例数据驱动化（模块 D 补强 D5）：请求体与断言外移到每场景一个 `cases.jsonl`（id + 场景说明 + messages/tools + expect 断言 DSL），内置 4 场景 14 例全部迁移，场景目录零 Python，加用例只加 jsonl 行。harness 增加 `pytest_collect_file` 自定义收集器与 vars 占位符（haystack 确定性长文生成）；适配器场景识别同时接受 cases.jsonl / test_*.py（手写形态保留兼容）。离线覆盖补齐：DSL/加载 23 单测 + fake 模型服务（stdlib http.server）跑通 jsonl 场景收集→请求→断言→pass_rate 全链路。

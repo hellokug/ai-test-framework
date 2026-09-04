@@ -140,14 +140,30 @@ tools:
 ```
 
 两种用法：**内置场景**（`tools.datasets` = 场景名）或**自建目录**（`tools.tests_dir`
-指向自己的功能测试目录；datasets 可空 = 跑全部含 `test_*.py` 的子目录，非空时作为
-子目录名筛选）。自建用例用 `chat` / `chat_raw` fixture 访问模型（适配器经
-`AITE_FT_*` 环境变量注入连接信息，不要直接 pytest 场景目录）：
+指向自己的功能测试目录；datasets 可空 = 跑全部场景子目录，非空时作为子目录名筛选）。
 
-```python
-def test_reply_nonempty(chat):
-    assert chat([{"role": "user", "content": "用一句话介绍你自己。"}]).strip()
+场景两种形态（可共存）：**数据驱动 `cases.jsonl`**（推荐，一行 = 一例请求体 + 断言，
+加用例只加行不写代码）或**手写 `test_*.py`**（用 `chat` / `chat_raw` fixture 访问
+模型；适配器经 `AITE_FT_*` 环境变量注入连接信息，不要直接 pytest 场景目录）：
+
+```jsonl
+{"id": "yes_no", "desc": "语言+格式约束：一个英文词回答 yes/no",
+ "messages": [{"role": "user", "content": "Answer with exactly one English word, yes or no: Is Paris the capital of France?"}],
+ "expect": {"contains": "yes", "ignore_case": true}}
+{"id": "nested", "desc": "两层嵌套 JSON 取值",
+ "messages": [{"role": "user", "content": "Return ONLY a JSON object {...} with name Alice and city Shanghai."}],
+ "expect": {"json": {"fields": {"user": {"fields": {"address": {"fields": {"city": {"eq": "shanghai"}}}}}}}, "ignore_case": true}}
 ```
+
+行字段：`id`（场景内唯一）/ `desc`（场景说明，失败信息带出）/ `messages` / `tools`（可选，
+function calling）/ `params`（可选，其他请求参数）/ `vars`（可选，占位符生成器，如
+`{"DOC": {"haystack": {chars, key_at, key}}}` 确定性长文填充，messages 中 `{DOC}` 被替换）/
+`expect`（必填）。
+
+`expect` 断言（可组合）：`contains` / `ignore_case` / `nonempty` /
+`json{path, type, eq, in, len, nonempty, item_type, item_nonempty, fields}` /
+`tool`（应选中的工具名）/ `tool_args_contains`。数据格式错误（缺字段 / 未知断言键 /
+id 重复）在收集期即报错并指明行号。
 
 细节口径：`limit_per_subset` 对 pytest 无语义（忽略）；skipped 用例剔除分母；
 退出码 0/1 正常（有失败用例），2+ 记 run 级 error；junit-xml 与执行日志留档
