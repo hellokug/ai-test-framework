@@ -1,9 +1,10 @@
 """pytest 适配器（模块 D：功能测试执行引擎）。
 
-suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一个含
-``test_*.py`` 的子目录（aite 内置 ``functional/scenarios/`` 或用户自建
-``tools.tests_dir``），逐场景 subprocess 跑 ``python -m pytest``，从
-junit-xml 收集 ``pass_rate``，复用平台的入库 / 阈值 / 趋势链路。
+suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一个子目录
+（数据驱动 ``cases.jsonl`` 或手写 ``test_*.py``，aite 内置
+``functional/scenarios/`` 或用户自建 ``tools.tests_dir``），逐场景 subprocess
+跑 ``python -m pytest``，从 junit-xml 收集 ``pass_rate``，复用平台的
+入库 / 阈值 / 趋势链路。
 
 - 模型访问经 ``-p aite.functional.harness`` 插件按导入路径加载（安装/源码环境
   行为一致，规避 conftest confcutdir 陷阱）
@@ -40,13 +41,17 @@ PASS_RATE = "pass_rate"
 
 
 def _available_scenarios(root: Path) -> list[str]:
-    """枚举 root 下含 test_*.py 的直接子目录名（= 可用场景）。"""
+    """枚举 root 下的直接子目录名（= 可用场景）。
+
+    场景形态两种：数据驱动（含 cases.jsonl）或手写用例（含 test_*.py）。
+    """
     if not root.is_dir():
         raise ValueError(f"功能测试目录不存在: {root}")
     names = sorted(d.name for d in root.iterdir()
-                   if d.is_dir() and any(d.glob("test_*.py")))
+                   if d.is_dir() and (any(d.glob("test_*.py"))
+                                      or (d / "cases.jsonl").is_file()))
     if not names:
-        raise ValueError(f"{root} 下没有含 test_*.py 的场景子目录")
+        raise ValueError(f"{root} 下没有含 cases.jsonl 或 test_*.py 的场景子目录")
     return names
 
 

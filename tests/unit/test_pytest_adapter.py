@@ -65,6 +65,16 @@ class TestBuildConfig:
             make_request(datasets=[], tests_dir=str(tmp_path)))
         assert [s["name"] for s in cfg["scenarios"]] == ["s1", "s2"]
 
+    def test_tests_dir_recognizes_jsonl_scenario(self, tmp_path):
+        """数据驱动场景（cases.jsonl、无 Python 文件）同样被识别。"""
+        (tmp_path / "jsonl_only").mkdir()
+        (tmp_path / "jsonl_only/cases.jsonl").write_text(
+            '{"id": "a", "desc": "d", "messages": [{"role": "user", "content": "hi"}],'
+            ' "expect": {"nonempty": true}}\n', encoding="utf-8")
+        cfg = PytestAdapter().build_config(
+            make_request(datasets=[], tests_dir=str(tmp_path)))
+        assert [s["name"] for s in cfg["scenarios"]] == ["jsonl_only"]
+
     def test_tests_dir_datasets_as_filter(self, tmp_path):
         for name in ("alpha", "beta"):
             d = tmp_path / name
