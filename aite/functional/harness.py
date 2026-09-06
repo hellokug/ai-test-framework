@@ -23,11 +23,16 @@
   ``{}`` = 仅校验剥围栏后可解析，即 JSON 输出格式正确性）/
   ``tool`` / ``tool_args_contains``，以及质量类断言：
   ``no_garbled``（乱码）/ ``no_leak``（内部标签泄露，可 ``{extra_patterns}`` 扩展）/
-  ``no_repeat``（复读）
+  ``no_repeat``（复读）；API 契约类断言：
+  ``not_contains`` / ``no_tool``（不发起 tool call）/ ``http_status``（预期错误码，
+  配 ``params`` 发坏请求测参数校验）/ ``finish_reason`` /
+  ``resp{path,type,eq,len,nonempty}``（响应体字段断言，如 usage.id 等）。
+  ``stream: true`` 经 ``params`` 传入即走 SSE 流式（断言拼接后的完整结果）。
 
 模型连接信息从环境变量读取（由 pytest 适配器注入，不要直接 pytest 场景目录）：
 ``AITE_FT_BASE_URL`` / ``AITE_FT_MODEL`` / ``AITE_FT_API_KEY``（本地服务可缺省）。
-网络错误 / 5xx 统一重试 1 次；语义断言不重试；4xx 配置类错误直接抛出。
+网络错误 / 5xx 统一重试 1 次；语义断言不重试；4xx 配置类错误直接抛出——
+除非用例配了 ``http_status``（预期错误模式：错误响应本身是被测对象，不重试不抛）。
 环境变量缺失在**请求时**才失败（pytest.fail 带指引），收集不需要任何环境。
 """
 
@@ -48,10 +53,14 @@ CASES_FILENAME = "cases.jsonl"
 
 _TYPES = {"str": str, "int": int, "list": list, "dict": dict}
 _EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool",
-                "tool_args_contains", "no_garbled", "no_leak", "no_repeat"}
+                "tool_args_contains", "no_garbled", "no_leak", "no_repeat",
+                "not_contains", "no_tool", "http_status", "finish_reason", "resp",
+                "chunks_min", "sse_done"}
 _JSON_SPEC_KEYS = {"path", "type", "eq", "in", "len", "nonempty",
                    "item_type", "item_nonempty", "fields"}
+_RESP_SPEC_KEYS = {"path", "type", "eq", "len", "nonempty"}   # 响应体断言（无递归 fields）
 _VAR_BUILDERS = {"haystack"}
+_FINISH_REASONS = {"stop", "length", "tool_calls", "content_filter"}
 
 _REPLY_BRIEF = 160   # 失败信息里实际回复的截断长度
 _INPUT_EDGE = 200    # 失败详情：输入每条消息头/尾各保留的字符数（长文 16k 等截断）
@@ -79,7 +88,14 @@ def _request_url() -> str:
 
 
 def _post(client: httpx.Client, messages: list, *, tools: list | None,
-          params: dict) -> dict:
+          params: dict, expect_error: bool = False) -> dict:
+    """发 chat/completions 请求。
+
+    - ``stream: true`` 走 SSE 流式：逐块拼接，返回伪响应（finish_reason 取末块），
+      额外带 ``_chunks``（块数）与 ``_sse_ok``（data: [DONE] 正常收尾）
+    - ``expect_error=True``（用例配了 http_status）：错误响应是被测对象，
+      不重试、不 raise，原样返回 ``{"_status": 码, "_body": ...}``
+    """
     url = _request_url()
     payload: dict = {
         "model": _required_env("AITE_FT_MODEL"),
@@ -89,6 +105,8 @@ def _post(client: httpx.Client, messages: list, *, tools: list | None,
     if tools:
         payload["tools"] = tools
     headers = {"Authorization": f"Bearer {os.environ.get('AITE_FT_API_KEY') or 'EMPTY'}"}
+    if payload.get("stream"):
+        return _post_stream(client, url, payload, headers)
     last_error = ""
     for attempt in (1, 2):
         try:
@@ -99,9 +117,67 @@ def _post(client: httpx.Client, messages: list, *, tools: list | None,
         if resp.status_code >= 500 and attempt == 1:
             last_error = f"server error {resp.status_code}"
             continue
-        resp.raise_for_status()               # 4xx 配置类错误直接抛出
+        if expect_error:                      # 预期错误模式：原样返回不抛
+            return {"_status": resp.status_code, "_body": _safe_json(resp)}
+        if resp.status_code >= 400:
+            resp.raise_for_status()           # 非预期的 4xx/5xx（已重试）直接抛出
         return resp.json()
+    if expect_error:   # 两次都没拿到响应（网络错误）→ 预期错误模式下按最终态返回
+        raise AssertionError(f"预期收到 HTTP 错误码，实际网络失败：{last_error}")
     pytest.fail(f"模型服务请求失败（已重试 1 次）：{last_error}")  # pragma: no cover
+
+
+def _safe_json(resp) -> object:
+    try:
+        return resp.json()
+    except ValueError:
+        return resp.text[:200]
+
+
+def _post_stream(client: httpx.Client, url: str, payload: dict,
+                 headers: dict) -> dict:
+    """SSE 流式请求：拼接 delta → 伪响应 dict（不重试，流式重试语义复杂）。"""
+    try:
+        with client.stream("POST", url, json=payload, headers=headers) as resp:
+            if resp.status_code >= 400:       # 流式下的错误响应（非 SSE）
+                resp.read()
+                return {"_status": resp.status_code, "_body": _safe_json(resp)}
+            content_parts: list[str] = []
+            finish_reason = None
+            role = None
+            n_chunks = 0
+            done = False
+            for line in resp.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[len("data: "):].strip()
+                if data == "[DONE]":
+                    done = True
+                    break
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                n_chunks += 1
+                for ch in chunk.get("choices") or []:
+                    delta = ch.get("delta") or {}
+                    if delta.get("role"):
+                        role = delta["role"]
+                    if delta.get("content"):
+                        content_parts.append(delta["content"])
+                    if ch.get("finish_reason"):
+                        finish_reason = ch["finish_reason"]
+            return {
+                "choices": [{
+                    "message": {"role": role or "assistant",
+                                "content": "".join(content_parts)},
+                    "finish_reason": finish_reason,
+                }],
+                "_chunks": n_chunks,
+                "_sse_ok": done,
+            }
+    except httpx.TransportError as exc:
+        pytest.fail(f"流式请求失败：{exc}")
 
 
 _CLIENT: httpx.Client | None = None
@@ -257,10 +333,17 @@ def failure_detail(case: Case, response: dict | None, exc: AssertionError) -> st
              for m in msgs[:6]]
     lines.append("  输入 | " + " || ".join(parts))
     if response is not None:
+        if "_status" in response:   # 预期错误模式：呈现状态码与错误体
+            lines.append(f"  输出 | HTTP {response['_status']} "
+                         f"{_ellipsize(str(response.get('_body')), _OUTPUT_BRIEF // 2)}")
+            return "\n".join(lines)
         choices = response.get("choices") or []
         message = (choices[0] or {}).get("message") or {} if choices else {}
         content = (message.get("content") or "").strip()
         tool_calls = message.get("tool_calls") or []
+        if response.get("_chunks") is not None:   # 流式：附 chunk 数与收尾状态
+            lines.append(f"  输出 | stream: {response['_chunks']} chunks, "
+                         f"sse_done={response['_sse_ok']}")
         if content:
             lines.append(f"  输出 | {_ellipsize(content, _OUTPUT_BRIEF // 2)}")
         if tool_calls:
@@ -351,6 +434,27 @@ class Case:
         if unknown:
             raise ValueError(f"{source}: 未知断言键 {sorted(unknown)}（可用: {sorted(_EXPECT_KEYS)}）")
         _validate_json_spec(expect.get("json") or {}, f"{source}: json")
+        hs = expect.get("http_status")
+        if hs is not None and (not isinstance(hs, int) or not 100 <= hs <= 599):
+            raise ValueError(f"{source}: http_status 须为 100-599 的整数")
+        cm = expect.get("chunks_min")
+        if cm is not None and (not isinstance(cm, int) or cm < 1):
+            raise ValueError(f"{source}: chunks_min 须为 ≥1 的整数")
+        if "sse_done" in expect and not isinstance(expect["sse_done"], bool):
+            raise ValueError(f"{source}: sse_done 须为布尔值")
+        fr = expect.get("finish_reason")
+        if fr is not None and fr not in _FINISH_REASONS:
+            raise ValueError(f"{source}: finish_reason 须 ∈ {sorted(_FINISH_REASONS)}")
+        rsp = expect.get("resp")
+        if rsp is not None:
+            if not isinstance(rsp, dict):
+                raise ValueError(f"{source}: resp 须为对象")
+            unknown = set(rsp) - _RESP_SPEC_KEYS
+            if unknown:
+                raise ValueError(f"{source}: resp 未知键 {sorted(unknown)}（可用: {sorted(_RESP_SPEC_KEYS)}）")
+            for key in ("type",):
+                if key in rsp and rsp[key] not in _TYPES:
+                    raise ValueError(f"{source}: resp.type 须 ∈ {sorted(_TYPES)}")
         if "no_leak" in expect:
             leak = expect["no_leak"]
             if leak is True:
@@ -405,10 +509,12 @@ class Case:
 
     def check(self, response: dict) -> None:
         """按 expect 校验响应（失败抛 AssertionError，信息含期望与实际）。"""
+        if "_status" in response:   # 预期错误模式：只跑 http_status（和 resp）断言
+            self._check_error_response(response)
+            return
         choices = response.get("choices") or []
-        message: dict = {}
-        if choices:
-            message = (choices[0] or {}).get("message") or {}
+        choice0: dict = (choices[0] or {}) if choices else {}
+        message: dict = choice0.get("message") or {}
         content = (message.get("content") or "").strip()
         ic = bool(self.expect.get("ignore_case"))
         if self.expect.get("nonempty"):
@@ -426,6 +532,29 @@ class Case:
             needle = str(self.expect["contains"])
             hit = (needle.lower() in content.lower()) if ic else (needle in content)
             assert hit, f"期望回复包含 {needle!r}，实际: {_brief(content)}"
+        if "not_contains" in self.expect:
+            needle = str(self.expect["not_contains"])
+            hit = (needle.lower() in content.lower()) if ic else (needle in content)
+            assert not hit, f"期望回复不包含 {needle!r}，实际: {_brief(content)}"
+        if "finish_reason" in self.expect:
+            actual = choice0.get("finish_reason")
+            assert actual == self.expect["finish_reason"], (
+                f"期望 finish_reason={self.expect['finish_reason']!r}，"
+                f"实际 {actual!r}")
+        if "chunks_min" in self.expect:
+            n = response.get("_chunks") or 0
+            assert n >= self.expect["chunks_min"], (
+                f"期望流式 chunk 数 ≥ {self.expect['chunks_min']}，实际 {n}"
+                "（非流式响应或未分块？）")
+        if "sse_done" in self.expect:
+            assert response.get("_sse_ok") is self.expect["sse_done"], (
+                f"期望 SSE 收尾 data: [DONE]={self.expect['sse_done']}，"
+                f"实际 {response.get('_sse_ok')}")
+        if "resp" in self.expect:
+            self._check_resp_spec(self.expect["resp"], response, "resp")
+        if "no_tool" in self.expect:
+            assert not (message.get("tool_calls") or []), (
+                f"期望不发起 tool call，实际: {_brief(message.get('tool_calls'))}")
         if "json" in self.expect:
             try:
                 data = json.loads(strip_fences(content))
@@ -449,6 +578,40 @@ class Case:
             needle = str(self.expect["tool_args_contains"]).lower()
             assert needle in dump, (
                 f"期望 tool arguments 包含 {needle!r}，实际: {_brief(dump)}")
+
+    def _check_error_response(self, response: dict) -> None:
+        """预期错误模式（响应带 _status）：断言 http_status；resp 断言 _body。"""
+        assert "http_status" in self.expect, (
+            f"收到错误响应 {response['_status']} 但未配置 http_status 期望")
+        assert response["_status"] == self.expect["http_status"], (
+            f"期望 HTTP {self.expect['http_status']}，实际 {response['_status']}"
+            f"（body: {_brief(response.get('_body'))}）")
+        if "resp" in self.expect:
+            self._check_resp_spec(self.expect["resp"], response.get("_body"), "resp")
+
+    def _check_resp_spec(self, spec: dict, data, where: str) -> None:
+        """响应体字段断言（无递归；eq 可做整数相等比较，如 usage.total）。"""
+        if "path" in spec:
+            for part in str(spec["path"]).split("."):
+                assert isinstance(data, dict) and part in data, (
+                    f"{where}: 路径 {spec['path']!r} 在 {part!r} 处缺失"
+                    f"（实际: {_brief(data)}）")
+                data = data[part]
+            where = f"{where}.{spec['path']}"
+        if "type" in spec:
+            assert _type_ok(data, spec["type"]), (
+                f"{where}: 期望类型 {spec['type']}，实际 {type(data).__name__}"
+                f"（{_brief(data)}）")
+        if "len" in spec:
+            assert isinstance(data, (list, str, dict)) and len(data) == spec["len"], (
+                f"{where}: 期望长度 {spec['len']}，实际 {len(data) if hasattr(data, '__len__') else data!r}")
+        if spec.get("nonempty"):
+            assert isinstance(data, str) and data.strip(), f"{where}: 期望非空字符串"
+        if "eq" in spec:
+            expected = spec["eq"]
+            got = data.strip().lower() if isinstance(data, str) and isinstance(expected, str) \
+                and self.expect.get("ignore_case") else data
+            assert got == expected, f"{where}: 期望 == {expected!r}，实际 {_brief(data)}"
 
 
 def load_cases(path) -> list[Case]:
@@ -497,7 +660,8 @@ class CaseItem(pytest.Item):
 
     def runtest(self):
         response = _post(_shared_client(), self.case.rendered_messages(),
-                         tools=self.case.tools, params=self.case.params)
+                         tools=self.case.tools, params=self.case.params,
+                         expect_error="http_status" in self.case.expect)
         self._last_response = response   # repr_failure 组装失败详情用（断言→输入→输出）
         try:
             self.case.check(response)

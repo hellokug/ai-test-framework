@@ -1,10 +1,21 @@
-"""cases.jsonl 数据驱动核心单测（加载校验 / expect DSL / vars 渲染，全离线）。"""
+"""cases.jsonl 数据驱动核心单测（加载校验 / expect DSL / vars 渲染，全离线）。
+
+API 契约断言部分含 fake SSE/错误 server 的 _post 端到端（真实 httpx 链路）。
+"""
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from aite.functional.harness import Case, build_haystack, failure_detail, load_cases
+from aite.functional.harness import (
+    Case,
+    _post,
+    build_haystack,
+    failure_detail,
+    load_cases,
+)
 
 
 def _response(content="", tool_calls=None):
@@ -331,3 +342,202 @@ class TestFailureDetail:
         except AssertionError as exc:
             detail = failure_detail(case, None, exc)
         assert "输入 |" in detail and "输出" not in detail
+
+
+class TestApiContractChecks:
+    """API 契约类断言：not_contains / no_tool / finish_reason / resp /
+    http_status（预期错误模式）/ chunks_min / sse_done。"""
+
+    # ---- not_contains ----
+
+    def test_not_contains_pass_and_fail(self):
+        _case({"not_contains": "塔"}).check(_response(content="巴黎是法国首都"))
+        with pytest.raises(AssertionError, match="不包含"):
+            _case({"not_contains": "塔"}).check(_response(content="埃菲尔铁塔很高"))
+
+    # ---- no_tool / finish_reason ----
+
+    def test_no_tool(self):
+        ok = {"choices": [{"message": {"content": "plain", "tool_calls": []}}]}
+        _case({"no_tool": True}).check(ok)
+        with pytest.raises(AssertionError, match="不发起 tool call"):
+            _case({"no_tool": True}).check(_response(tool_calls=_tool_call()))
+
+    def test_finish_reason(self):
+        ok = {"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]}
+        _case({"finish_reason": "stop"}).check(ok)
+        length = {"choices": [{"message": {"content": "hi"}, "finish_reason": "length"}]}
+        with pytest.raises(AssertionError, match="finish_reason"):
+            _case({"finish_reason": "stop"}).check(length)
+        with pytest.raises(AssertionError, match="finish_reason"):
+            _case({"finish_reason": "stop"}).check(_response(content="hi"))  # 无字段
+
+    # ---- resp 响应体断言 ----
+
+    def test_resp_path_type_eq(self):
+        resp = {"id": "chatcmpl-1", "usage": {"total_tokens": 42,
+                                              "prompt_tokens": 10}}
+        _case({"resp": {"path": "id", "type": "str", "nonempty": True}}).check(resp)
+        _case({"resp": {"path": "usage.total_tokens", "eq": 42}}).check(resp)
+        with pytest.raises(AssertionError, match="路径"):
+            _case({"resp": {"path": "usage.model"}}).check(resp)
+        with pytest.raises(AssertionError, match="期望 =="):
+            _case({"resp": {"path": "usage.total_tokens", "eq": 43}}).check(resp)
+        with pytest.raises(AssertionError, match="类型"):
+            _case({"resp": {"path": "id", "type": "int"}}).check(resp)
+
+    # ---- 预期错误模式（http_status）----
+
+    def test_http_status_expected_error(self):
+        case = _case({"http_status": 400})
+        case.check({"_status": 400, "_body": {"error": {"message": "bad"}}})
+        with pytest.raises(AssertionError, match="期望 HTTP 400，实际 500"):
+            case.check({"_status": 500, "_body": {"error": "oops"}})
+
+    def test_error_response_without_http_status_expect(self):
+        """错误响应但用例没配 http_status → 明确报错（配置缺口）。"""
+        with pytest.raises(AssertionError, match="未配置 http_status"):
+            _case({"nonempty": True}).check({"_status": 400, "_body": {}})
+
+    def test_http_status_with_resp_body_assertion(self):
+        case = _case({"http_status": 404,
+                      "resp": {"path": "error.type", "eq": "model_not_found"}})
+        case.check({"_status": 404, "_body": {"error": {"type": "model_not_found"}}})
+        with pytest.raises(AssertionError, match="eq"):
+            case.check({"_status": 404, "_body": {"error": {"type": "invalid_request"}}})
+
+    # ---- 流式（伪响应结构）----
+
+    def _stream_resp(self, n_chunks=3, done=True, content="hello", finish="stop"):
+        return {"choices": [{"message": {"role": "assistant", "content": content},
+                             "finish_reason": finish}],
+                "_chunks": n_chunks, "_sse_ok": done}
+
+    def test_chunks_min_and_sse_done(self):
+        _case({"chunks_min": 3, "sse_done": True, "nonempty": True,
+               "finish_reason": "stop"}).check(self._stream_resp())
+        with pytest.raises(AssertionError, match="chunk 数"):
+            _case({"chunks_min": 5}).check(self._stream_resp(n_chunks=3))
+        with pytest.raises(AssertionError, match=r"\[DONE\]"):
+            _case({"sse_done": True}).check(self._stream_resp(done=False))
+
+    # ---- 加载期形状校验 ----
+
+    def test_bad_api_contract_shapes_rejected(self, tmp_path):
+        bad_expects = [
+            {"http_status": "400"}, {"http_status": 999},
+            {"finish_reason": "paused"},
+            {"resp": "id"}, {"resp": {"type": "float"}},
+            {"chunks_min": 0}, {"chunks_min": "2"}, {"sse_done": "yes"},
+        ]
+        for bad in bad_expects:
+            p = _write(tmp_path, [{"id": "a", "desc": "d",
+                                   "messages": [{"role": "user", "content": "hi"}],
+                                   "expect": bad}])
+            with pytest.raises(ValueError):
+                load_cases(p)
+
+    def test_error_mode_detail_output(self):
+        """失败详情：预期错误模式显示 HTTP 码与错误体。"""
+        case = _case({"http_status": 400})
+        try:
+            case.check({"_status": 500, "_body": {"error": "boom"}})
+            raise AssertionError("unreachable")
+        except AssertionError as exc:
+            detail = failure_detail(case, {"_status": 500, "_body": {"error": "boom"}}, exc)
+        assert "HTTP 500" in detail
+
+    def test_stream_detail_output(self):
+        """失败详情：流式响应显示 chunk 数与收尾状态。"""
+        case = _case({"contains": "world"})
+        try:
+            case.check(self._stream_resp(content="hello"))
+            raise AssertionError("unreachable")
+        except AssertionError as exc:
+            detail = failure_detail(case, self._stream_resp(content="hello"), exc)
+        assert "stream: 3 chunks" in detail and "sse_done=True" in detail
+
+
+class _FakeApiHandler(BaseHTTPRequestHandler):
+    """按 stream/错误码分流的最小 chat/completions 端点。"""
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        if body.get("model") == "no-such-model":
+            self._send(404, {"error": {"type": "model_not_found"}})
+            return
+        if body.get("stream"):
+            chunks = [
+                {"choices": [{"delta": {"role": "assistant"}}]},
+                {"choices": [{"delta": {"content": "Hello"}}]},
+                {"choices": [{"delta": {"content": " world"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ]
+            payload = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload.encode())))
+            self.end_headers()
+            self.wfile.write(payload.encode())
+        else:
+            self._send(200, {"choices": [{"message": {"content": "hi"},
+                                          "finish_reason": "stop"}]})
+
+    def _send(self, status, obj):
+        payload = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+class TestPostAgainstFakeServer:
+    """_post 请求层端到端（fake server）：流式 SSE 解析 / 预期错误模式。"""
+
+    @pytest.fixture()
+    def server(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _FakeApiHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        yield srv
+        srv.shutdown()
+
+    @pytest.fixture()
+    def env(self, server, monkeypatch):
+        import httpx
+
+        monkeypatch.setenv("AITE_FT_BASE_URL",
+                           f"http://127.0.0.1:{server.server_address[1]}/v1")
+        monkeypatch.setenv("AITE_FT_MODEL", "fake-model")
+        monkeypatch.setenv("AITE_FT_API_KEY", "EMPTY")
+        client = httpx.Client(timeout=10)
+        yield client
+        client.close()
+
+    def test_stream_parsing(self, env):
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"stream": True})
+        assert resp["choices"][0]["message"]["content"] == "Hello world"
+        assert resp["choices"][0]["finish_reason"] == "stop"
+        assert resp["_chunks"] == 4
+        assert resp["_sse_ok"] is True
+        _case({"nonempty": True, "finish_reason": "stop", "chunks_min": 2,
+               "sse_done": True, "contains": "world"}).check(resp)
+
+    def test_expected_error_mode(self, env):
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"model": "no-such-model"}, expect_error=True)
+        assert resp["_status"] == 404
+        _case({"http_status": 404,
+               "resp": {"path": "error.type", "eq": "model_not_found"}}).check(resp)
+
+    def test_unexpected_error_raises(self, env):
+        """没配 http_status 的用例收到错误响应 → httpx raise_for_status 抛出。"""
+        import httpx
+
+        with pytest.raises(httpx.HTTPStatusError):
+            _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                  params={"model": "no-such-model"})
