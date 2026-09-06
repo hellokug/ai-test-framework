@@ -173,3 +173,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-04 expect DSL 增加质量类断言（模块 D 补强 D6）：`no_garbled`（乱码）/ `no_leak`（内部标签泄露，extra_patterns 可扩展）/ `no_repeat`（复读），检测口径保守（正常重音字符/HTML/少量"哈哈"均不误报，单测覆盖正反例）；`json: {}` 明确为 JSON 格式正确性断言（空规格=仅解析）。basic_chat/intro 演示组合质量断言。
 - 2026-09-05 新增用例级过滤（模块 D 补强 D7）：suite yaml `tools.cases` 数组指定要执行的用例 id（默认全部），单用例问题复现不再需要绕过平台手动配 `AITE_FT_*` 环境变量直跑 pytest。实现为 pytest nodeid 精确定向（`cases.jsonl::<id>`），未知 id 显式报错、无匹配场景自动跳过。+8 单测（含 fake-server 单用例端到端）。
 - 2026-09-06 失败详情输出（模块 D 补强 D8）：失败用例在 CLI 汇总表后直接打印「断言 → 输入 → 输出」（同样进 junit-xml 与日志），逐项截断预算控制体积（输入头尾各 200/输出 300/参数 120，每例 <1KB，CLI 最多 20 例）。+7 单测；踩坑（断言重写污染 str(exc)、pytest.Failed 非公开、异常链断链）见 D8 条目。
+- 2026-09-06 沉淀《功能测试架构说明》docs/functional-testing.md：harness 关键类与方法详解（模型访问/数据驱动/收集器/失败详情四块）、任务下发全时序（主进程编排 → argv+env 下发 → 子进程收集/执行 → junit 回传 → 入库）、进程模型与退出码语义、两个执行时刻（收集期 vs 执行期）、设计决策记录（confcutdir/env 注入/junit 通道/nodeid/保守口径等 9 项）、数据契约速查与维护指引。README 文档索引更新。
