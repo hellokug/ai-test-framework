@@ -94,6 +94,12 @@ basic_chat / structured_output / tool_calling / long_context。
       （连续块复读/高频短块/整行重复）。JSON 输出格式正确性用 `json: {}`
       （空规格=仅解析）。更复杂的断言走手写 test_*.py（chat fixture 逃生门），
       不做自定义 checker 注册表（YAGNI）。
+- [x] D7 用例级过滤（2026-09-05 完成）：suite yaml `tools.cases: [用例 id]`
+      （省略 = 全部），单用例问题复现场景。语义：精确定向 `cases.jsonl::<id>`
+      nodeid（不用 pytest `-k` 子串匹配，打错 id 在 build_config 显式报错并列出
+      可用 id）；id 在任一选中场景存在即合法，无匹配用例的场景整场景跳过
+      （日志可见，不入库无 pass_rate 行）；仅支持 cases.jsonl 数据驱动场景
+      （手写场景报错）。harness 的 load_cases 懒导入（tools 包不硬依赖 pytest）。
 
 关键决策（设计校验结论，实现时遵循）：
 
@@ -155,3 +161,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-03 **模块 D：功能测试（pytest 执行引擎）完成**。suite 写 `engine: pytest` 即用 pytest 跑功能场景（真实调用模型 + 规则断言），复用工具层路由/入库/阈值/趋势链路，不动存储契约。交付：`aite/functional`（harness 插件 + 4 内置场景 14 例：basic_chat / structured_output / tool_calling / long_context）、`aite/tools/pytest_adapter.py`（逐场景 subprocess + junit-xml 收集场景级 pass_rate）、`tools.tests_dir` 自建目录模式、`pip install "aite[functional]"`、examples/functional_pytest.yaml。关键决策与踩坑（conftest confcutdir 陷阱 → 插件模块方案；norecursedirs 对显式目录参数同样生效 → argv 清空兜底；Windows SystemRoot 必须合并 env）见模块 D 条目。+20 单测含离线 fixtures subprocess 端到端（195 全绿）。
 - 2026-09-04 功能测试用例数据驱动化（模块 D 补强 D5）：请求体与断言外移到每场景一个 `cases.jsonl`（id + 场景说明 + messages/tools + expect 断言 DSL），内置 4 场景 14 例全部迁移，场景目录零 Python，加用例只加 jsonl 行。harness 增加 `pytest_collect_file` 自定义收集器与 vars 占位符（haystack 确定性长文生成）；适配器场景识别同时接受 cases.jsonl / test_*.py（手写形态保留兼容）。离线覆盖补齐：DSL/加载 23 单测 + fake 模型服务（stdlib http.server）跑通 jsonl 场景收集→请求→断言→pass_rate 全链路。
 - 2026-09-04 expect DSL 增加质量类断言（模块 D 补强 D6）：`no_garbled`（乱码）/ `no_leak`（内部标签泄露，extra_patterns 可扩展）/ `no_repeat`（复读），检测口径保守（正常重音字符/HTML/少量"哈哈"均不误报，单测覆盖正反例）；`json: {}` 明确为 JSON 格式正确性断言（空规格=仅解析）。basic_chat/intro 演示组合质量断言。
+- 2026-09-05 新增用例级过滤（模块 D 补强 D7）：suite yaml `tools.cases` 数组指定要执行的用例 id（默认全部），单用例问题复现不再需要绕过平台手动配 `AITE_FT_*` 环境变量直跑 pytest。实现为 pytest nodeid 精确定向（`cases.jsonl::<id>`），未知 id 显式报错、无匹配场景自动跳过。+8 单测（含 fake-server 单用例端到端）。

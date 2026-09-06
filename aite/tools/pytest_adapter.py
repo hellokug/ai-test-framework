@@ -11,6 +11,10 @@ suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一�
 - 退出码 0/1 = 正常（有失败用例）；2/3/4/5 = 执行异常，抛错走 run 级 error
 - ``tools.datasets``：内置模式 = 场景名列表；tests_dir 模式可空 = 跑全部子目录，
   非空时作为子目录名筛选
+- ``tools.cases``：用例 id 数组（省略 = 全部），单用例问题复现。精确定向
+  ``cases.jsonl::<id>`` nodeid（非 -k 子串匹配，打错 id 显式报错）；id 在任一
+  选中场景存在即合法，无匹配 id 的场景整场景跳过（日志可见）；仅支持
+  cases.jsonl 数据驱动场景
 - ``limit_per_subset`` 对 pytest 无语义，忽略
 - 阈值：显式 ``metric_thresholds: {pass_rate: x}`` 优先；``auto`` → 1.0
   （功能测试零容忍口径）；不配则无判定
@@ -34,6 +38,9 @@ from aite.tools.base import (
     register_tool,
     run_sync_in_thread,
 )
+from aite.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 1800   # 单场景总超时（秒），req.extra.timeout 可覆盖
 HARNESS_PLUGIN = "aite.functional.harness"
@@ -83,14 +90,40 @@ class PytestAdapter(ToolAdapter):
         }
         timeout = int(req.extra.get("timeout", DEFAULT_TIMEOUT))
 
-        scenarios = [{
-            "name": n,
-            "dir": str(root / n),
-            "junit_xml": str(req.work_dir / "junit" / f"{n}.xml"),
-            "log": str(req.work_dir / "logs" / f"{n}.log"),
-        } for n in names]
+        case_filter = list(req.cases) if req.cases else None
+        ids_by_scenario: dict[str, list[str]] | None = None
+        if case_filter:
+            from aite.functional.harness import load_cases  # 懒加载：tools 包不硬依赖 pytest
+            ids_by_scenario = {}
+            for n in names:
+                jsonl = root / n / "cases.jsonl"
+                if not jsonl.is_file():
+                    raise ValueError(
+                        f"用例级过滤（tools.cases）仅支持 cases.jsonl 数据驱动场景: {root / n}")
+                ids_by_scenario[n] = [c.id for c in load_cases(jsonl)]
+            all_ids = {i for ids in ids_by_scenario.values() for i in ids}
+            unknown = [c for c in case_filter if c not in all_ids]
+            if unknown:
+                raise ValueError(f"未知用例 id: {unknown}；可用: {sorted(all_ids)}")
+
+        scenarios: list[dict] = []
+        skipped: list[str] = []
+        for n in names:
+            targets = [str(root / n)]
+            if case_filter:
+                matched = [c for c in case_filter if c in ids_by_scenario[n]]
+                if not matched:   # 该场景没有要复现的用例 → 整场景跳过
+                    skipped.append(n)
+                    continue
+                targets = [f"{root / n / 'cases.jsonl'}::{c}" for c in matched]
+            scenarios.append({
+                "name": n,
+                "targets": targets,
+                "junit_xml": str(req.work_dir / "junit" / f"{n}.xml"),
+                "log": str(req.work_dir / "logs" / f"{n}.log"),
+            })
         argv = {s["name"]: [
-            sys.executable, "-m", "pytest", s["dir"],
+            sys.executable, "-m", "pytest", *s["targets"],
             f"--junitxml={s['junit_xml']}",
             "-p", HARNESS_PLUGIN,
             "-p", "no:cacheprovider",     # 不在 rootdir 落 .pytest_cache
@@ -98,10 +131,13 @@ class PytestAdapter(ToolAdapter):
             # 统一清空兜底（pytest 行为：显式目录参数同样受 norecursedirs 过滤）
             "-o", "norecursedirs=",
         ] for s in scenarios}
-        return {"scenarios": scenarios, "argv": argv, "env": env, "timeout": timeout}
+        return {"scenarios": scenarios, "argv": argv, "env": env,
+                "timeout": timeout, "skipped": skipped}
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         cfg = self.build_config(req)
+        if cfg["skipped"]:
+            logger.info("用例过滤跳过场景（无匹配用例）: %s", cfg["skipped"])
         for sc in cfg["scenarios"]:
             await run_sync_in_thread(self._run_one, sc, cfg)
         return self.collect(req)

@@ -50,6 +50,10 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     work_dir = (Path(raw.get("output_dir") or "./reports") / "tool"
                 / str(raw["engine"]) / run_name / stamp)
     mt = tools_cfg.get("metric_thresholds")
+    cases = tools_cfg.get("cases")
+    if cases is not None and (not isinstance(cases, list)
+                              or not all(isinstance(c, str) and c for c in cases)):
+        raise ValueError("tools.cases 须为用例 id 字符串数组（省略 = 全部用例）")
     req = ToolRunRequest(
         run_name=run_name,
         target=raw.get("target") or {},
@@ -60,6 +64,7 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
         metric_thresholds=mt if isinstance(mt, dict) else {},
         auto_thresholds=(mt == "auto"),
         tests_dir=tests_dir,
+        cases=cases,
     )
     return req, raw
 

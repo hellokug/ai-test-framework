@@ -34,7 +34,7 @@ class TestBuildConfig:
         cfg = PytestAdapter().build_config(make_request(work_dir=Path("w")))
         (sc,) = cfg["scenarios"]
         assert sc["name"] == "basic_chat"
-        assert sc["dir"] == str(SCENARIOS_DIR / "basic_chat")
+        assert sc["targets"] == [str(SCENARIOS_DIR / "basic_chat")]
         assert sc["junit_xml"] == str(Path("w/junit/basic_chat.xml"))
         assert sc["log"] == str(Path("w/logs/basic_chat.log"))
         argv = cfg["argv"]["basic_chat"]
@@ -45,6 +45,34 @@ class TestBuildConfig:
         assert "norecursedirs=" in argv                # 显式目录不被 norecursedirs 拦
         assert "no:cacheprovider" in argv              # 不在 rootdir 落缓存
         assert cfg["timeout"] == 1800
+        assert cfg["skipped"] == []                    # 无 cases 过滤不跳过任何场景
+
+    def test_cases_filter_targets_exact_nodeids(self):
+        """cases 过滤 → cases.jsonl::<id> 精确 nodeid（非 -k 子串匹配）。"""
+        cfg = PytestAdapter().build_config(
+            make_request(cases=["keyword", "intro"], work_dir=Path("w")))
+        (sc,) = cfg["scenarios"]
+        assert sc["targets"] == [str(SCENARIOS_DIR / "basic_chat" / "cases.jsonl") + "::keyword",
+                                 str(SCENARIOS_DIR / "basic_chat" / "cases.jsonl") + "::intro"]
+
+    def test_cases_filter_unknown_id_lists_available(self):
+        with pytest.raises(ValueError) as ei:
+            PytestAdapter().build_config(make_request(cases=["nope"]))
+        assert "nope" in str(ei.value)
+        assert "intro" in str(ei.value) and "yes_no" in str(ei.value)  # 列出可用 id
+
+    def test_cases_filter_skips_scenarios_without_match(self):
+        cfg = PytestAdapter().build_config(
+            make_request(datasets=["basic_chat", "long_context"], cases=["intro"]))
+        assert [s["name"] for s in cfg["scenarios"]] == ["basic_chat"]
+        assert cfg["skipped"] == ["long_context"]
+
+    def test_cases_filter_requires_jsonl_scenario(self, tmp_path):
+        (tmp_path / "handwritten").mkdir()
+        (tmp_path / "handwritten" / "test_a.py").write_text("def test_x():\n    pass\n")
+        with pytest.raises(ValueError, match="数据驱动"):
+            PytestAdapter().build_config(
+                make_request(datasets=[], tests_dir=str(tmp_path), cases=["x"]))
 
     def test_env_injection(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
@@ -217,3 +245,24 @@ async def test_run_jsonl_scenario_against_fake_server(tmp_path):
     assert result.raw_score == {"smoke": 0.5}
     log = (tmp_path / "logs" / "smoke.log").read_text(encoding="utf-8")
     assert "smoke_fail" in log and "goodbye" in log    # 失败详情与 desc 留档
+
+
+async def test_run_cases_filter_end_to_end(tmp_path):
+    """tools.cases 单用例复现端到端：只跑指定 id，pass_rate 反映被筛选的用例集。"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeModelHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = make_request(
+            datasets=[], tests_dir=str(FT_JSONL), work_dir=tmp_path,
+            cases=["smoke_pass"],
+            target={"type": "openai_compatible",
+                    "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    "model": "fake-model"})
+        result = await PytestAdapter().run(req)
+    finally:
+        server.shutdown()
+    row = result.rows[0]
+    assert row.count == 1                              # 只跑了 smoke_pass 这 1 例
+    assert row.value == 1.0 and row.passed is None     # 未配阈值无判定
+    log = (tmp_path / "logs" / "smoke.log").read_text(encoding="utf-8")
+    assert "1 passed" in log and "smoke_fail" not in log    # 未选中的用例不执行

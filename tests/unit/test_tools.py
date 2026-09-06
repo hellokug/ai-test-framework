@@ -136,6 +136,16 @@ class TestToolSuiteParsing:
         assert req.tests_dir is None
         assert req.datasets == ["basic_chat"]
 
+    def test_parse_cases_filter(self):
+        req, _ = parse_tool_suite({"engine": "pytest", "tools": {
+            "datasets": ["basic_chat"], "cases": ["yes_no"]}})
+        assert req.cases == ["yes_no"]
+
+    def test_parse_rejects_bad_cases(self):
+        with pytest.raises(ValueError, match="tools.cases"):
+            parse_tool_suite({"engine": "pytest", "tools": {
+                "datasets": ["basic_chat"], "cases": "yes_no"}})
+
     def test_unknown_engine(self):
         with pytest.raises(KeyError, match="unknown tool engine"):
             get_tool("no_such_tool")
