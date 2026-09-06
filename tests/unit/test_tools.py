@@ -197,3 +197,25 @@ async def test_tool_suite_overall_row(repo, tmp_path, monkeypatch):
     assert overall.value == 1.0 and overall.count == 2
     # 分组行与 overall 行都入库
     assert len(report.summaries) == 2
+
+
+async def test_tool_suite_carries_failure_details(repo, monkeypatch):
+    """适配器提取的用例级失败详情进 report.details（CLI 打印用）。"""
+    from aite.tools import run_tool_suite
+    from aite.tools.base import ToolMetricRow, ToolRunResult
+    from aite.tools.evalscope_adapter import EvalscopeAdapter
+
+    async def fake_run(self, req):
+        return ToolRunResult(
+            rows=[ToolMetricRow(dataset="pytest:basic_chat", metric="pass_rate",
+                                value=0.0, count=1)],
+            failures=[{"dataset": "pytest:basic_chat", "case": "yes_no",
+                       "detail": "[yes_no] 断言失败: 期望包含 'yes'"}],
+        )
+
+    monkeypatch.setattr(EvalscopeAdapter, "run", fake_run)
+    raw = {"engine": "evalscope", "run_name": "t",
+           "target": {"type": "openai_compatible", "base_url": "http://x/v1", "model": "m"},
+           "tools": {"datasets": ["gsm8k"]}}
+    report = await run_tool_suite(raw, repo)
+    assert report.details["failures"][0]["case"] == "yes_no"

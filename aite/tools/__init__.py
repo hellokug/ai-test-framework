@@ -119,6 +119,8 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
         report.details["tool"] = engine_name
         report.details["reports"] = result.report_files
         report.details["raw_score"] = result.raw_score
+        if result.failures:   # 用例级失败详情（CLI 打印，入库不含 details 无膨胀）
+            report.details["failures"] = result.failures[:50]
         if result.perf:
             report.details["perf"] = result.perf
         report.finished_at = utcnow()

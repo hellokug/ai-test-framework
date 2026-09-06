@@ -185,6 +185,11 @@ id 重复）在收集期即报错并指明行号。
 退出码 0/1 正常（有失败用例），2+ 记 run 级 error；junit-xml 与执行日志留档
 `reports/tool/pytest/<run>/<时间戳>/`；单场景超时 `tools.extra_args.timeout`（默认 1800s）。
 
+**失败详情**：用例失败时 CLI 汇总表后直接打印「断言 → 输入 → 输出」（同样进
+junit-xml 与场景日志，无需翻文件定位）。体积有预算：输入每条消息压平空白后头尾各
+200 字符（16k haystack 标注总长后截断）、输出 300 字符、tool_call 参数 120 字符，
+每失败例 < 1KB；CLI 最多展示 20 例，完整信息见 junit/log 报告。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、

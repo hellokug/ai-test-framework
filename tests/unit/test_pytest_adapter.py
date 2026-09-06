@@ -168,6 +168,15 @@ class TestCollect:
         assert "basic_chat.xml" in result.report_files
         assert "basic_chat.log" in result.report_files
 
+    def test_failures_extracted_from_junit(self, tmp_path):
+        """失败/错误用例从 junit 提取为结构化详情（含断言文本，供 CLI 打印）。"""
+        self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
+        result = PytestAdapter().collect(make_request(work_dir=tmp_path))
+        cases = {f["case"]: f for f in result.failures}
+        assert set(cases) == {"fail", "err"}        # failure 与 error 都提取
+        assert cases["fail"]["dataset"] == "pytest:basic_chat"
+        assert "boom" in cases["fail"]["detail"]
+
     def test_threshold_judgement(self, tmp_path):
         self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
         result = PytestAdapter().collect(

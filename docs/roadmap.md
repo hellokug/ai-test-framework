@@ -100,6 +100,16 @@ basic_chat / structured_output / tool_calling / long_context。
       可用 id）；id 在任一选中场景存在即合法，无匹配用例的场景整场景跳过
       （日志可见，不入库无 pass_rate 行）；仅支持 cases.jsonl 数据驱动场景
       （手写场景报错）。harness 的 load_cases 懒导入（tools 包不硬依赖 pytest）。
+- [x] D8 失败详情输出（2026-09-06 完成）：失败不再只有 pass_rate 数字——
+      `failure_detail()` 组装「断言 → 输入 → 输出」，经 repr_failure 进 junit-xml
+      与场景日志，适配器从 junit 提取（failure/error 都取）→ ToolRunResult.failures
+      → CLI 汇总表后打印（Rich escape，防 `[id]` 被当标记吃掉）。体积预算：
+      输入每条消息压平后头尾各 200 字符（16k haystack 标注总长）、输出 300、
+      tool_call 参数 120、每例 <1KB、CLI 最多 20 例；入库不含 details 无膨胀。
+      踩坑记录：① pytest 断言重写会给 `str(AssertionError)` 追加
+      `assert False` 解释行（实测 `'custom msg\nassert False'`），插值异常前
+      必须取首行；② `pytest.Failed` 不是公开属性，用 `pytest.fail.Exception`；
+      ③ except 内 raise 需 `from None` 断链，否则异常链回溯混入 junit。
 
 关键决策（设计校验结论，实现时遵循）：
 
@@ -162,3 +172,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-04 功能测试用例数据驱动化（模块 D 补强 D5）：请求体与断言外移到每场景一个 `cases.jsonl`（id + 场景说明 + messages/tools + expect 断言 DSL），内置 4 场景 14 例全部迁移，场景目录零 Python，加用例只加 jsonl 行。harness 增加 `pytest_collect_file` 自定义收集器与 vars 占位符（haystack 确定性长文生成）；适配器场景识别同时接受 cases.jsonl / test_*.py（手写形态保留兼容）。离线覆盖补齐：DSL/加载 23 单测 + fake 模型服务（stdlib http.server）跑通 jsonl 场景收集→请求→断言→pass_rate 全链路。
 - 2026-09-04 expect DSL 增加质量类断言（模块 D 补强 D6）：`no_garbled`（乱码）/ `no_leak`（内部标签泄露，extra_patterns 可扩展）/ `no_repeat`（复读），检测口径保守（正常重音字符/HTML/少量"哈哈"均不误报，单测覆盖正反例）；`json: {}` 明确为 JSON 格式正确性断言（空规格=仅解析）。basic_chat/intro 演示组合质量断言。
 - 2026-09-05 新增用例级过滤（模块 D 补强 D7）：suite yaml `tools.cases` 数组指定要执行的用例 id（默认全部），单用例问题复现不再需要绕过平台手动配 `AITE_FT_*` 环境变量直跑 pytest。实现为 pytest nodeid 精确定向（`cases.jsonl::<id>`），未知 id 显式报错、无匹配场景自动跳过。+8 单测（含 fake-server 单用例端到端）。
+- 2026-09-06 失败详情输出（模块 D 补强 D8）：失败用例在 CLI 汇总表后直接打印「断言 → 输入 → 输出」（同样进 junit-xml 与日志），逐项截断预算控制体积（输入头尾各 200/输出 300/参数 120，每例 <1KB，CLI 最多 20 例）。+7 单测；踩坑（断言重写污染 str(exc)、pytest.Failed 非公开、异常链断链）见 D8 条目。

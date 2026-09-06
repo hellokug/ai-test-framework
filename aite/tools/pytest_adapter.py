@@ -189,6 +189,18 @@ class PytestAdapter(ToolAdapter):
                 passed=(rate >= thr) if thr is not None else None,
             ))
             out.raw_score[sc["name"]] = rate
+            for tc in ET.parse(xml_path).getroot().iter("testcase"):
+                node = tc.find("failure")
+                if node is None:
+                    node = tc.find("error")
+                if node is None:
+                    continue
+                detail = (node.text or node.get("message") or "").strip()
+                out.failures.append({
+                    "dataset": f"pytest:{sc['name']}",
+                    "case": tc.get("name") or "?",
+                    "detail": (detail[:600] or "（无详情）"),
+                })
             out.report_files[f"{sc['name']}.xml"] = str(xml_path)
             if Path(sc["log"]).is_file():
                 out.report_files[f"{sc['name']}.log"] = sc["log"]

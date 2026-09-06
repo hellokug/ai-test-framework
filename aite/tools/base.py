@@ -50,6 +50,7 @@ class ToolRunResult:
     report_files: dict[str, str] = field(default_factory=dict)   # 工具产出的报告文件
     raw_score: dict[str, float] = field(default_factory=dict)    # dataset -> 总分
     perf: dict[str, dict] = field(default_factory=dict)          # dataset -> 性能摘要
+    failures: list[dict] = field(default_factory=list)           # 用例级失败详情 [{dataset, case, detail}]
 
 
 class ToolAdapter(ABC):

@@ -54,6 +54,9 @@ _JSON_SPEC_KEYS = {"path", "type", "eq", "in", "len", "nonempty",
 _VAR_BUILDERS = {"haystack"}
 
 _REPLY_BRIEF = 160   # 失败信息里实际回复的截断长度
+_INPUT_EDGE = 200    # 失败详情：输入每条消息头/尾各保留的字符数（长文 16k 等截断）
+_OUTPUT_BRIEF = 300  # 失败详情：输出保留的字符数
+_ARGS_BRIEF = 120    # 失败详情：tool_call arguments 保留的字符数
 
 
 # ---------------------------------------------------------------- 模型访问层
@@ -226,6 +229,47 @@ def _build_var(spec: dict) -> str:
 def _brief(value) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return text if len(text) <= _REPLY_BRIEF else text[:_REPLY_BRIEF] + "…"
+
+
+def _ellipsize(text: str, edge: int) -> str:
+    """压平空白后头尾各留 edge 字符，超长中段标注总长（失败详情的体积预算）。"""
+    flat = " ".join(str(text).split())
+    if len(flat) <= edge * 2:
+        return flat
+    return flat[:edge] + f" ……（共 {len(flat)} 字符，中段省略）…… " + flat[-edge:]
+
+
+def failure_detail(case: Case, response: dict | None, exc: AssertionError) -> str:
+    """断言失败详情：断言 → 输入 → 输出（逐项截断，控制日志/junit/CLI 体积）。
+
+    进入 pytest 的 repr_failure / junit ``<failure>`` / 场景日志 / CLI 汇总，
+    每失败例预算 < 1KB；16k haystack 之类长输入按头尾截断并标注总长。
+    """
+    # 只取首行：pytest 断言重写会给 str(exc) 追加 "assert False" 之类的解释行，
+    # 我们的断言消息本身都是单行构造
+    msg = str(exc).splitlines() or [""]
+    lines = [f"[{case.id}] {case.desc}", f"  断言失败: {msg[0]}"]
+    try:
+        msgs = case.rendered_messages()
+    except Exception:                              # noqa: BLE001 - 详情组装不掩盖原断言
+        msgs = case.messages
+    parts = [f"{m.get('role')}: {_ellipsize(str(m.get('content', '')), _INPUT_EDGE)}"
+             for m in msgs[:6]]
+    lines.append("  输入 | " + " || ".join(parts))
+    if response is not None:
+        choices = response.get("choices") or []
+        message = (choices[0] or {}).get("message") or {} if choices else {}
+        content = (message.get("content") or "").strip()
+        tool_calls = message.get("tool_calls") or []
+        if content:
+            lines.append(f"  输出 | {_ellipsize(content, _OUTPUT_BRIEF // 2)}")
+        if tool_calls:
+            fn = (tool_calls[0].get("function") or {})
+            lines.append(f"  输出 | tool_call: {fn.get('name')}"
+                         f"({_ellipsize(str(fn.get('arguments')), _ARGS_BRIEF // 2)})")
+        if not content and not tool_calls:
+            lines.append("  输出 | <空>")
+    return "\n".join(lines)
 
 
 def _validate_json_spec(spec: dict, where: str) -> None:
@@ -449,15 +493,23 @@ class CaseItem(pytest.Item):
     def __init__(self, *, case: Case, **kwargs):
         super().__init__(**kwargs)
         self.case = case
+        self._last_response: dict | None = None
 
     def runtest(self):
         response = _post(_shared_client(), self.case.rendered_messages(),
                          tools=self.case.tools, params=self.case.params)
-        self.case.check(response)
+        self._last_response = response   # repr_failure 组装失败详情用（断言→输入→输出）
+        try:
+            self.case.check(response)
+        except AssertionError as exc:
+            # 直接抛 Failed 并断开异常链（from None）：不带裸 assert 回溯噪音，
+            # 失败详情即 junit/日志的全部输出
+            raise pytest.fail.Exception(
+                failure_detail(self.case, response, exc)) from None
 
     def repr_failure(self, excinfo):
-        if isinstance(excinfo.value, AssertionError):
-            return f"[{self.case.id}] {self.case.desc}\n  {excinfo.value}"
+        if isinstance(excinfo.value, pytest.fail.Exception):
+            return str(excinfo.value)
         return super().repr_failure(excinfo)
 
     def reportinfo(self):

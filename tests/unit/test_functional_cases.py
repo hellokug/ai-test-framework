@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from aite.functional.harness import Case, build_haystack, load_cases
+from aite.functional.harness import Case, build_haystack, failure_detail, load_cases
 
 
 def _response(content="", tool_calls=None):
@@ -282,3 +282,52 @@ class TestQualityChecks:
         _case(expect).check(_response(content="正常回复：一切正常。"))
         with pytest.raises(AssertionError, match="泄露"):
             _case(expect).check(_response(content="<|im_end|>正常回复"))
+
+
+class TestFailureDetail:
+    """失败详情组装：断言→输入→输出，体积有预算。"""
+
+    def _detail(self, case, response) -> str:
+        try:
+            case.check(response)
+            raise AssertionError("应该失败")
+        except AssertionError as exc:
+            if str(exc) == "应该失败":
+                raise
+            return failure_detail(case, response, exc)
+
+    def test_contains_assertion_input_output(self):
+        case = _case({"contains": "yes"})
+        detail = self._detail(case, _response(content="No"))
+        assert "[t] 测试" in detail
+        assert "断言失败:" in detail and "'yes'" in detail
+        assert "输入 | user: hi" in detail          # 请求体可见
+        assert "输出 | No" in detail                 # 模型回复可见
+
+    def test_long_input_truncated_with_total(self):
+        case = _case({"contains": "KEY"},
+                     vars={"DOC": {"haystack": {"chars": 16000, "key_at": 0.5, "key": "K"}}},
+                     messages=[{"role": "user", "content": "{DOC}"}])
+        detail = self._detail(case, _response(content="wrong"))
+        assert "共" in detail and "中段省略" in detail   # 标注总长
+        assert len(detail) < 1200                     # 体积预算
+
+    def test_tool_call_output_when_content_empty(self):
+        case = _case({"tool": "calculator"})
+        detail = self._detail(case, _response(tool_calls=_tool_call(
+            name="get_weather", arguments='{"city": "Tokyo"}')))
+        assert "tool_call: get_weather" in detail
+        assert "city" in detail
+
+    def test_empty_output_marked(self):
+        case = _case({"nonempty": True})
+        detail = self._detail(case, _response(content=""))
+        assert "输出 | <空>" in detail
+
+    def test_no_response_marks_nothing(self):
+        case = _case({"contains": "x"})
+        try:
+            case.check(_response(content="y"))
+        except AssertionError as exc:
+            detail = failure_detail(case, None, exc)
+        assert "输入 |" in detail and "输出" not in detail

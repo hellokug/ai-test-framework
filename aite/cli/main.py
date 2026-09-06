@@ -167,6 +167,8 @@ def run(
 
 
 def _print_report_summary(report) -> None:
+    from rich.markup import escape
+
     table = Table(title=f"{report.run_name} [{report.status}]", show_lines=False)
     for col in ("metric", "value", "threshold", "result", "reports"):
         table.add_column(col)
@@ -181,6 +183,16 @@ def _print_report_summary(report) -> None:
             "",
         )
     console.print(table)
+    failures = report.details.get("failures") or []
+    if failures:
+        console.print(f"  失败详情（{len(failures)} 例；完整信息见 junit/log 报告）:")
+        for f in failures[:20]:
+            console.print(f"    [red]✗[/red] {escape(f['dataset'])}::{escape(f['case'])}")
+            for line in str(f.get("detail", "")).splitlines()[:5]:
+                if line.strip():
+                    console.print(f"      {escape(line)}")
+        if len(failures) > 20:
+            console.print(f"    …… 其余 {len(failures) - 20} 例见 junit 报告")
     reports = report.details.get("reports") or {}
     for fmt, path in reports.items():
         console.print(f"  report [{fmt}]: {path}")
