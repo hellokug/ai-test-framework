@@ -19,6 +19,19 @@
 断言、junit 报告与 `-k`/nodeid 过滤能力；路由、入库、阈值、趋势全部复用
 平台既有链路，不自建执行框架。
 
+内置 8 场景 52 例，分两个域（共享同一 harness 与链路，只是被测对象不同）：
+
+| 域 | 场景 | 被测对象 |
+|---|---|---|
+| 模型能力域 | basic_chat / structured_output / tool_calling / long_context | 模型本身答得对不对 |
+| API 契约域 | api_params / api_stream / api_limits / api_shape | OpenAI 兼容层协议是否正确 |
+
+API 契约域断言**严格按 OpenAI 规范**——在 Ollama 等非完全兼容服务端上，
+已知 9 例差异用例 FAIL（n 多候选被忽略、role/tools/tool_choice 不校验、
+超上下文静默截断、max_completion_tokens 不认、json_mode 无防呆），desc
+均已标注「已知差异，换标准端点应转绿」。**显性暴露服务端兼容性差异正是
+该域的价值**，不是误报。
+
 ## 2. 全景数据流：一次任务从下发到入库
 
 `aite run -c examples/functional_pytest.yaml` 触发的完整时序：
@@ -110,6 +123,18 @@ TransportError（连接失败/超时）→ 重试 1 次
 语义断言失败                     → 不重试（重试掩盖不了确定性错误）
 ```
 
+`_post` 另外两条路径（D9 API 契约域引入）：
+
+- **预期错误模式**（`expect_error=True`，用例配了 `http_status`）：错误响应
+  本身是被测对象——不重试、不 raise，返回 `{"_status": 码, "_body": ...}`，
+  由 `_check_error_response` 断言状态码与错误体
+- **SSE 流式**（`params.stream: true`）：走 `_post_stream` 逐块拼接 delta
+  出伪响应（finish_reason 取末块），额外带 `_chunks`（块数）与 `_sse_ok`
+  （`data: [DONE]` 正常收尾）；流式不重试（重放语义复杂）
+- **请求构造控制**（params 下划线前缀，不进 payload）：`_omit_messages`
+  （省略字段测参数校验）、`_http_method`（GET 测 405）、`_raw_body`
+  （text/plain 发原始串测 Content-Type 校验）
+
 注意两级超时是不同东西：httpx 的 120s 是**单请求**超时；
 `tools.extra_args.timeout`（默认 1800s）是适配器给**整个场景 subprocess** 的
 总超时。
@@ -127,9 +152,14 @@ TransportError（连接失败/超时）→ 重试 1 次
   messages 里的 str/list/dict；`copy.deepcopy` 保证原始定义不被改动，
   同一 Case 可重复渲染。生成器目前只有 haystack（确定性长文填充，
   needle 埋在 key_at 比例处，无随机 → 可复现）
-- `check(response)`：断言执行，固定顺序——质量类（nonempty → no_garbled →
-  no_leak → no_repeat）→ contains → json → tool / tool_args_contains。
-  每条断言的消息都带「期望 vs 实际」；`_brief()`（160 字符）截断回复
+- `check(response)`：断言执行，固定顺序——**响应带 `_status` 时走
+  `_check_error_response`（预期错误模式，只断言 http_status / resp）**；
+  否则质量类（nonempty → no_garbled → no_leak → no_repeat）→ contains /
+  not_contains → finish_reason / chunks_min / sse_done / resp → no_tool →
+  json → tool / tool_args_contains。
+  每条断言的消息都带「期望 vs 实际」；`_brief()`（160 字符）截断回复。
+  另注：messages 允许空数组（api_params 的 empty_messages 用例需要发空
+  数组测 4xx）
 
 **`load_cases(path)`**：逐行 `json.loads` → `Case`，跳过空行，id 查重
 （重复报「与第 N 行重复」）。
@@ -277,6 +307,8 @@ error**（死在起点）；字段对但断言不满足，**exit 1 记 pass_rate
 | jsonl 数据驱动 + 自定义收集器 | 请求体与断言外移出 Python，加用例只加行；收集期校验保证坏数据不进执行期 |
 | nodeid 而非 -k | 精确匹配；打错 id 在 build_config 报错列出可用项，而不是静默跑 0 例 |
 | 质量断言（乱码/泄露/复读）口径保守 | 误报会把好模型判坏，违背功能测试确定性原则；宁可漏报 |
+| API 契约域严格按 OpenAI 规范断言 | 在非完全兼容服务端（Ollama）上显性暴露真实规范差异，这是该域的价值；差异用例 desc 标注「已知差异」，换标准端点应转绿 |
+| 预期错误模式（http_status）把错误响应变成被测对象 | 参数校验测试的核心矛盾：错误是预期结果。不重试不抛，原样返回交断言 |
 | expect DSL 而非自定义 checker 注册表 | YAGNI：四类通用谓词内置已够用，一次性复杂逻辑走手写 test_*.py 逃生门，不做可配置框架 |
 | auto 阈值 → pass_rate: 1.0 | 功能测试零容忍口径：部分通过的功能是坏功能 |
 | 失败详情不入库 | details 只进 CLI 与 junit/日志留档，DB 只存场景级指标，无膨胀 |
@@ -304,13 +336,24 @@ messages 里 `{NAME}` 占位）/ `expect`（必填）。
 |---|---|---|
 | nonempty | true | 回复非空 |
 | contains | str | 回复包含子串（ignore_case 生效） |
+| not_contains | str | 回复不含子串（stop 序列等场景） |
 | ignore_case | true | 大小写不敏感（作用于 contains 与 json 的 eq/in） |
 | json | spec | 剥代码围栏后可解析 + 规格：path/type/eq/in/len/nonempty/item_type/item_nonempty/fields（递归）；`{}` 空规格 = 仅校验可解析 |
 | tool | str | 首个 tool_call 的函数名 |
+| no_tool | true | 不发起任何 tool call（tool_choice=none 等） |
 | tool_args_contains | str | arguments（JSON 串）解析后包含子串（小写化比对） |
 | no_garbled | true | 无乱码（U+FFFD / 锟斤拷 / 控制字符 / UTF-8-Latin1 特征） |
 | no_leak | true / {extra_patterns} | 无内部标签泄露（ChatML / DeepSeek / INST / SYS / think 等 + 自定义正则） |
 | no_repeat | true | 无复读（≥6 字符块 ×4 / 短块 ×10 / 整行 ×5） |
+| http_status | int(100-599) | 预期错误模式：错误响应是被测对象（不重试不抛），断言状态码；错误体经 `resp` 断言 `_body` |
+| finish_reason | stop/length/tool_calls/content_filter | 结束信号语义（截断/工具/正常） |
+| resp | spec 或 spec 数组 | 响应体字段断言：path（支持数字索引 `choices.0`）/type/eq/len/nonempty；数组 = 一用例多字段 |
+| chunks_min | int(≥1) | 流式 SSE chunk 数下限（验证真分块） |
+| sse_done | bool | 流式是否以 `data: [DONE]` 正常收尾 |
+
+**请求构造控制**（`params` 下划线前缀，不进 payload）：`_omit_messages`
+（发缺字段的坏请求）、`_http_method`（GET 测 405）、`_raw_body`（text/plain
+测 Content-Type 校验）。**流式**：`params.stream: true` 自动走 SSE 解析。
 
 ## 9. 维护指引
 
