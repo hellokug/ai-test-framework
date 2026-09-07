@@ -96,11 +96,13 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
                 metric=r.metric, dataset=r.dataset, group=r.group,
                 aggregation="mean", value=r.value, threshold=r.threshold,
                 passed=r.passed, count=r.count, pass_rate=None,
+                higher_is_better=r.higher_is_better,
             )
             for r in result.rows
         ]
         # overall 行（dataset=None）：与自研引擎口径对齐；CLI 汇总表只显示 overall 行，
-        # 趋势页的汇总视图也依赖它。多数据集时按 count 加权平均。
+        # 趋势页的汇总视图也依赖它。多数据集时按 count 加权平均；阈值方向取
+        # 该 metric 组首行（同 metric 方向应一致，如 perf 的延迟类 <=）。
         by_metric: dict[str, list[Any]] = {}
         for r in result.rows:
             by_metric.setdefault(r.metric, []).append(r)
@@ -108,10 +110,13 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
             total = sum(r.count for r in mrows)
             value = (sum(r.value * r.count for r in mrows) / total) if total else None
             thr = next((r.threshold for r in mrows if r.threshold is not None), None)
+            higher = mrows[0].higher_is_better
             summaries.append(MetricSummary(
                 metric=metric, dataset=None, group=None, aggregation="mean",
                 value=value, threshold=thr, count=total, pass_rate=None,
-                passed=(value >= thr) if (thr is not None and value is not None) else None,
+                higher_is_better=higher,
+                passed=((value >= thr) if higher else (value <= thr))
+                if (thr is not None and value is not None) else None,
             ))
         report.summaries = summaries
         n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))

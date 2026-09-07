@@ -210,6 +210,38 @@ junit-xml 与场景日志，无需翻文件定位）。体积有预算：输入�
 200 字符（16k haystack 标注总长后截断）、输出 300 字符、tool_call 参数 120 字符，
 每失败例 < 1KB；CLI 最多展示 20 例，完整信息见 junit/log 报告。
 
+## 性能压测（engine: evalscope-perf）
+
+压测**不自研客户端**（单进程 asyncio 客户端在高并发下自身即瓶颈——测的是客户端
+排队而非服务端能力），委托给 evalscope perf 子命令执行（aiohttp + 多 worker，
+vLLM 社区同源的 LLM 压测方案），aite 负责编排与统一入库。locust 适配器为后置
+备选（非 LLM 端点 / 极端规模分布式场景）。
+
+```yaml
+# examples/perf_evalscope.yaml
+engine: evalscope-perf
+target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
+perf:
+  prompt: "请写一段大约一百字的介绍……"   # 固定负载提示词（数据集引用后置）
+  parallel: [1, 4]                  # 并发梯度，一次 run 全扫
+  number: 6                         # 每档采样数（标量自动对齐 parallel 长度）
+  max_tokens: 128                    # 生成长度 = 负载维度
+  warmup_num: 2                     # 预热不计入统计
+  stream: true                      # 默认流式——非流式测不到真 TTFT
+metric_thresholds: {error_rate: 0.05}
+```
+
+指标（每并发档一行，`dataset="perf:c<并发>"` 入 `run_metric_summary`，趋势页与
+精度/功能并列可比）：`ttft_ms` / `ttft_p95_ms` / `latency_avg_ms` /
+`latency_p95_ms` / `tpot_ms` / `itl_ms` / `qps` / `output_tps` / `error_rate`。
+明细留档 `reports/tool/evalscope-perf/<run>/<时间戳>/`（每档 summary/percentile
+json、performance_summary.txt、perf_report.html、执行日志）。
+
+口径说明：判定为**可选阈值 + 记录**（性能绝对阈值换环境即失效；基线回归对比后置）；
+本地单卡并发梯度预期平坦（GPU 吞吐瓶颈，历史实测），梯度压测的发力场景是云端 API
+容量评估与模型/部署配置对比；evalscope perf 还支持开环限速（`--open-loop --rate`）
+与 SLA 自动调优，需要时经 `perf.no_test_connection` 之外的原始参数透传扩展。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、

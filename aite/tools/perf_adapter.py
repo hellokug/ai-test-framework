@@ -48,6 +48,9 @@ _PERCENTILE_METRICS = {   # benchmark_percentile.json（取 95% 行，秒→毫�
     "ttft_p95_ms": ("TTFT (ms)", 1.0),
     "latency_p95_ms": ("Latency (s)", 1000.0),
 }
+# 越低越好（阈值方向 <=）：延迟/首 token/错误率；qps/output_tps 越高越好
+_LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "tpot_ms", "itl_ms",
+                    "latency_avg_ms", "latency_p95_ms", "error_rate"}
 
 
 def _positive_ints(value) -> bool:
@@ -165,10 +168,12 @@ class PerfAdapter(ToolAdapter):
                 if value is None:
                     continue
                 thr = req.metric_thresholds.get(name)
+                higher = name not in _LOWER_IS_BETTER
                 out.rows.append(ToolMetricRow(
                     dataset=label, metric=name, value=float(value), count=count,
-                    threshold=thr,
-                    passed=(float(value) >= thr) if thr is not None else None,
+                    threshold=thr, higher_is_better=higher,
+                    passed=((float(value) >= thr) if higher
+                            else (float(value) <= thr)) if thr is not None else None,
                 ))
             tps = data.get("Output Throughput (tok/s)")
             if tps is not None:

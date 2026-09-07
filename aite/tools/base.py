@@ -43,6 +43,7 @@ class ToolMetricRow:
     group: str | None = None
     threshold: float | None = None
     passed: bool | None = None
+    higher_is_better: bool = True   # False = 延迟/错误率等越低越好（阈值方向 <=）
 
 
 @dataclass

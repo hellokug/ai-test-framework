@@ -151,6 +151,43 @@ basic_chat / structured_output / tool_calling / long_context。
 验证方式：pytest 全量 + 离线 fixtures 端到端；真实模型
 `aite run -c examples/functional_pytest.yaml` 结果入库、CLI 汇总、趋势可见。
 
+### 模块 E：性能压测（evalscope-perf 适配器，2026-09-08 完成）
+
+目标：补齐性能测试域——自研引擎已有「单请求计时 + 指标化聚合」（Stopwatch/
+latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯度/QPS/warmup/
+压测语义）。**压测客户端不自研**（单进程 asyncio 在高并发下自身即瓶颈），
+委托 evalscope perf 子命令（aiohttp + 多 worker，vLLM 社区同源方案；LLM 原生
+指标 TTFT/TPOT/ITL/吞吐分档），aite 负责编排与统一入库。
+
+- [x] E1 契约与执行计划：ToolRunRequest 加 perf 段（prompt/parallel/number/
+      max_tokens/warmup_num/stream/no_test_connection）；parse_tool_suite 带
+      perf 段即免除 datasets 要求；build_config 纯函数映射 CLI 参数（number
+      标量自动复制对齐 parallel 长度——evalscope 校验规则：两者等长）。
+- [x] E2 执行与收集：subprocess 调 evalscope CLI（shutil.which 定位；包无
+      __main__ 不能 python -m）；collect 解析各档
+      `parallel_X_number_Y/benchmark_summary.json` + `benchmark_percentile.json`
+      → 每档每指标一行 `dataset="perf:c<并发>"`（ttft_ms/ttft_p95_ms/
+      latency_avg_ms/latency_p95_ms/tpot_ms/itl_ms/qps/output_tps/error_rate）
+      → run_metric_summary，趋势页与精度/功能并列可比。
+- [x] E3 文档与真实验证：examples/perf_evalscope.yaml、README 性能压测章节。
+
+关键决策：
+
+- **引擎选型**（用户评审挑战后修正）：原计划自研引擎扩展被否——客户端能力
+  会污染测量结果；evalscope perf 与 locust 两候选对比后「两者都要，perf 先」：
+  perf 零新依赖（平台已依赖 evalscope）+ LLM 原生指标 + 梯度/warmup/开环限速
+  内置；locust 后置备选（通用 HTTP/极端规模分布式）
+- 独立引擎名 `engine: evalscope-perf`（一引擎一适配器的 registry 惯例），
+  而非 EvalscopeAdapter 内加 mode 分支——基准与压测的 build_config/run/collect
+  逻辑完全不同
+- 判定口径：可选阈值 + 记录（性能绝对阈值换环境即失效；基线回归对比后置 P1）
+- overall 行接受 run_tool_suite 的跨档加权平均（复用链路；语义一般但 CLI
+  可读），不特判
+- 负载模型 P0 为固定 prompt；平台数据集引用（dataset 透传）后置
+
+验证方式：离线端到端（fake OpenAI 端点跑真实 evalscope perf 子进程）+
+真实 Ollama 端到端 `aite run -c examples/perf_evalscope.yaml`。
+
 ## 基线（已完成）
 
 - [x] pytest 全量 145 用例通过；ruff 零报错（2026-08-28）
@@ -193,3 +230,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-06 沉淀《功能测试架构说明》docs/functional-testing.md：harness 关键类与方法详解（模型访问/数据驱动/收集器/失败详情四块）、任务下发全时序（主进程编排 → argv+env 下发 → 子进程收集/执行 → junit 回传 → 入库）、进程模型与退出码语义、两个执行时刻（收集期 vs 执行期）、设计决策记录（confcutdir/env 注入/junit 通道/nodeid/保守口径等 9 项）、数据契约速查与维护指引。README 文档索引更新。
 - 2026-09-07 API 契约域 9 场景 38 例（模块 D 补强 D9）：功能测试从「模型能力」扩展到「OpenAI 兼容层协议正确性」，严格按规范断言。harness 扩展：预期错误模式/SSE 流式/请求构造控制/响应体断言（数字索引+数组多断言）。真实 Ollama 端到端实测 9 例 FAIL 均为真实规范差异（n 忽略/参数校验缺失/超上下文截断/tool_choice 支持不完整等，desc 已标注）——该域的价值就是显性暴露服务端兼容性差异。+27 单测（新断言键正反例、SSE 解析、预期错误模式、fake server e2e）。
 - 2026-09-07 API 契约域场景整合（用户评审反馈：分得太细）：9 细场景合并为 4 大场景（38 例不变，用例 id 不变）——api_params（请求侧 22 例：参数校验+可选参数+json_mode+tool_choice+输入鲁棒性）、api_stream（流式 4）、api_limits（输出侧 7：限制+长输出）、api_shape（响应体契约 5）。口径：按请求侧/流式/输出侧/响应侧划分，场景粒度=一个 pass_rate 汇总主题。注意：历史 run 中的旧场景名（api_optional_params 等）不再产出新行，趋势对比按新场景名重建。
+- 2026-09-08 **模块 E：性能压测（evalscope-perf 适配器）完成**。引擎选型经用户挑战修正：压测客户端不自研（客户端能力会污染测量），「两者都要，perf 先」——evalscope perf 打头阵（零新依赖、LLM 原生 TTFT/TPOT/ITL/吞吐分档、并发梯度/warmup/开环限速内置），locust 后置备选。交付：`aite/tools/perf_adapter.py`（perf yaml 段 → CLI 参数映射 / subprocess 执行 / benchmark_summary+percentile 解析 → 每档每指标一行 perf:c<并发> 入库）、examples/perf_evalscope.yaml、README 性能压测章节。+16 单测含离线端到端（真实 evalscope perf 子进程打 fake OpenAI 端点全链路 6.4s 跑通）。踩坑：① evalscope 包无 `__main__`（CLI 是 console script，须 shutil.which 定位子进程）；② `--number` 与 `--parallel` 必须等长（标量自动复制对齐）；③ **工具层阈值方向**——`passed >= 硬编码`对延迟/错误率类"越低越好"指标是反的（自研引擎本有 higher_is_better 语义，工具层一直没接；evalscope 全是准确率类未暴露，perf 一上就露馅），ToolMetricRow 加方向字段（默认 True 向后兼容）+ overall 行透传。

@@ -105,12 +105,12 @@ class TestCollect:
         self._write_level(tmp_path, "parallel_4_number_8", SUMMARY, PERCENTILE)
         result = PerfAdapter().collect(make_request(
             work_dir=tmp_path,
-            metric_thresholds={"ttft_ms": 6000}))
+            metric_thresholds={"ttft_ms": 5000}))
         by_metric = {r.metric: r for r in result.rows}
         assert all(r.dataset == "perf:c4" and r.count == 8 for r in result.rows)
         assert by_metric["ttft_ms"].value == pytest.approx(5591.59)
-        assert by_metric["ttft_ms"].threshold == 6000
-        assert by_metric["ttft_ms"].passed is False
+        assert by_metric["ttft_ms"].threshold == 5000
+        assert by_metric["ttft_ms"].passed is False   # 5591.59 > 5000（越低越好）
         assert by_metric["latency_avg_ms"].value == pytest.approx(9100)
         assert by_metric["latency_p95_ms"].value == pytest.approx(14550)  # 秒→毫秒
         assert by_metric["ttft_p95_ms"].value == pytest.approx(11042.56)
@@ -126,6 +126,25 @@ class TestCollect:
         result = PerfAdapter().collect(make_request(work_dir=tmp_path))
         rate = {r.metric: r for r in result.rows}["error_rate"]
         assert rate.value == pytest.approx(0.25)
+
+    def test_threshold_directions(self, tmp_path):
+        """阈值方向：延迟/错误率越低越好（<=）；qps/output_tps 越高越好（>=）。"""
+        self._write_level(tmp_path, "parallel_1_number_8", SUMMARY, PERCENTILE)
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path, metric_thresholds={
+            "error_rate": 0.05,     # 0.0 <= 0.05 → PASS
+            "ttft_ms": 6000,        # 5591.59 <= 6000 → PASS
+            "latency_p95_ms": 1000,  # 14550 > 1000 → FAIL
+            "qps": 1.0,             # 0.55 < 1.0 → FAIL（越高越好）
+            "output_tps": 5.0,      # 8.8 >= 5.0 → PASS
+        }))
+        by_metric = {r.metric: r for r in result.rows}
+        assert by_metric["error_rate"].passed is True
+        assert by_metric["ttft_ms"].passed is True
+        assert by_metric["latency_p95_ms"].passed is False
+        assert by_metric["qps"].passed is False
+        assert by_metric["output_tps"].passed is True
+        assert by_metric["ttft_ms"].higher_is_better is False
+        assert by_metric["qps"].higher_is_better is True
 
     def test_missing_percentile_tolerated(self, tmp_path):
         self._write_level(tmp_path, "parallel_1_number_8", SUMMARY)   # 无分位文件
