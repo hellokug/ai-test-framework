@@ -121,7 +121,9 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 `pass_rate` 统一入 `run_metric_summary`，与精度跑分在 Web 趋势中并列可比。
 依赖：`pip install "aite[functional]"`（pytest>=8.2）。
 
-内置 4 场景（14 例，`aite tool benchmarks pytest` 可查）：
+内置 13 场景（52 例，`aite tool benchmarks pytest` 可查），分两个域：
+
+**模型能力域**（4 场景 14 例）：
 
 | 场景 | 例数 | 覆盖 |
 |---|---|---|
@@ -129,6 +131,26 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 | `structured_output` | 4 | JSON 可解析 / 定长数组 / 枚举字段 / 两层嵌套 |
 | `tool_calling` | 3 | 正确选工具 / arguments 可解析含关键参数 |
 | `long_context` | 3 | needle-in-a-haystack（确定性填充，4k/16k/尾部） |
+
+**API 契约域**（9 场景 38 例，测 OpenAI 兼容层本身的协议正确性，断言严格按
+OpenAI 规范）：
+
+| 场景 | 例数 | 覆盖 |
+|---|---|---|
+| `api_params` | 8 | 参数校验：缺字段/空 messages/坏 role/坏 content/坏 tools/未知 model → 4xx；GET→405；text/plain→400 |
+| `api_optional_params` | 5 | 参数接受性（temperature/top_p/penalties）、n=2 多候选、system 生效性、tools=[] |
+| `api_stream` | 4 | SSE 流式：拼接非空/finish_reason/[DONE] 收尾/chunk 分块 |
+| `api_limits` | 5 | max_tokens / max_completion_tokens → finish_reason=length；stop 序列；tool_calls 信号 |
+| `api_shape` | 5 | 响应体契约：规范字段存在与类型/usage 算术/assistant role |
+| `api_robustness` | 3 | emoji / 中日韩混合输入；超上下文 → 400 |
+| `api_json_mode` | 2 | response_format=json_object：可解析 / 无 JSON 提示 → 400 |
+| `api_tool_choice` | 4 | tool_choice 控制：none/auto/强制指定/强制未知工具 → 400 |
+| `api_long_output` | 2 | 长输出完整性：正常完成 + 质量断言（乱码/泄露/复读） |
+
+> 注意：API 契约域在非完全兼容的服务端（如 Ollama）会暴露**真实规范差异**
+>（n 多候选、参数校验缺失、超上下文静默截断、tool_choice 强制等，实测 9 例
+> 差异用例 FAIL，desc 均已标注「已知差异，换标准端点应转绿」）——这是功能
+> 测试的价值而非误报；换 vLLM/OpenAI 端点后应全绿。
 
 ```yaml
 # examples/functional_pytest.yaml
@@ -165,8 +187,11 @@ function calling）/ `params`（可选，其他请求参数）/ `vars`（可选�
 
 `expect` 断言（可组合）：`contains` / `ignore_case` / `nonempty` /
 `json{path, type, eq, in, len, nonempty, item_type, item_nonempty, fields}` /
-`tool`（应选中的工具名）/ `tool_args_contains`。数据格式错误（缺字段 / 未知断言键 /
-id 重复）在收集期即报错并指明行号。
+`tool`（应选中的工具名）/ `tool_args_contains` /
+API 契约类：`not_contains` / `no_tool` / `finish_reason` /
+`http_status`（预期错误码，配 params 发坏请求）/ `resp{path,type,eq,len,nonempty}`
+（响应体字段断言，支持数字索引 `choices.0` 与数组多断言）/ `chunks_min` / `sse_done`
+（流式）。数据格式错误（缺字段 / 未知断言键 / id 重复）在收集期即报错并指明行号。
 
 **质量类断言**（保守口径，正常文本不误报，失败信息带证据片段）：
 

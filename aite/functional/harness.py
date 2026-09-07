@@ -95,16 +95,27 @@ def _post(client: httpx.Client, messages: list, *, tools: list | None,
       额外带 ``_chunks``（块数）与 ``_sse_ok``（data: [DONE] 正常收尾）
     - ``expect_error=True``（用例配了 http_status）：错误响应是被测对象，
       不重试、不 raise，原样返回 ``{"_status": 码, "_body": ...}``
+    - 请求构造控制（params 下划线前缀，不进 payload）：``_omit_messages``
+      （省略 messages 字段）、``_http_method``（改用 GET 等）、``_raw_body``
+      （以 text/plain 发原始字符串）
     """
     url = _request_url()
+    ctl = {k: params[k] for k in params if str(k).startswith("_")}
     payload: dict = {
         "model": _required_env("AITE_FT_MODEL"),
-        "messages": messages,
-        **params,
+        **({"messages": messages} if not ctl.get("_omit_messages") else {}),
+        **{k: v for k, v in params.items() if not str(k).startswith("_")},
     }
     if tools:
         payload["tools"] = tools
     headers = {"Authorization": f"Bearer {os.environ.get('AITE_FT_API_KEY') or 'EMPTY'}"}
+    if ctl.get("_http_method") == "GET":
+        resp = client.get(url, headers=headers)
+        return {"_status": resp.status_code, "_body": _safe_json(resp)}
+    if "_raw_body" in ctl:
+        resp = client.post(url, content=str(ctl["_raw_body"]),
+                           headers={**headers, "Content-Type": "text/plain"})
+        return {"_status": resp.status_code, "_body": _safe_json(resp)}
     if payload.get("stream"):
         return _post_stream(client, url, payload, headers)
     last_error = ""
@@ -424,9 +435,15 @@ class Case:
     """cases.jsonl 的一行：请求体 + 断言（数据驱动用例）。"""
 
     def __init__(self, raw: dict, source: str):
-        missing = [k for k in ("id", "desc", "messages", "expect") if not raw.get(k)]
+        missing = [k for k in ("id", "desc", "messages", "expect") if k not in raw]
+        if not raw.get("id"):
+            missing.append("id")
+        if not raw.get("desc"):
+            missing.append("desc")
         if missing:
+            missing = sorted(set(missing))
             raise ValueError(f"{source}: 缺少必填字段 {missing}（id/desc/messages/expect）")
+        # messages 允许空数组：参数校验用例（empty_messages → 400）需要发空数组
         expect = raw["expect"]
         if not isinstance(expect, dict):
             raise ValueError(f"{source}: expect 必须是对象")
@@ -447,14 +464,18 @@ class Case:
             raise ValueError(f"{source}: finish_reason 须 ∈ {sorted(_FINISH_REASONS)}")
         rsp = expect.get("resp")
         if rsp is not None:
-            if not isinstance(rsp, dict):
-                raise ValueError(f"{source}: resp 须为对象")
-            unknown = set(rsp) - _RESP_SPEC_KEYS
-            if unknown:
-                raise ValueError(f"{source}: resp 未知键 {sorted(unknown)}（可用: {sorted(_RESP_SPEC_KEYS)}）")
-            for key in ("type",):
-                if key in rsp and rsp[key] not in _TYPES:
-                    raise ValueError(f"{source}: resp.type 须 ∈ {sorted(_TYPES)}")
+            specs = rsp if isinstance(rsp, list) else [rsp]   # 数组 = 一条用例断言多个字段
+            if not specs or not all(isinstance(s, dict) for s in specs):
+                raise ValueError(f"{source}: resp 须为对象或对象数组")
+            for i, spec in enumerate(specs):
+                unknown = set(spec) - _RESP_SPEC_KEYS
+                if unknown:
+                    raise ValueError(
+                        f"{source}: resp[{i}] 未知键 {sorted(unknown)}（可用: {sorted(_RESP_SPEC_KEYS)}）")
+                if spec.get("type") is not None and spec["type"] not in _TYPES:
+                    raise ValueError(f"{source}: resp[{i}].type 须 ∈ {sorted(_TYPES)}")
+                if not any(k in spec for k in _RESP_SPEC_KEYS):
+                    raise ValueError(f"{source}: resp[{i}] 至少含一个断言键")
         if "no_leak" in expect:
             leak = expect["no_leak"]
             if leak is True:
@@ -551,7 +572,9 @@ class Case:
                 f"期望 SSE 收尾 data: [DONE]={self.expect['sse_done']}，"
                 f"实际 {response.get('_sse_ok')}")
         if "resp" in self.expect:
-            self._check_resp_spec(self.expect["resp"], response, "resp")
+            specs = self.expect["resp"]
+            for spec in (specs if isinstance(specs, list) else [specs]):
+                self._check_resp_spec(spec, response, "resp")
         if "no_tool" in self.expect:
             assert not (message.get("tool_calls") or []), (
                 f"期望不发起 tool call，实际: {_brief(message.get('tool_calls'))}")
@@ -587,16 +610,25 @@ class Case:
             f"期望 HTTP {self.expect['http_status']}，实际 {response['_status']}"
             f"（body: {_brief(response.get('_body'))}）")
         if "resp" in self.expect:
-            self._check_resp_spec(self.expect["resp"], response.get("_body"), "resp")
+            specs = self.expect["resp"]
+            for spec in (specs if isinstance(specs, list) else [specs]):
+                self._check_resp_spec(spec, response.get("_body"), "resp")
 
     def _check_resp_spec(self, spec: dict, data, where: str) -> None:
-        """响应体字段断言（无递归；eq 可做整数相等比较，如 usage.total）。"""
+        """响应体字段断言（path 支持数字索引如 choices.0；eq 可比较整数）。"""
         if "path" in spec:
             for part in str(spec["path"]).split("."):
-                assert isinstance(data, dict) and part in data, (
-                    f"{where}: 路径 {spec['path']!r} 在 {part!r} 处缺失"
-                    f"（实际: {_brief(data)}）")
-                data = data[part]
+                if isinstance(data, list) and part.lstrip("-").isdigit():
+                    idx = int(part)
+                    assert -len(data) <= idx < len(data), (
+                        f"{where}: 路径 {spec['path']!r} 索引 {part} 越界"
+                        f"（实际长度 {len(data)}）")
+                    data = data[idx]
+                else:
+                    assert isinstance(data, dict) and part in data, (
+                        f"{where}: 路径 {spec['path']!r} 在 {part!r} 处缺失"
+                        f"（实际: {_brief(data)}）")
+                    data = data[part]
             where = f"{where}.{spec['path']}"
         if "type" in spec:
             assert _type_ok(data, spec["type"]), (
@@ -606,7 +638,10 @@ class Case:
             assert isinstance(data, (list, str, dict)) and len(data) == spec["len"], (
                 f"{where}: 期望长度 {spec['len']}，实际 {len(data) if hasattr(data, '__len__') else data!r}")
         if spec.get("nonempty"):
-            assert isinstance(data, str) and data.strip(), f"{where}: 期望非空字符串"
+            ok = isinstance(data, (str, list, dict)) and len(data) > 0
+            if isinstance(data, str):
+                ok = data.strip() != ""
+            assert ok, f"{where}: 期望非空（实际: {_brief(data)}）"
         if "eq" in spec:
             expected = spec["eq"]
             got = data.strip().lower() if isinstance(data, str) and isinstance(expected, str) \

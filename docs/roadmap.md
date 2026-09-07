@@ -110,6 +110,23 @@ basic_chat / structured_output / tool_calling / long_context。
       `assert False` 解释行（实测 `'custom msg\nassert False'`），插值异常前
       必须取首行；② `pytest.Failed` 不是公开属性，用 `pytest.fail.Exception`；
       ③ except 内 raise 需 `from None` 断链，否则异常链回溯混入 junit。
+- [x] D9 API 契约域场景（2026-09-07 完成）：新增 9 场景 38 例，测试对象从
+      模型能力扩展到 OpenAI 兼容层本身——api_params（参数校验 → 4xx/405）、
+      api_optional_params（接受性/n=2/system 生效）、api_stream（SSE 拼接/
+      finish_reason/[DONE]/分块）、api_limits（max_tokens→length/stop 序列/
+      tool_calls 信号）、api_shape（响应体契约）、api_robustness（emoji/CJK/
+      超上下文→400）、api_json_mode、api_tool_choice、api_long_output。
+      断言口径：**严格按 OpenAI 规范**——Ollama 实测 9 例 FAIL 均为真实规范
+      差异（n 忽略、role/tools/tool_choice 不校验、超上下文静默截断、
+      max_completion_tokens 不认、json_mode 无防呆），desc 全部标注
+      「已知差异，换标准端点应转绿」，这正是该域的价值：显性暴露服务端
+      兼容性差异。配套 harness 扩展：预期错误模式（http_status——错误响应
+      是被测对象，不重试不抛）、SSE 流式（params.stream 走 _post_stream
+      拼接 delta 出伪响应 + chunks_min/sse_done 断言）、请求构造控制
+      （params 下划线前缀：_omit_messages/_http_method/_raw_body）、
+      resp 响应体断言（数字索引 choices.0、数组多断言、nonempty 支持非空
+      集合）、not_contains/no_tool/finish_reason 键；messages 允许空数组
+      （empty_messages 用例需要）。
 
 关键决策（设计校验结论，实现时遵循）：
 
@@ -174,3 +191,4 @@ basic_chat / structured_output / tool_calling / long_context。
 - 2026-09-05 新增用例级过滤（模块 D 补强 D7）：suite yaml `tools.cases` 数组指定要执行的用例 id（默认全部），单用例问题复现不再需要绕过平台手动配 `AITE_FT_*` 环境变量直跑 pytest。实现为 pytest nodeid 精确定向（`cases.jsonl::<id>`），未知 id 显式报错、无匹配场景自动跳过。+8 单测（含 fake-server 单用例端到端）。
 - 2026-09-06 失败详情输出（模块 D 补强 D8）：失败用例在 CLI 汇总表后直接打印「断言 → 输入 → 输出」（同样进 junit-xml 与日志），逐项截断预算控制体积（输入头尾各 200/输出 300/参数 120，每例 <1KB，CLI 最多 20 例）。+7 单测；踩坑（断言重写污染 str(exc)、pytest.Failed 非公开、异常链断链）见 D8 条目。
 - 2026-09-06 沉淀《功能测试架构说明》docs/functional-testing.md：harness 关键类与方法详解（模型访问/数据驱动/收集器/失败详情四块）、任务下发全时序（主进程编排 → argv+env 下发 → 子进程收集/执行 → junit 回传 → 入库）、进程模型与退出码语义、两个执行时刻（收集期 vs 执行期）、设计决策记录（confcutdir/env 注入/junit 通道/nodeid/保守口径等 9 项）、数据契约速查与维护指引。README 文档索引更新。
+- 2026-09-07 API 契约域 9 场景 38 例（模块 D 补强 D9）：功能测试从「模型能力」扩展到「OpenAI 兼容层协议正确性」，严格按规范断言。harness 扩展：预期错误模式/SSE 流式/请求构造控制/响应体断言（数字索引+数组多断言）。真实 Ollama 端到端实测 9 例 FAIL 均为真实规范差异（n 忽略/参数校验缺失/超上下文截断/tool_choice 支持不完整等，desc 已标注）——该域的价值就是显性暴露服务端兼容性差异。+27 单测（新断言键正反例、SSE 解析、预期错误模式、fake server e2e）。

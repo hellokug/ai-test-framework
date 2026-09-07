@@ -1,0 +1,2 @@
+{"id": "long_generation_completes", "desc": "长输出完整性：约 300 字生成正常完成（finish_reason=stop，非异常截断）", "messages": [{"role": "user", "content": "请写一段大约三百字的短文，主题：清晨的城市。"}], "expect": {"nonempty": true, "finish_reason": "stop", "no_repeat": true}}
+{"id": "long_output_quality", "desc": "长输出质量：长回复通过乱码/泄露/复读三项质量检查", "messages": [{"role": "user", "content": "请详细介绍光合作用的过程，大约两百字。"}], "expect": {"nonempty": true, "finish_reason": "stop", "no_garbled": true, "no_leak": true, "no_repeat": true}}

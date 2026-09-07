@@ -386,6 +386,28 @@ class TestApiContractChecks:
         with pytest.raises(AssertionError, match="类型"):
             _case({"resp": {"path": "id", "type": "int"}}).check(resp)
 
+    def test_resp_numeric_index_and_nonempty_list(self):
+        resp = {"choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"total_tokens": 42}}
+        _case({"resp": {"path": "choices.0.message.role", "eq": "assistant"}}).check(resp)
+        _case({"resp": {"path": "choices", "nonempty": True}}).check(resp)   # 非空 list
+        with pytest.raises(AssertionError, match="越界"):
+            _case({"resp": {"path": "choices.3"}}).check(resp)
+        with pytest.raises(AssertionError, match="缺失"):
+            _case({"resp": {"path": "choices.0.foo"}}).check(resp)
+        empty = {"choices": []}
+        with pytest.raises(AssertionError, match="非空"):
+            _case({"resp": {"path": "choices", "nonempty": True}}).check(empty)
+
+    def test_resp_array_spec_multiple_fields(self):
+        """resp 数组形态：一条用例断言响应体多个字段。"""
+        resp = {"id": "x", "object": "chat.completion", "created": 123}
+        _case({"resp": [{"path": "id", "type": "str"},
+                        {"path": "created", "type": "int"}]}).check(resp)
+        with pytest.raises(AssertionError, match="created"):
+            _case({"resp": [{"path": "id", "type": "str"},
+                             {"path": "created", "type": "str"}]}).check(resp)
+
     # ---- 预期错误模式（http_status）----
 
     def test_http_status_expected_error(self):

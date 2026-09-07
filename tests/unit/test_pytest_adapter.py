@@ -134,7 +134,12 @@ class TestBuildConfig:
     def test_list_tasks_builtin_only(self):
         tasks = PytestAdapter().list_tasks()
         names = [t["name"] for t in tasks]
-        assert names == ["basic_chat", "long_context", "structured_output", "tool_calling"]
+        assert names == sorted([
+            "basic_chat", "long_context", "structured_output", "tool_calling",
+            "api_params", "api_optional_params", "api_stream", "api_limits",
+            "api_shape", "api_robustness", "api_json_mode", "api_tool_choice",
+            "api_long_output",
+        ])
         assert all(t["metrics"] == ["pass_rate"] and t["tags"] == ["functional"]
                    and t["few_shot_num"] is None for t in tasks)
 

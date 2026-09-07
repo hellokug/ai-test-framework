@@ -1,0 +1,8 @@
+{"id": "missing_messages", "desc": "参数校验：缺 messages 字段 → 规范要求 400（OpenAI invalid_request_error）", "messages": [], "params": {"_omit_messages": true}, "expect": {"http_status": 400}}
+{"id": "empty_messages", "desc": "参数校验：messages 空数组 → 400（至少一条消息）", "messages": [], "expect": {"http_status": 400}}
+{"id": "bad_role", "desc": "参数校验：role 非法值 wizard → 400。注：Ollama 不校验 role，本例为已知差异，换标准端点应转绿", "messages": [{"role": "wizard", "content": "hi"}], "expect": {"http_status": 400}}
+{"id": "bad_content_type", "desc": "参数校验：content 传数字 → 400（须为字符串）", "messages": [{"role": "user", "content": 123}], "expect": {"http_status": 400}}
+{"id": "unknown_model", "desc": "参数校验：model 不存在 → 404（OpenAI model_not_found 码制）", "messages": [{"role": "user", "content": "hi"}], "params": {"model": "aite-no-such-model-xyz"}, "expect": {"http_status": 404}}
+{"id": "bad_tools_schema", "desc": "参数校验：tools 结构错误（缺 function 字段）→ 400。注：Ollama 不校验 tools 结构，本例为已知差异，换标准端点应转绿", "messages": [{"role": "user", "content": "hi"}], "tools": [{"type": "function"}], "expect": {"http_status": 400}}
+{"id": "wrong_http_method", "desc": "HTTP 协议：GET 访问 chat/completions 端点 → 405 Method Not Allowed", "messages": [{"role": "user", "content": "hi"}], "params": {"_http_method": "GET"}, "expect": {"http_status": 405}}
+{"id": "wrong_content_type", "desc": "HTTP 协议：text/plain 发 body → 4xx（OpenAI 实际行为 400）", "messages": [{"role": "user", "content": "hi"}], "params": {"_raw_body": "not json"}, "expect": {"http_status": 400}}
