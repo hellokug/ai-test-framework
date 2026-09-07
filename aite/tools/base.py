@@ -31,6 +31,7 @@ class ToolRunRequest:
     auto_thresholds: bool = False  # metric_thresholds: auto → 按基准推荐阈值
     tests_dir: str | None = None    # pytest 引擎：用户自建功能测试目录（优先于内置场景）
     cases: list[str] | None = None  # pytest 引擎：用例 id 过滤（None = 全部；单用例复现场景）
+    perf: dict = field(default_factory=dict)  # evalscope-perf 引擎：压测配置（prompt/parallel/number/...）
 
 
 @dataclass

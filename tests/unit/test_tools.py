@@ -131,6 +131,16 @@ class TestToolSuiteParsing:
         assert req.tests_dir == "my_ft"
         assert req.datasets == []
 
+    def test_parse_perf_section_allows_empty_datasets(self):
+        raw = {"engine": "evalscope-perf", "perf": {"prompt": "p", "parallel": [1]}}
+        req, _ = parse_tool_suite(raw)
+        assert req.perf == {"prompt": "p", "parallel": [1]}
+        assert req.datasets == []
+
+    def test_parse_rejects_bad_perf_section(self):
+        with pytest.raises(ValueError, match="perf 段"):
+            parse_tool_suite({"engine": "evalscope-perf", "perf": "oops"})
+
     def test_parse_without_tests_dir_keeps_datasets(self):
         req, _ = parse_tool_suite({"engine": "pytest", "tools": {"datasets": ["basic_chat"]}})
         assert req.tests_dir is None

@@ -30,6 +30,7 @@ from aite.tools.base import (
     register_tool as register_tool,
 )
 from aite.tools.evalscope_adapter import EvalscopeAdapter  # noqa: F401  (registers)
+from aite.tools.perf_adapter import PerfAdapter  # noqa: F401  (registers)
 from aite.tools.pytest_adapter import PytestAdapter  # noqa: F401  (registers)
 from aite.utils.logging import get_logger
 
@@ -39,11 +40,15 @@ logger = get_logger(__name__)
 def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     """工具型 suite yaml → (ToolRunRequest, 原始配置快照)。
 
-    pytest 引擎（tools.tests_dir 模式）下 datasets 可空 = 跑该目录全部场景。
+    pytest 引擎（tools.tests_dir 模式）下 datasets 可空 = 跑该目录全部场景；
+    evalscope-perf 引擎带 perf 段即可（datasets/tests_dir 均不要求）。
     """
     tools_cfg = raw.get("tools") or {}
     tests_dir = tools_cfg.get("tests_dir")
-    if not tools_cfg.get("datasets") and not tests_dir:
+    perf_cfg = raw.get("perf")
+    if perf_cfg is not None and not isinstance(perf_cfg, dict):
+        raise ValueError("perf 段须为对象（prompt/parallel/number/...）")
+    if not tools_cfg.get("datasets") and not tests_dir and not perf_cfg:
         raise ValueError("tool suite requires tools.datasets (benchmark names)")
     run_name = raw.get("run_name") or "tool-run"
     stamp = utcnow().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -65,6 +70,7 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
         auto_thresholds=(mt == "auto"),
         tests_dir=tests_dir,
         cases=cases,
+        perf=perf_cfg or {},
     )
     return req, raw
 
