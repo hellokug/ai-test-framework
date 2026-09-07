@@ -121,7 +121,7 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 `pass_rate` 统一入 `run_metric_summary`，与精度跑分在 Web 趋势中并列可比。
 依赖：`pip install "aite[functional]"`（pytest>=8.2）。
 
-内置 13 场景（52 例，`aite tool benchmarks pytest` 可查），分两个域：
+内置 8 场景（52 例，`aite tool benchmarks pytest` 可查），分两个域：
 
 **模型能力域**（4 场景 14 例）：
 
@@ -132,20 +132,15 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 | `tool_calling` | 3 | 正确选工具 / arguments 可解析含关键参数 |
 | `long_context` | 3 | needle-in-a-haystack（确定性填充，4k/16k/尾部） |
 
-**API 契约域**（9 场景 38 例，测 OpenAI 兼容层本身的协议正确性，断言严格按
+**API 契约域**（4 场景 38 例，测 OpenAI 兼容层本身的协议正确性，断言严格按
 OpenAI 规范）：
 
 | 场景 | 例数 | 覆盖 |
 |---|---|---|
-| `api_params` | 8 | 参数校验：缺字段/空 messages/坏 role/坏 content/坏 tools/未知 model → 4xx；GET→405；text/plain→400 |
-| `api_optional_params` | 5 | 参数接受性（temperature/top_p/penalties）、n=2 多候选、system 生效性、tools=[] |
-| `api_stream` | 4 | SSE 流式：拼接非空/finish_reason/[DONE] 收尾/chunk 分块 |
-| `api_limits` | 5 | max_tokens / max_completion_tokens → finish_reason=length；stop 序列；tool_calls 信号 |
-| `api_shape` | 5 | 响应体契约：规范字段存在与类型/usage 算术/assistant role |
-| `api_robustness` | 3 | emoji / 中日韩混合输入；超上下文 → 400 |
-| `api_json_mode` | 2 | response_format=json_object：可解析 / 无 JSON 提示 → 400 |
-| `api_tool_choice` | 4 | tool_choice 控制：none/auto/强制指定/强制未知工具 → 400 |
-| `api_long_output` | 2 | 长输出完整性：正常完成 + 质量断言（乱码/泄露/复读） |
+| `api_params` | 22 | 请求侧：参数校验（缺字段/坏 role/content/tools → 4xx、未知 model → 404、GET → 405、text/plain）；可选参数（temperature/top_p/penalties/n=2/system 生效/tools=[]）；json_mode；tool_choice 控制；输入鲁棒性（emoji/中日韩/超上下文 → 400） |
+| `api_stream` | 4 | 流式：SSE 拼接非空 / finish_reason / `[DONE]` 收尾 / chunk 分块 |
+| `api_limits` | 7 | 输出侧：max_tokens / max_completion_tokens → finish_reason=length；stop 序列；tool_calls 信号；长输出完整性 |
+| `api_shape` | 5 | 响应体契约：规范字段存在与类型 / usage 算术自洽 / assistant role |
 
 > 注意：API 契约域在非完全兼容的服务端（如 Ollama）会暴露**真实规范差异**
 >（n 多候选、参数校验缺失、超上下文静默截断、tool_choice 强制等，实测 9 例

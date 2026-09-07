@@ -10,9 +10,7 @@ import aite.functional
 SCENARIOS_DIR = Path(aite.functional.__file__).parent / "scenarios"
 EXPECTED = {
     "basic_chat": 4, "structured_output": 4, "tool_calling": 3, "long_context": 3,
-    "api_params": 8, "api_optional_params": 5, "api_stream": 4, "api_limits": 5,
-    "api_shape": 5, "api_robustness": 3, "api_json_mode": 2, "api_tool_choice": 4,
-    "api_long_output": 2,
+    "api_params": 22, "api_stream": 4, "api_limits": 7, "api_shape": 5,
 }
 
 
@@ -33,7 +31,7 @@ def test_harness_plugin_loadable_without_env():
 
 
 def test_all_scenarios_collectable():
-    """全部内置场景可收集：4 能力场景 14 例 + 9 API 契约场景 38 例。"""
+    """全部内置场景可收集：4 能力场景 14 例 + 4 API 契约场景 38 例。"""
     assert _collect(SCENARIOS_DIR) == sum(EXPECTED.values())
     for name, n in EXPECTED.items():
         assert _collect(SCENARIOS_DIR / name) == n, name
