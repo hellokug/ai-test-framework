@@ -1,5 +1,5 @@
 run_name: perf-qwen
-description: 性能压测（evalscope-perf 引擎）：并发梯度扫 TTFT/吞吐/QPS，委托 evalscope perf 执行
+description: 性能压测（evalscope-perf 引擎）：数据集负载 + 爬坡模式，委托 evalscope perf 执行
 
 engine: evalscope-perf             # 路由到性能适配器（压测不自研客户端，委托专业工具）
 
@@ -9,18 +9,28 @@ target:                             # 复用平台统一 target 配置
   model: qwen2.5:3b
 
 perf:
-  prompt: "请写一段大约一百字的介绍，主题：清晨的城市。"   # 固定负载提示词（数据集引用后置）
-  parallel: [1, 4]                  # 并发梯度，一次 run 全扫（每档独立结果目录）
-  number: 6                         # 每档采样数（标量自动对齐 parallel 长度）
-  max_tokens: 128                    # 控制生成长度（负载维度）
-  warmup_num: 2                     # 预热请求，不计入统计
+  # ---- 负载：数据集驱动（与 prompt 二选一）----
+  dataset: ./examples/data/business_qa.jsonl   # 行数=条数；输入键同平台约定
+  max_tokens: [64, 128]            # 输出长度区间，每请求均匀采样；标量=定长
+  # prompt: "..."                  # 简单场景用固定提示词（与 dataset 二选一）
+
+  # ---- 模式四选一：baseline / ramp / probe / soak（省略 = parallel/number 直配）----
+  mode: ramp                       # 爬坡：起止步长展开为并发梯度，to 必含
+  ramp: {from: 1, to: 4, step: 3}  # → 档位 [1, 4]
+  # baseline: {parallel: 4}        # 基准：固定并发
+  # probe: {max_parallel: 32, sla: {avg_ttft: 3000}}   # 摸高：SLA 下二分搜索最大并发
+  # soak: {parallel: 8}            # 长稳：时间驱动（配 duration）
+
+  number: 4                         # 每档采样数（标量自动对齐档位）
+  # duration: 60                   # 每档运行秒数（与 number 先到为准；soak 用它驱动）
+  warmup_num: 1                     # 预热请求，不计入统计
   stream: true                      # 默认流式——非流式测不到真 TTFT
 
 # 判定口径：显式阈值可选（换环境需自行校准），不配则只记录不判定；
-# 指标名见 `aite tool benchmarks evalscope-perf`（ttft_ms/latency_p95_ms/qps/output_tps/error_rate...）
+# 延迟/错误率类为"越低越好"（<= 判定），qps/output_tps 为"越高越好"
 tools:
   metric_thresholds: {error_rate: 0.05}
   # extra_args:
-  #   timeout: 3600                  # 整场压测总超时（秒），默认 3600
+  #   timeout: 3600                # 整场压测总超时（秒），默认 3600
 
 storage: {url: sqlite+aiosqlite:///./aite.db}

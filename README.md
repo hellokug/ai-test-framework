@@ -217,30 +217,46 @@ junit-xml 与场景日志，无需翻文件定位）。体积有预算：输入�
 vLLM 社区同源的 LLM 压测方案），aite 负责编排与统一入库。locust 适配器为后置
 备选（非 LLM 端点 / 极端规模分布式场景）。
 
+**负载**（`perf.dataset` 与 `perf.prompt` 二选一）：`dataset` 指向本地 jsonl/csv
+（行数 = 条数，输入键同平台数据集约定：input/question/instruction/prompt/query/
+user 取首个命中），适配器导出为逐行 prompt 文件逐条取用；`max_tokens` 标量 =
+定长、`[min, max]` = 每请求均匀采样（输出长度分布）。
+
+**模式**（`perf.mode` 四选一，省略 = 直配 `parallel`/`number` 兼容写法）：
+
+| 模式 | 配置 | 语义 |
+|---|---|---|
+| `baseline` 基准 | `baseline: {parallel: 4}` | 固定并发测稳态 |
+| `ramp` 爬坡 | `ramp: {from: 1, to: 16, step: 4}` | 并发梯度一次全扫（to 必含）；`duration` = 单档运行秒数 |
+| `probe` 摸高 | `probe: {max_parallel: 32, sla: {avg_ttft: 3000}}` | SLA 约束下二分搜索最大可持续并发（sla 指标：avg/p99 × latency·ttft·tpot、rps、tps；单位 latency 秒、ttft/tpot 毫秒） |
+| `soak` 长稳 | `soak: {parallel: 8}` + `duration: 3600` | 时间驱动持续压测（number 自动放大为安全上限） |
+
 ```yaml
-# examples/perf_evalscope.yaml
-engine: evalscope-perf
-target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
+# examples/perf_evalscope.yaml（节选）
 perf:
-  prompt: "请写一段大约一百字的介绍……"   # 固定负载提示词（数据集引用后置）
-  parallel: [1, 4]                  # 并发梯度，一次 run 全扫
-  number: 6                         # 每档采样数（标量自动对齐 parallel 长度）
-  max_tokens: 128                    # 生成长度 = 负载维度
-  warmup_num: 2                     # 预热不计入统计
-  stream: true                      # 默认流式——非流式测不到真 TTFT
-metric_thresholds: {error_rate: 0.05}
+  dataset: ./examples/data/business_qa.jsonl
+  max_tokens: [64, 128]
+  mode: ramp
+  ramp: {from: 1, to: 4, step: 3}
+  number: 4
+  warmup_num: 1
+  stream: true                  # 默认流式——非流式测不到真 TTFT
+tools:
+  metric_thresholds: {error_rate: 0.05}
 ```
 
 指标（每并发档一行，`dataset="perf:c<并发>"` 入 `run_metric_summary`，趋势页与
-精度/功能并列可比）：`ttft_ms` / `ttft_p95_ms` / `latency_avg_ms` /
-`latency_p95_ms` / `tpot_ms` / `itl_ms` / `qps` / `output_tps` / `error_rate`。
-明细留档 `reports/tool/evalscope-perf/<run>/<时间戳>/`（每档 summary/percentile
-json、performance_summary.txt、perf_report.html、执行日志）。
+精度/功能并列可比；摸高多 run 同并发按均值聚合）：`ttft_ms` / `ttft_p95_ms` /
+`latency_avg_ms` / `latency_p95_ms` / `tpot_ms` / `itl_ms` / `qps` / `output_tps` /
+`error_rate`。**阈值方向区分**：延迟/错误率类越低越好（`<=`），qps/output_tps
+越高越好（`>=`）。明细留档 `reports/tool/evalscope-perf/<run>/<时间戳>/`
+（每档 summary/percentile json、sla_summary、performance_summary.txt、
+perf_report.html、执行日志）。
 
-口径说明：判定为**可选阈值 + 记录**（性能绝对阈值换环境即失效；基线回归对比后置）；
-本地单卡并发梯度预期平坦（GPU 吞吐瓶颈，历史实测），梯度压测的发力场景是云端 API
-容量评估与模型/部署配置对比；evalscope perf 还支持开环限速（`--open-loop --rate`）
-与 SLA 自动调优，需要时经 `perf.no_test_connection` 之外的原始参数透传扩展。
+口径说明：判定为**可选阈值 + 记录**（性能绝对阈值换环境即失效；基线回归对比
+后置）；本地单卡并发梯度预期平坦（GPU 吞吐瓶颈，历史实测），梯度压测的发力场景
+是云端 API 容量评估与模型/部署配置对比；**中途熔断**（跑到一半按错误率/延迟
+停止）上游不支持，档间判定（probe 的 SLA 搜索）可用，记 backlog。
 
 ## Web 平台
 

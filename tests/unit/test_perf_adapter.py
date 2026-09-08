@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from aite.tools.base import ToolRunRequest
-from aite.tools.perf_adapter import PerfAdapter
+from aite.tools.perf_adapter import (
+    SOAK_NUMBER_CAP,
+    PerfAdapter,
+    _expand_ramp,
+    _export_prompts,
+    _sla_params_json,
+)
 
 
 def make_request(**kw):
@@ -77,6 +83,141 @@ class TestBuildConfig:
         tasks = PerfAdapter().list_tasks()
         assert len(tasks) == 1
         assert tasks[0]["name"] == "chat" and "ttft_ms" in tasks[0]["metrics"]
+
+
+class TestModes:
+    """模式层：baseline / ramp / probe / soak → CLI 映射。"""
+
+    def test_baseline(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "baseline", "baseline": {"parallel": 4}}))
+        args = cfg["args"]
+        i = args.index("--parallel")
+        assert args[i + 1] == "4"
+        j = args.index("--number")
+        assert len(args) == j + 2 or args[j + 2].startswith("--")   # number 单值
+
+    def test_ramp_expands_with_to_included(self):
+        assert _expand_ramp({"from": 1, "to": 16, "step": 4}) == [1, 5, 9, 13, 16]
+        assert _expand_ramp({"from": 1, "to": 8, "step": 4}) == [1, 5, 8]
+        assert _expand_ramp({"from": 2, "to": 2, "step": 3}) == [2]
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "ramp",
+            "ramp": {"from": 1, "to": 9, "step": 4}, "duration": 30, "number": 5}))
+        args = cfg["args"]
+        i = args.index("--parallel")
+        assert args[i + 1:i + 4] == ["1", "5", "9"]        # to=9 已含，3 档
+        assert args[args.index("--duration") + 1] == "30"  # 单档运行秒数
+        j = args.index("--number")
+        assert args[j + 1:j + 4] == ["5", "5", "5"]        # 标量对齐档数
+
+    def test_probe_sla_params(self):
+        assert json.loads(_sla_params_json({"avg_ttft": 2000, "p99_latency": 10})) == \
+            [{"avg_ttft": "< 2000", "p99_latency": "< 10"}]
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "probe",
+            "probe": {"max_parallel": 32, "from": 2, "sla": {"avg_ttft": 2000},
+                      "min_parallel": 1, "runs": 3}}))
+        args = cfg["args"]
+        assert "--sla-auto-tune" in args
+        assert args[args.index("--sla-variable") + 1] == "parallel"
+        assert args[args.index("--sla-upper-bound") + 1] == "32"
+        assert json.loads(args[args.index("--sla-params") + 1]) == [{"avg_ttft": "< 2000"}]
+        assert args[args.index("--sla-num-runs") + 1] == "3"
+        i = args.index("--parallel")
+        assert args[i + 1] == "2"                          # 搜索起点
+
+    def test_soak_duration_and_number_cap(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "soak", "soak": {"parallel": 8}, "duration": 3600}))
+        args = cfg["args"]
+        assert args[args.index("--parallel") + 1] == "8"
+        assert args[args.index("--duration") + 1] == "3600"
+        assert args[args.index("--number") + 1] == str(SOAK_NUMBER_CAP)  # 安全上限
+
+    def test_mode_conflicts_and_errors(self):
+        with pytest.raises(ValueError, match="不要直接配"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "mode": "baseline", "baseline": {"parallel": 4},
+                "parallel": [1]}))
+        for perf, err in [
+            ({"prompt": "p", "mode": "wizard"}, "mode"),
+            ({"prompt": "p", "mode": "baseline", "baseline": {}}, "baseline"),
+            ({"prompt": "p", "mode": "ramp", "ramp": {"from": 9, "to": 1, "step": 2}}, "ramp"),
+            ({"prompt": "p", "mode": "soak", "soak": {}, "duration": 60}, "soak"),
+            ({"prompt": "p", "mode": "probe", "probe": {"sla": {"avg_ttft": 1}}}, "max_parallel"),
+            ({"prompt": "p", "mode": "probe", "probe": {"max_parallel": 8,
+                                                        "sla": {"nope": 1}}}, "sla"),
+            ({"prompt": "p", "duration": -1}, "duration"),
+        ]:
+            with pytest.raises(ValueError, match=err):
+                PerfAdapter().build_config(make_request(perf=perf))
+
+    def test_v1_compat_without_mode(self):
+        """省略 mode = v1 直配 parallel/number，行为不变。"""
+        cfg = PerfAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [1, 4], "number": 8}))
+        i = cfg["args"].index("--parallel")
+        assert cfg["args"][i + 1:i + 3] == ["1", "4"]
+
+
+class TestDatasetLoad:
+    """负载层：数据集导出 + max_tokens 区间。"""
+
+    def test_export_jsonl(self, tmp_path):
+        src = tmp_path / "ds.jsonl"
+        src.write_text("\n".join([
+            json.dumps({"id": 1, "question": "第一个问题"}),
+            "",
+            json.dumps({"id": 2, "query": "第二个问题"}),
+            json.dumps({"id": 3, "input": "第三个问题"}),
+        ]) + "\n", encoding="utf-8")
+        dest = tmp_path / "load" / "prompts.txt"
+        assert _export_prompts(str(src), dest) == 3
+        assert dest.read_text(encoding="utf-8").splitlines() == \
+            ["第一个问题", "第二个问题", "第三个问题"]
+
+    def test_export_csv(self, tmp_path):
+        src = tmp_path / "ds.csv"
+        src.write_text("id,prompt\n1,甲\n2,乙\n", encoding="utf-8")
+        dest = tmp_path / "load" / "prompts.txt"
+        assert _export_prompts(str(src), dest) == 2
+
+    def test_export_errors(self, tmp_path):
+        with pytest.raises(ValueError, match="不存在"):
+            _export_prompts(str(tmp_path / "nope.jsonl"), tmp_path / "d.txt")
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text(json.dumps({"id": 1, "answer": "无输入字段"}) + "\n",
+                       encoding="utf-8")
+        with pytest.raises(ValueError, match="无输入字段"):
+            _export_prompts(str(bad), tmp_path / "d.txt")
+
+    def test_build_config_dataset_args(self):
+        cfg = PerfAdapter().build_config(make_request(work_dir=Path("w"), perf={
+            "dataset": "ds.jsonl", "mode": "baseline", "baseline": {"parallel": 2},
+            "max_tokens": [64, 256]}))
+        args = cfg["args"]
+        assert args[args.index("--dataset") + 1] == "custom"
+        assert args[args.index("--dataset-path") + 1] == str(Path("w/load/prompts.txt"))
+        mt = args.index("--max-tokens")
+        assert args[mt + 1:mt + 3] == ["64", "256"]         # 区间采样
+        assert cfg["dataset"] == "ds.jsonl"
+        assert "--prompt" not in args
+
+    def test_dataset_and_prompt_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="二选一"):
+            PerfAdapter().build_config(make_request(
+                perf={"dataset": "a.jsonl", "prompt": "p"}))
+        with pytest.raises(ValueError, match="perf.dataset"):
+            PerfAdapter().build_config(make_request(perf={}))
+
+    def test_max_tokens_bad_range(self):
+        with pytest.raises(ValueError, match="max_tokens"):
+            PerfAdapter().build_config(make_request(
+                perf={"prompt": "p", "max_tokens": [100, 10]}))
+        with pytest.raises(ValueError, match="max_tokens"):
+            PerfAdapter().build_config(make_request(
+                perf={"prompt": "p", "max_tokens": [1, 2, 3]}))
 
 
 SUMMARY = {
@@ -199,3 +340,59 @@ async def test_run_offline_end_to_end(tmp_path):
     assert ("perf:c1", "qps") in rows
     assert rows[("perf:c1", "qps")].passed is True   # 阈值 0 恒过，链路判定可用
     assert (tmp_path / "logs" / "perf.log").is_file()
+
+
+async def test_run_dataset_load_end_to_end(tmp_path):
+    """数据集负载端到端：jsonl 导出 → evalscope custom 数据集逐条取用。"""
+    import shutil
+
+    if shutil.which("evalscope") is None:      # pragma: no cover - 环境守卫
+        pytest.skip("evalscope CLI 不可用")
+    ds = tmp_path / "ds.jsonl"
+    ds.write_text("\n".join(
+        json.dumps({"id": i, "question": f"问题 {i}"}) for i in range(1, 4)) + "\n",
+        encoding="utf-8")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakePerfHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = make_request(
+            work_dir=tmp_path,
+            target={"type": "openai_compatible",
+                    "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    "model": "fake-model"},
+            perf={"dataset": str(ds), "mode": "baseline",
+                  "baseline": {"parallel": 2}, "number": 3, "stream": False,
+                  "no_test_connection": True},
+            metric_thresholds={"error_rate": 0.0})
+        result = await PerfAdapter().run(req)
+    finally:
+        server.shutdown()
+    exported = (tmp_path / "load" / "prompts.txt").read_text(encoding="utf-8")
+    assert exported.splitlines() == ["问题 1", "问题 2", "问题 3"]   # 导出落盘
+    rows = {(r.dataset, r.metric): r for r in result.rows}
+    assert rows[("perf:c2", "error_rate")].passed is True
+
+
+async def test_run_probe_mode_end_to_end(tmp_path):
+    """摸高模式端到端：SLA 自动搜索产出 sla_summary + 各档指标行。"""
+    import shutil
+
+    if shutil.which("evalscope") is None:      # pragma: no cover - 环境守卫
+        pytest.skip("evalscope CLI 不可用")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakePerfHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = make_request(
+            work_dir=tmp_path,
+            target={"type": "openai_compatible",
+                    "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    "model": "fake-model"},
+            perf={"prompt": "hi", "mode": "probe",
+                  "probe": {"max_parallel": 4, "sla": {"avg_ttft": 60000},
+                            "runs": 1},
+                  "stream": False, "no_test_connection": True})
+        result = await PerfAdapter().run(req)
+    finally:
+        server.shutdown()
+    assert result.rows, "摸高模式应产出指标行（各搜索档）"
+    assert any("sla_summary.json" in name for name in result.report_files)

@@ -170,6 +170,20 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
       latency_avg_ms/latency_p95_ms/tpot_ms/itl_ms/qps/output_tps/error_rate）
       → run_metric_summary，趋势页与精度/功能并列可比。
 - [x] E3 文档与真实验证：examples/perf_evalscope.yaml、README 性能压测章节。
+- [x] E4 负载层（2026-09-08 完成，用户评审：真实压测不用固定提示词）：`perf.dataset`
+      指向本地 jsonl/csv（行数 = 条数，输入键同平台约定 input/question/instruction/
+      prompt/query/user），适配器导出逐行 prompt 文件（evalscope `custom` 数据集）
+      打流时逐条取用；`max_tokens` 支持标量定长与 `[min, max]` 区间均匀采样
+      （输出长度分布）；`tokenizer_path` / `min/max_prompt_length` 透传。
+- [x] E5 模式层（2026-09-08 完成，用户评审：缺爬坡/摸高/基准/长稳与时长配置）：
+      `perf.mode` 四选一——baseline（固定并发）/ ramp（from/to/step 展开并发
+      梯度，to 必含，duration = 单档秒数）/ probe（`--sla-auto-tune` SLA 下二分
+      搜索最大并发，sla 指标集 fail-fast 校验）/ soak（duration 驱动，number
+      自动放大安全上限防默认 1000 提前结束）；省略 mode = v1 直配兼容。
+      **压测中途熔断上游不支持**（SLA 档间判定才有），记 backlog。
+      踩坑：probe 产出布局为 `sla_tuning/sla_parallel_N_run_i/`（非
+      `parallel_X_number_Y/`），collect 改统一 glob `**/benchmark_summary.json`
+      按并发聚合（多 run 均值），两种布局都覆盖。
 
 关键决策：
 
@@ -231,3 +245,4 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
 - 2026-09-07 API 契约域 9 场景 38 例（模块 D 补强 D9）：功能测试从「模型能力」扩展到「OpenAI 兼容层协议正确性」，严格按规范断言。harness 扩展：预期错误模式/SSE 流式/请求构造控制/响应体断言（数字索引+数组多断言）。真实 Ollama 端到端实测 9 例 FAIL 均为真实规范差异（n 忽略/参数校验缺失/超上下文截断/tool_choice 支持不完整等，desc 已标注）——该域的价值就是显性暴露服务端兼容性差异。+27 单测（新断言键正反例、SSE 解析、预期错误模式、fake server e2e）。
 - 2026-09-07 API 契约域场景整合（用户评审反馈：分得太细）：9 细场景合并为 4 大场景（38 例不变，用例 id 不变）——api_params（请求侧 22 例：参数校验+可选参数+json_mode+tool_choice+输入鲁棒性）、api_stream（流式 4）、api_limits（输出侧 7：限制+长输出）、api_shape（响应体契约 5）。口径：按请求侧/流式/输出侧/响应侧划分，场景粒度=一个 pass_rate 汇总主题。注意：历史 run 中的旧场景名（api_optional_params 等）不再产出新行，趋势对比按新场景名重建。
 - 2026-09-08 **模块 E：性能压测（evalscope-perf 适配器）完成**。引擎选型经用户挑战修正：压测客户端不自研（客户端能力会污染测量），「两者都要，perf 先」——evalscope perf 打头阵（零新依赖、LLM 原生 TTFT/TPOT/ITL/吞吐分档、并发梯度/warmup/开环限速内置），locust 后置备选。交付：`aite/tools/perf_adapter.py`（perf yaml 段 → CLI 参数映射 / subprocess 执行 / benchmark_summary+percentile 解析 → 每档每指标一行 perf:c<并发> 入库）、examples/perf_evalscope.yaml、README 性能压测章节。+16 单测含离线端到端（真实 evalscope perf 子进程打 fake OpenAI 端点全链路 6.4s 跑通）。踩坑：① evalscope 包无 `__main__`（CLI 是 console script，须 shutil.which 定位子进程）；② `--number` 与 `--parallel` 必须等长（标量自动复制对齐）；③ **工具层阈值方向**——`passed >= 硬编码`对延迟/错误率类"越低越好"指标是反的（自研引擎本有 higher_is_better 语义，工具层一直没接；evalscope 全是准确率类未暴露，perf 一上就露馅），ToolMetricRow 加方向字段（默认 True 向后兼容）+ overall 行透传。
+- 2026-09-08 模块 E 补强 E4+E5（用户评审：固定提示词不真实、缺压测模式与时长配置）：负载层数据集驱动（perf.dataset 导出逐行 prompt + max_tokens 区间采样）+ 模式层四选一（baseline 基准/ramp 爬坡/probe 摸高 SLA 二分搜索/soak 长稳 duration 驱动）；v1 直配写法保留兼容。collect 统一 glob 两种产出布局（普通 parallel_X_number_Y 与摸高 sla_tuning/sla_parallel_N_run_i）按并发聚合。+14 单测（模式映射/ramp 展开/sla 构造/导出/三场景离线 e2e）。中途熔断上游不支持，记 backlog。
