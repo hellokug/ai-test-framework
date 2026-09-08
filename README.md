@@ -288,7 +288,7 @@ ruff check aite tests
 
 文档：[架构](docs/architecture.md) · [数据集指南](docs/dataset-guide.md) ·
 [配置参考](docs/config-reference.md) · [插件指南](docs/plugin-guide.md) · [兼容策略](docs/compat.md) ·
-[功能测试架构](docs/functional-testing.md) · [路线图](docs/roadmap.md)
+[功能测试架构](docs/functional-testing.md) · [交接文档](docs/handover.md) · [路线图](docs/roadmap.md)
 
 ## 成本与预算
 
