@@ -138,6 +138,10 @@ CDN，aite/web/static）加面板三处：index.html nav+section、app.js go()/m
 **可靠性 chaos（模块 I）**：先调研 chaosblade/chaos-mesh/Litmus 可集成性，
 不可行自研五能力（对象感知/注入/检测/恢复/业务观测），与 reliability 域打通。
 
+**架构整改（2026-09-10 评审立项，P0 已完成）**：P1 service 层引入 / 适配器 DRY
+收敛 / 超长函数拆分 ×4；P2 config.py 收口 / 契约补齐 / 路由瘦身。条目见 roadmap
+「架构整改」节，按 CLAUDE.md 架构原则基线执行。
+
 **tools/evalscope（模块 C 收尾）**：C3 平台数据集 → evalscope 自定义格式转换；
 C4b `/api/v1/tools/...` REST 端点（与前端阶段一并）；C4c 文档复核。
 
@@ -165,6 +169,8 @@ instruction_following 已有设计评审记录，未实施）。
 | SuiteConfig extra=forbid——工具域 suite 必须经 engine 分支旁路 load_suite | roadmap C4b |
 | locust Aggregated 行被 POST+TTFT 双事件污染，统计取 POST 行 | roadmap F2 |
 | async engine 上 sa.inspect(sync_engine) 会 MissingGreenlet，须 conn.run_sync | roadmap 进度 2026-09-09 |
+| SSE 发布端 channel=runs:{task_id}，run_id 须经 bg_task 反查再订阅 | roadmap 进度 2026-09-10 |
+| 架构原则基线在 CLAUDE.md「架构设计原则」节，评审/写码照它执行 | 同上 |
 | run_task 返回值不可依赖，一律走文件收集 | roadmap C2 |
 
 ## 7. 新会话开工模板

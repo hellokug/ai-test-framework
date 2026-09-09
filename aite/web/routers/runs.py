@@ -203,9 +203,21 @@ async def stream_task(task_id: str, request: Request, state: Any = Depends(get_s
 
 @router.get("/runs/{run_id}/stream")
 async def stream_run(run_id: str, request: Request, state: Any = Depends(get_state)):
-    """Live progress for runs launched in this process (channel keyed by task id);
-    historical runs expose their stored state instead."""
+    """Live progress by run_id：发布端 channel 一律 `runs:{task_id}`，此处先反查
+    run 对应的后台任务再订阅；无后台任务（如 CLI 发起的历史 run）直接回一条
+    终态事件关流——订阅不存在的频道会永久挂起。"""
     run = await state.repo.get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
-    return await _stream(state, request, f"runs:{run_id}")
+    task = await state.repo.get_bg_task_by_run(run_id)
+    if task:
+        return await _stream(state, request, f"runs:{task['id']}")
+    # 历史 run：无实时流，回存态终态事件（SSE 语义保持一致：一帧 + 关流）
+    event = {"type": "done", "run_id": run_id, "status": run["status"]}
+
+    async def gen():
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})

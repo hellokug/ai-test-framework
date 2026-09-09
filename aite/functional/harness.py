@@ -203,7 +203,7 @@ def _shared_client() -> httpx.Client:
 
 
 def strip_fences(text: str) -> str:
-    """剥离 Markdown 代码围栏（\`\`\`json ... \`\`\` → 内容）。"""
+    """剥离 Markdown 代码围栏（```json ... ``` → 内容）。"""
     t = text.strip()
     if t.startswith("```"):
         first_nl = t.find("\n")

@@ -205,6 +205,9 @@ class ExecutionEngine:
             async with sem:
                 if limiter:
                     await limiter.acquire()
+                # 软预算：熔断读与成本累加之间隔着 invoke await，在途请求成本不可见，
+                # 实际花费可超出 max_cost_usd 最多「并发数 × 单请求成本」——固有近似，
+                # 累加本身均在无 await 的同步段（事件循环内原子），无丢更新竞态
                 if config.max_cost_usd is not None and report.total_cost_usd >= config.max_cost_usd:
                     response = TargetResponse(error="cost budget exceeded (circuit breaker)")
                 else:

@@ -51,7 +51,12 @@ def _parse_dt(value: Any):
     if value is None:
         return None
     from datetime import datetime
+
+    from aite.utils.logging import get_logger
+
     try:
         return datetime.fromisoformat(str(value))
     except ValueError:
+        # 错误显式化（CLAUDE.md 原则 9）：坏数据回退当前时间必须告警可辨
+        get_logger(__name__).warning("无法解析时间戳 %r，回退为当前时间", value)
         return utcnow()

@@ -446,6 +446,29 @@ class SqlAlchemyRepository(Repository):
                 "finished_at": aware(r.finished_at).isoformat() if r.finished_at else None,
             } for r in rows]
 
+    async def get_bg_task_by_run(self, run_id: str) -> dict | None:
+        """按 run_id 反查最近的后台任务（SSE 频道解析：发布端 channel 用 task id）。"""
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(BgTaskRow).where(BgTaskRow.run_id == run_id)
+                .order_by(BgTaskRow.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
+            return await self.get_bg_task(str(row.id)) if row else None
+
+    async def mark_stale_bg_tasks(self) -> int:
+        """启动时清理：崩溃/强杀残留的 created/running 任务标记为 error。
+
+        状态机闭合（CLAUDE.md 原则 8）：进程内句柄消失后 DB 不得停留中间态。
+        """
+        async with self.db.sessions() as session:
+            result = await session.execute(
+                update(BgTaskRow)
+                .where(BgTaskRow.status.in_(("pending", "running")))
+                .values(status="error", error="server restarted before completion",
+                        finished_at=utcnow()))
+            await session.commit()
+            return result.rowcount or 0
+
     async def get_bg_task(self, task_id: str) -> dict | None:
         async with self.db.sessions() as session:
             row = await session.get(BgTaskRow, task_id)

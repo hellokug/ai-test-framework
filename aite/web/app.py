@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,8 +13,11 @@ from fastapi.staticfiles import StaticFiles
 
 from aite.storage.db import Database
 from aite.storage.repositories import SqlAlchemyRepository
+from aite.utils.logging import get_logger
 from aite.web.deps import auth_guard, get_state
 from aite.web.events import EventBus
+
+logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -32,10 +36,23 @@ class AppState:
 
     async def startup(self) -> None:
         await self.repo.init()
+        # 状态机闭合：上次进程崩溃/强杀残留的中间态任务标记为 error
+        stale = await self.repo.mark_stale_bg_tasks()
+        if stale:
+            logger.warning("标记 %d 个残留后台任务为 error（上次进程未正常结束）", stale)
 
     async def shutdown(self) -> None:
+        bg_ids = list(self.tasks)
         for task in self.tasks.values():
             task.cancel()
+        if bg_ids:
+            await asyncio.gather(*(self.tasks[t] for t in bg_ids if t in self.tasks),
+                                 return_exceptions=True)
+        # worker 的 except Exception 不兜 CancelledError，DB 终态在此显式回写
+        for bg_id in bg_ids:
+            with contextlib.suppress(Exception):   # shutdown 尽力回写，不阻断关闭
+                await self.repo.update_bg_task(bg_id, status="error",
+                                               error="server shutdown")
         await self.repo.close()
 
 

@@ -136,3 +136,20 @@ async def test_legacy_db_details_column_migration(tmp_path):
         assert (await repo.get_run("r1"))["details"]["work_dir"] == "x"
     finally:
         await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_stale_bg_tasks(repo):
+    """状态机闭合：pending/running 残留任务启动时批量标记 error，终态不动。"""
+    done_id = await repo.create_bg_task("run_suite", {"run_name": "a"})
+    await repo.update_bg_task(done_id, status="done")
+    running_id = await repo.create_bg_task("run_suite", {"run_name": "b"})
+    await repo.update_bg_task(running_id, status="running")
+    pending_id = await repo.create_bg_task("run_suite", {"run_name": "c"})
+
+    marked = await repo.mark_stale_bg_tasks()
+
+    assert marked == 2
+    assert (await repo.get_bg_task(done_id))["status"] == "done"       # 终态不动
+    assert (await repo.get_bg_task(running_id))["status"] == "error"
+    assert (await repo.get_bg_task(pending_id))["status"] == "error"

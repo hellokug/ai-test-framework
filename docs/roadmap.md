@@ -324,3 +324,25 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
 - 2026-09-08 模块 E 补强 E4+E5（用户评审：固定提示词不真实、缺压测模式与时长配置）：负载层数据集驱动（perf.dataset 导出逐行 prompt + max_tokens 区间采样）+ 模式层四选一（baseline 基准/ramp 爬坡/probe 摸高 SLA 二分搜索/soak 长稳 duration 驱动）；v1 直配写法保留兼容。collect 统一 glob 两种产出布局（普通 parallel_X_number_Y 与摸高 sla_tuning/sla_parallel_N_run_i）按并发聚合。+14 单测（模式映射/ramp 展开/sla 构造/导出/三场景离线 e2e）。中途熔断上游不支持，记 backlog。
 - 2026-09-09 模块 E 补强 E6+E7 + 工具域 REST（C4b 切片）：①时长参数统一（用户评审：所有场景都要能用 duration 控制总时长，与单档时长分开）——duration 全模式 = 整场总时长（单档直传/多档均分/probe 看门狗截断收已完成轮次），新增 level_duration 每档秒数（probe = 每轮墙钟上限），两键互斥；number 联动扩展到全模式（时长驱动未显式配 → 放大安全上限，修复非 soak 配 duration 被 8 条先到为准掐死的坑）。②locust 适配器转正（engine: locust，复用 perf 段，probe 报错不支持，spawn_rate 新增，指标命名与 evalscope-perf 对齐，_failures.csv 错误明细进 failures）。③工具域 REST：GET /tools/engines + /tools/benchmarks（前端建任务表单数据源；任务执行复用 POST /runs + SSE）。立项模块 F（前端任务编排与大屏）/G（执行机纳管）/H（性能数据归档）/I（可靠性 chaos 框架），需求已对齐未实施。+16 单测（E6 时长语义/看门狗/截断容错）+16 单测（locust build_config/负载落盘/CSV 解析/执行守卫）+4 web 冒烟（322 全绿）。
 - 2026-09-09 接口完善（用户指示：前端后置、接口优先；审计发现四域里只有自研引擎域的 CRUD/运行真实可用——SuiteConfig extra=forbid 把工具域 suite 挡死）：①POST /suites 与 POST /runs 补 engine 路由（工具域走 parse_tool_suite 轻 fail-fast，运行侧新增 _execute_tool_run 与 CLI 同源）；②DELETE /suites 实现（501 转正，run.suite_id 置 NULL 保留审计）；③test_run 加 details JSON 列（产出目录/报告文件/失败明细落库，老库 PRAGMA 轻迁移补列——顺带修复迁移代码路径首次执行暴露的 async inspect 错误）；④压测时序数据层（F2）：timeseries.json 统一形状（evalscope-perf 逐请求 db 事后 5s 桶聚合 / locust --csv-full-history 原生 1s），GET /runs/{id}/timeseries 端点；修 locust Aggregated 口径 bug（改取 POST 行）；⑤F3 synthetic 合成负载（三选一，确定性生成）。+10 单测（假工具 e2e 路由/timeseries/迁移/口径/时序聚合），332 全绿。
+## 架构整改（2026-09-09 全码评审产出，P0 已完成）
+
+> 七原则 + 补充原则已写入 CLAUDE.md「架构设计原则」节，为代码评审基线。
+> 评审证据与问题清单见当日会话记录；以下为待落地项。
+
+- [ ] P1-1 service 层引入：`aite/service/`（run_service/suite_service）收口
+      engine 路由判断/parse 校验/bg_task 编排/limit 改写（CLI 与 Web 各持一份的
+      重复），`run_tool_suite` 拆出 overall 加权聚合，CLI repo 样板收
+      asynccontextmanager
+- [ ] P1-2 适配器 DRY 收敛：`aite/tools/perf_common.py` 抽 _expand_ramp/时长
+      双键/负载三选一/_MODES/DEFAULT_TIMEOUT/_positive_ints（_export_prompts
+      转公开）；subprocess 执行三连抽 `tools/subproc.py`；report_files glob
+      抽 helper
+- [ ] P1-3 超长函数拆分（>80 行 ×4）：perf build_config(164)/locust collect(123)/
+      perf collect(111)/engine _evaluate(91)，拆后用 AST 脚本回归
+- [ ] P2-1 aite/config.py：默认 DB ×5 / reports ×4 / 端口 / 超时 / 环境变量名收口
+- [ ] P2-2 契约补齐：collect 进 ToolAdapter ABC；delete_suite/details 进
+      Repository 接口；registry 加 unregister（测试不再 pop 私有 dict）
+- [ ] P2-3 路由瘦身：cases/manual_eval/tasks/reports 的解析/聚合/文件 IO 下沉；
+      context.build_gateway 反感知（metrics 自带 needs_llm 属性）；Case.check
+      14 键改 dict 分派
+- 2026-09-10 架构全码评审（用户给定七原则）+ P0 整改完成：①原则入约——CLAUDE.md 新增「架构设计原则」节（七原则 + 5 条补充：单一事实来源/错误显式化/契约同步演进/时间 UTC 统一/外部边界纪律）与「测试策略」节（分域选测不默认全量）；②P0 修复——SSE 频道错位（stream_run 按 run_id 反查 bg_task 订阅正确频道，历史 run 回存态终态帧；此前订阅 runs:{run_id} 永无事件）、bg_task 状态机闭合（startup 标 stale + shutdown cancel 后回写 error，repo 新增 get_bg_task_by_run/mark_stale_bg_tasks）、harness docstring 非法转义 SyntaxWarning、_parse_dt 静默吞坏时间戳改显式告警；③评审修正——engine 成本熔断 check-then-act 是在途成本不可见的固有软预算近似（+= 均在同步段原子），加注释说明不改逻辑。P1/P2 整改项立「架构整改」节待认领。+4 测试（stale 标记/stream 解析/历史 run/404），分域验证 91 项全绿。

@@ -329,3 +329,93 @@ class TestToolSuiteApi:
         assert client.delete("/api/v1/suites/del-me").json()["deleted"] == "del-me"
         assert client.get("/api/v1/suites/del-me").status_code == 404
         assert client.delete("/api/v1/suites/del-me").status_code == 404
+
+    def test_stale_bg_tasks_marked_on_startup(self, tmp_path):
+        """崩溃残留的 running/pending 任务在 startup 时标记 error（状态机闭合）。"""
+        from fastapi.testclient import TestClient
+
+        from aite.web.app import create_app
+
+        storage = f"sqlite+aiosqlite:///{tmp_path/'stale.db'}"
+        # 先建库塞入残留中间态任务
+        import asyncio
+
+        from aite.storage.db import Database
+        from aite.storage.repositories import SqlAlchemyRepository
+
+        async def seed():
+            repo = SqlAlchemyRepository(Database(storage))
+            await repo.init()
+            tid = await repo.create_bg_task("run_suite", {"run_name": "ghost"})
+            await repo.update_bg_task(tid, status="running")
+            await repo.close()
+            return tid
+
+        ghost_id = asyncio.run(seed())
+        app = create_app(storage_url=storage)
+        with TestClient(app):        # lifespan startup 执行 stale 标记
+            pass
+        import asyncio as _aio
+
+        async def check():
+            repo = SqlAlchemyRepository(Database(storage))
+            await repo.init()
+            task = await repo.get_bg_task(ghost_id)
+            await repo.close()
+            return task
+
+        task = _aio.run(check())
+        assert task["status"] == "error"
+        assert "restarted" in task["error"]
+
+    def test_stream_by_run_id_resolves_task_channel(self, client, fake_tool, tmp_path):
+        """run_id 反查 bg_task 订阅正确频道：已完成 run 回放 done 帧后关流。"""
+        import json as _json
+
+        cfg = self._perf_config()
+        cfg["output_dir"] = str(tmp_path / "rep3")
+        launched = client.post("/api/v1/runs", json={"config": cfg})
+        task = self.wait_done(client, launched.json()["task_id"])
+        run_id = task["run_id"]
+        with client.stream("GET", f"/api/v1/runs/{run_id}/stream") as resp:
+            assert resp.status_code == 200
+            frames = [line for line in resp.iter_lines() if line.startswith("data: ")]
+        assert frames, "SSE 应至少回放一帧"
+        event = _json.loads(frames[0][6:])
+        assert event["type"] in ("done", "error")
+
+    def test_stream_historical_run_without_task(self, tmp_path):
+        """CLI 发起的 run 无 bg_task：回一条存态终态帧关流（不挂起、不 404）。"""
+        import asyncio
+
+        from fastapi.testclient import TestClient
+
+        from aite.web.app import create_app
+
+        storage = f"sqlite+aiosqlite:///{tmp_path/'hist.db'}"
+
+        async def seed():
+            from aite.storage.db import Database
+            from aite.storage.repositories import SqlAlchemyRepository
+
+            repo = SqlAlchemyRepository(Database(storage))
+            await repo.init()
+            run_id = await repo.create_run("cli-run", {})
+            await repo.update_run(run_id, status="passed")
+            await repo.close()
+            return run_id
+
+        run_id = asyncio.run(seed())
+        app = create_app(storage_url=storage)
+        with TestClient(app) as client:
+            with client.stream("GET", f"/api/v1/runs/{run_id}/stream") as resp:
+                assert resp.status_code == 200
+                frames = [ln for ln in resp.iter_lines() if ln.startswith("data: ")]
+        assert len(frames) == 1
+        import json as _json
+
+        event = _json.loads(frames[0][6:])
+        assert event == {"type": "done", "run_id": run_id, "status": "passed"}
+
+    def test_stream_unknown_run_404(self, client):
+        assert client.get("/api/v1/runs/nonexistent/stream").status_code == 404
