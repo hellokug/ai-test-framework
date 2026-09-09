@@ -232,3 +232,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local skill-audit working copy (external repo clone, do not commit)
+skill-audit/
+
+# ZCode session artifacts
+.zcode/
