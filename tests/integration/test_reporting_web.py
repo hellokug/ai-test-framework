@@ -207,3 +207,125 @@ metrics: [{exact_match: {threshold: 0.5}}]
 
     def test_tools_benchmarks_requires_engine(self, client):
         assert client.get("/api/v1/tools/benchmarks").status_code == 422
+
+
+class TestToolSuiteApi:
+    """工具域 API：POST /suites|/runs 的 engine 路由 + timeseries 端点 + DELETE。"""
+
+    @pytest.fixture()
+    def client(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from aite.web.app import create_app
+
+        app = create_app(storage_url=f"sqlite+aiosqlite:///{tmp_path/'web.db'}")
+        with TestClient(app) as client:
+            yield client
+
+    @pytest.fixture()
+    def fake_tool(self, tmp_path):
+        """注册一个假压测引擎：run 时写 timeseries.json 到 work_dir。"""
+
+        from aite.tools.base import ToolAdapter, ToolMetricRow, ToolRunResult, register_tool
+
+        @register_tool("fake-perf")
+        class _FakePerf(ToolAdapter):
+            name = "fake-perf"
+
+            def build_config(self, req):
+                return {}
+
+            def list_tasks(self):
+                return [{"name": "chat", "pretty_name": "fake", "metrics": ["qps"],
+                         "tags": ["perf"], "few_shot_num": None}]
+
+            async def run(self, req):
+                import json as _json
+
+                req.work_dir.mkdir(parents=True, exist_ok=True)
+                ts = {"engine": "fake-perf", "bucket_seconds": 5.0,
+                      "series": [{"users": 4, "run": 0, "label": "fake:c4",
+                                  "points": [{"t": 0, "ttft_avg": 100.0,
+                                              "ttft_p95": 200.0,
+                                              "latency_avg": 900.0,
+                                              "latency_p95": 1200.0,
+                                              "rps": 2.0, "tok_s": 50.0,
+                                              "errors": 0}]}],
+                      "errors": []}
+                (req.work_dir / "timeseries.json").write_text(
+                    _json.dumps(ts), encoding="utf-8")
+                return ToolRunResult(rows=[ToolMetricRow(
+                    dataset="fake:c4", metric="qps", value=2.0, count=10)])
+
+        yield _FakePerf
+        # 反注册避免污染其他测试
+        from aite.tools.base import _TOOLS
+        _TOOLS.pop("fake-perf", None)
+
+    def _perf_config(self):
+        return {
+            "run_name": "web-perf",
+            "engine": "fake-perf",
+            "target": {"type": "openai_compatible", "base_url": "http://x/v1",
+                       "model": "m"},
+            "perf": {"prompt": "p", "parallel": [4], "duration": 10},
+            "output_dir": "./reports",
+        }
+
+    def wait_done(self, client, task_id):
+        import time
+        for _ in range(100):
+            task = client.get(f"/api/v1/tasks/{task_id}").json()
+            if task.get("status") in ("done", "error"):
+                return task
+            time.sleep(0.05)
+        raise AssertionError("task not finished")
+
+    def test_store_and_run_tool_suite(self, client, fake_tool, tmp_path):
+        cfg = self._perf_config()
+        cfg["output_dir"] = str(tmp_path / "rep")
+        # 1) suite 存储（engine 路由走 parse_tool_suite 校验）
+        ok = client.post("/api/v1/suites", json={
+            "name": "web-perf", "config": cfg})
+        assert ok.status_code == 200 and ok.json()["validated"] is True
+        # 2) 按 suite 名运行
+        launched = client.post("/api/v1/runs", json={"suite_name": "web-perf"})
+        assert launched.status_code == 200
+        task = self.wait_done(client, launched.json()["task_id"])
+        assert task["status"] == "done"
+        run_id = task["run_id"]
+        # 3) run 详情带 details（reports/work_dir 落库）
+        run = client.get(f"/api/v1/runs/{run_id}").json()
+        assert run["details"]["work_dir"]
+        assert run["summaries"][0]["metric"] == "qps"
+        # 4) timeseries 端点
+        ts = client.get(f"/api/v1/runs/{run_id}/timeseries")
+        assert ts.status_code == 200
+        body = ts.json()
+        assert body["engine"] == "fake-perf"
+        assert body["series"][0]["points"][0]["ttft_avg"] == 100.0
+
+    def test_run_tool_suite_inline_config(self, client, fake_tool, tmp_path):
+        cfg = self._perf_config()
+        cfg["output_dir"] = str(tmp_path / "rep2")
+        resp = client.post("/api/v1/runs", json={"config": cfg})
+        assert resp.status_code == 200
+        task = self.wait_done(client, resp.json()["task_id"])
+        assert task["status"] == "done"
+
+    def test_invalid_tool_suite_rejected(self, client):
+        resp = client.post("/api/v1/runs", json={"config": {
+            "run_name": "bad", "engine": "fake-perf"}})   # 缺 target.model 等
+        assert resp.status_code == 422
+
+    def test_timeseries_404_for_plain_run(self, client, tmp_path):
+        run_id = "00000000-0000-0000-0000-000000000000"
+        assert client.get(f"/api/v1/runs/{run_id}/timeseries").status_code == 404
+
+    def test_delete_suite(self, client, fake_tool):
+        cfg = self._perf_config()
+        assert client.post("/api/v1/suites",
+                           json={"name": "del-me", "config": cfg}).status_code == 200
+        assert client.delete("/api/v1/suites/del-me").json()["deleted"] == "del-me"
+        assert client.get("/api/v1/suites/del-me").status_code == 404
+        assert client.delete("/api/v1/suites/del-me").status_code == 404

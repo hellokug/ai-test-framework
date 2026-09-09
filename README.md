@@ -217,10 +217,12 @@ junit-xml 与场景日志，无需翻文件定位）。体积有预算：输入�
 vLLM 社区同源的 LLM 压测方案），aite 负责编排与统一入库。locust 适配器已接入
 （见下节「locust 压测」，非 LLM 端点 / 极端规模分布式场景）。
 
-**负载**（`perf.dataset` 与 `perf.prompt` 二选一）：`dataset` 指向本地 jsonl/csv
-（行数 = 条数，输入键同平台数据集约定：input/question/instruction/prompt/query/
-user 取首个命中），适配器导出为逐行 prompt 文件逐条取用；`max_tokens` 标量 =
-定长、`[min, max]` = 每请求均匀采样（输出长度分布）。
+**负载**（`perf.dataset` / `perf.prompt` / `perf.synthetic` 三选一）：`dataset`
+指向本地 jsonl/csv（行数 = 条数，输入键同平台数据集约定：input/question/
+instruction/prompt/query/user 取首个命中），适配器导出为逐行 prompt 文件逐条
+取用；`synthetic: {count, prompt_length}` 由框架确定性生成固定输入（无数据集
+时压测可复现，曲线可比）；`max_tokens` 标量 = 定长、`[min, max]` = 每请求均匀
+采样（输出长度分布）。
 
 **模式**（`perf.mode` 四选一，省略 = 直配 `parallel`/`number` 兼容写法）：
 
@@ -275,7 +277,7 @@ perf_report.html、执行日志）。
 互补：非 OpenAI 兼容端点改造 / 极端规模分布式（worker 模式）场景用；LLM 原生
 指标（TPOT/ITL/吞吐分档）需求用 evalscope-perf。
 
-- **复用同一 `perf` 配置段**（同键同语义）：负载 dataset/prompt、模式
+- **复用同一 `perf` 配置段**（同键同语义）：负载 dataset/prompt/synthetic、模式
   baseline/ramp/soak + 直配（**probe 不支持**，配置即报错——SLA 二分搜索是
   evalscope perf 专有）、时长 duration/level_duration 同语义（locust 每档
   独立 `-t` 进程到点自退出，无看门狗）
@@ -295,6 +297,36 @@ aite run -c examples/locust.yaml
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、
 模型管理、人工评测闭环（领取/评分/导出 CSV）、后台任务。可选 `AITE_WEB_TOKEN` Bearer 鉴权。
+
+**REST API（`/api/v1`，四域通用）**——任务 = suite：
+
+| 能力 | 端点 | 说明 |
+|---|---|---|
+| 任务 CRUD | `GET/POST /suites`、`GET/DELETE /suites/{name}` | 带自动校验（自研域 SuiteConfig 强校验 / 工具域 parse_tool_suite）；POST 即 upsert（创建+更新） |
+| 任务运行 | `POST /runs`（config_yaml / config / suite_name） | 后台执行 + `task_id`；带 `engine` 字段自动路由工具域（evalscope / pytest / evalscope-perf / locust） |
+| 进度 | `GET /tasks/{id}`、`GET /tasks/{id}/stream` | 轮询 / SSE 实时 |
+| 结果 | `GET /runs/{id}`、`/runs/{id}/cases`、`/runs/{id}/metrics` | run 详情含 `details`（产出目录/报告文件/失败明细） |
+| 压测时序 | `GET /runs/{id}/timeseries` | 大屏曲线数据源（见下） |
+| 工具目录 | `GET /tools/engines`、`GET /tools/benchmarks?engine=` | 引擎/场景选择器数据源 |
+| 趋势 | `GET /trends` | 跨 run 历史曲线（overall 行） |
+
+**压测时序口径**（`GET /runs/{id}/timeseries`，形状
+`{engine, bucket_seconds, series: [{users, run, label, points}], errors}`，
+每个 point：`{t, ttft_avg, ttft_p95, latency_avg, latency_p95, rps, tok_s, errors}`）：
+
+- **evalscope-perf**：run 结束后从各档 `benchmark_data.db`（逐请求明细）聚合，
+  桶间隔 `perf.bucket_seconds` 缺省 **5 秒**（LLM 请求秒级耗时，1s 桶内样本少
+  分位抖动大）；按 completed_time 落桶，`ttft/latency` 取桶内成功请求均值与
+  95 分位（线性插值），`rps/tok_s` = 桶内完成数 / completion_tokens ÷ 桶时长，
+  `errors` = 桶内失败数；错误只给计数（错误文本在 pickle 内不解析）
+- **locust**：`--csv-full-history` 原生 **每 1 秒**打点，透传不重算
+  （POST 行 rps/Failures/s/50%/95% + TTFT 行）；错误分布从 `_failures.csv`
+  （错误文本 × 次数）
+- 终局指标口径修正：locust 统计取 **POST 行**（Aggregated 被 POST+TTFT 双事件
+  污染约一倍）
+
+工具域产出与失败明细经 `test_run.details` 落库（SQLite 老库自动轻迁移补列），
+跨进程可按 run_id 找回产出目录。
 
 工具域 REST（C4b 切片）：`GET /api/v1/tools/engines`（引擎选择器）、
 `GET /api/v1/tools/benchmarks?engine=…`（基准/场景目录）；任务创建/执行复用

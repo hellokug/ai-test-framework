@@ -96,6 +96,8 @@ class TestRunRow(Base):
     started_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
     error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    # 工具域元数据（reports/work_dir/failures 等）；自研引擎 details 不入库无膨胀
+    details: Mapped[dict | None] = mapped_column(sa.JSON(), nullable=True)
 
 
 class TestCaseResultRow(Base):

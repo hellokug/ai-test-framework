@@ -147,11 +147,15 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
             overall_score=next(iter(result.raw_score.values()), None),
             total_cases=report.total_cases,
             finished_at=report.finished_at,
+            # 元数据落库：产出目录 + 报告文件 + 失败明细（大屏/时序端点经此找回产出）
+            details={"reports": result.report_files, "work_dir": str(req.work_dir),
+                     "failures": result.failures[:50]},
         )
     except Exception as exc:  # noqa: BLE001 - run-level failure must be persisted
         logger.exception("tool run failed")
         report.status = "error"
         report.details["error"] = f"{type(exc).__name__}: {exc}"
         await repo.update_run(run_id, status="error", error=str(exc)[:2000],
-                              finished_at=utcnow())
+                              finished_at=utcnow(),
+                              details={"work_dir": str(req.work_dir)})
     return report

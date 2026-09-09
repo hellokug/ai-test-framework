@@ -28,6 +28,7 @@ error_rate，趋势并列可比）；tpot/itl/output_tps locust 无来源，不�
 from __future__ import annotations
 
 import csv
+import json
 import os
 import shutil
 import subprocess
@@ -42,7 +43,7 @@ from aite.tools.base import (
     register_tool,
     run_sync_in_thread,
 )
-from aite.tools.perf_adapter import _export_prompts
+from aite.tools.perf_adapter import _export_prompts, generate_synthetic_prompts
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -169,11 +170,25 @@ class LocustAdapter(ToolAdapter):
 
         dataset = str(cfg.get("dataset") or "").strip()
         prompt = str(cfg.get("prompt") or "").strip()
-        if dataset and prompt:
-            raise ValueError("perf.dataset 与 perf.prompt 二选一")
-        if not dataset and not prompt:
-            raise ValueError("locust 需要 perf.dataset（数据集文件）或 perf.prompt"
-                             "（固定提示词）")
+        synthetic = cfg.get("synthetic")
+        chosen = [k for k, v in (("dataset", dataset), ("prompt", prompt),
+                                 ("synthetic", synthetic)) if v]
+        if len(chosen) > 1:
+            raise ValueError("perf.dataset / perf.prompt / perf.synthetic 三选一")
+        if not chosen:
+            raise ValueError("locust 需要 perf.dataset（数据集文件）/ perf.prompt（固定提示词）"
+                             " / perf.synthetic（合成负载）三选一")
+        if synthetic:
+            if (not isinstance(synthetic, dict)
+                    or not isinstance(synthetic.get("count"), int)
+                    or isinstance(synthetic.get("count"), bool) or synthetic["count"] < 1
+                    or not isinstance(synthetic.get("prompt_length"), int)
+                    or isinstance(synthetic.get("prompt_length"), bool)
+                    or synthetic["prompt_length"] < 1):
+                raise ValueError("perf.synthetic 须为 {count: ≥1, prompt_length: ≥1}"
+                                 "（条数 / 每条目标字符数）")
+            synthetic = {"count": synthetic["count"],
+                         "prompt_length": synthetic["prompt_length"]}
 
         mode = cfg.get("mode")
         if mode == "probe":
@@ -216,7 +231,7 @@ class LocustAdapter(ToolAdapter):
 
         return {
             "url": url, "model": model, "api_key": api_key,
-            "dataset": dataset, "prompt": prompt,
+            "dataset": dataset, "prompt": prompt, "synthetic": synthetic,
             "stream": bool(cfg.get("stream", True)),
             "max_tokens": cfg.get("max_tokens"),
             "locustfile": str(req.work_dir / "locustfile.py"),
@@ -233,15 +248,21 @@ class LocustAdapter(ToolAdapter):
         return self.collect(req)
 
     def _write_load(self, cfg: dict) -> None:
-        """负载落盘：locustfile + 逐行 prompt 文件（dataset/prompt 统一）。"""
+        """负载落盘：locustfile + 逐行 prompt 文件（dataset/prompt/synthetic 统一）。"""
+        Path(cfg["locustfile"]).parent.mkdir(parents=True, exist_ok=True)
         Path(cfg["locustfile"]).write_text(_LOCUSTFILE_TEMPLATE, encoding="utf-8")
+        dest = Path(cfg["prompts_file"])
         if cfg["dataset"]:
-            n = _export_prompts(cfg["dataset"], Path(cfg["prompts_file"]))
+            n = _export_prompts(cfg["dataset"], dest)
             logger.info("locust 数据集负载导出 %d 条 prompt", n)
+        elif cfg["synthetic"]:
+            prompts = generate_synthetic_prompts(**cfg["synthetic"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("\n".join(prompts) + "\n", encoding="utf-8")
+            logger.info("locust 合成负载生成 %d 条 prompt", len(prompts))
         else:
-            path = Path(cfg["prompts_file"])
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(cfg["prompt"] + "\n", encoding="utf-8")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(cfg["prompt"] + "\n", encoding="utf-8")
 
     def _exec(self, cfg: dict) -> None:
         """逐档 subprocess 执行 locust；任一档失败即抛错（后续档不跑）。"""
@@ -255,6 +276,7 @@ class LocustAdapter(ToolAdapter):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ | {
             "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
             "AITE_LOCUST_URL": cfg["url"],
             "AITE_LOCUST_MODEL": cfg["model"],
             "AITE_LOCUST_API_KEY": cfg["api_key"],
@@ -268,7 +290,8 @@ class LocustAdapter(ToolAdapter):
         for run in cfg["runs"]:
             args = [
                 binary, "-f", cfg["locustfile"], "--headless", "--only-summary",
-                "--csv", run["csv"], "--html", run["html"],
+                "--csv", run["csv"], "--csv-full-history",   # 秒级时序（大屏曲线）
+                "--html", run["html"],
                 "-u", str(run["users"]), "-r", str(run["spawn_rate"]),
                 "-t", f"{int(run['seconds'])}s", "--host", host,
             ]
@@ -301,9 +324,12 @@ class LocustAdapter(ToolAdapter):
             users = stats_path.name[len("locust_u"):-len("_stats.csv")]
             label = f"locust:u{users}"
             rows = list(csv.DictReader(stats_path.open(encoding="utf-8")))
-            agg = next((r for r in rows if r.get("Type") == "Aggregated"), None)
+            # 口径：取 Type=POST 行（POST+TTFT 双事件会把 Aggregated 的 qps/延迟
+            # 抬高约一倍）；无 POST 行兜底 Aggregated
+            agg = (next((r for r in rows if r.get("Type") == "POST"), None)
+                   or next((r for r in rows if r.get("Type") == "Aggregated"), None))
             if agg is None:
-                logger.warning("locust 产出缺少 Aggregated 行，跳过 %s", stats_path)
+                logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s", stats_path)
                 continue
             ttft = next((r for r in rows if r.get("Type") == "TTFT"), None)
 
@@ -346,8 +372,65 @@ class LocustAdapter(ToolAdapter):
                         "detail": f"{frow.get('Error', '')}"
                                   f" ×{frow.get('Occurrences', '')}",
                     })
+
+        # ---- 秒级时序（--csv-full-history 产出，原生 1s 打点）→ timeseries.json ----
+        timeseries: dict = {"engine": self.name, "bucket_seconds": 1.0,
+                            "series": [], "errors": []}
+        for history_path in sorted(Path(cfg["output_dir"]).glob("*_stats_history.csv")):
+            users = history_path.name[len("locust_u"):-len("_stats_history.csv")]
+            by_ts: dict[float, dict] = {}
+            for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
+                rtype = hrow.get("Type")
+                if rtype not in ("POST", "TTFT"):
+                    continue
+                ts = num(hrow, "Timestamp")
+                if ts is None:
+                    continue
+                b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
+                                          "errors": 0.0})
+                if rtype == "POST":
+                    b["rps"] += num(hrow, "Requests/s") or 0.0
+                    b["errors"] += num(hrow, "Failures/s") or 0.0
+                    if num(hrow, "50%") is not None:
+                        b["latency"].append(num(hrow, "50%"))
+                    if num(hrow, "95%") is not None:
+                        b["latency"].append(num(hrow, "95%"))
+                else:
+                    if num(hrow, "50%") is not None:
+                        b["ttft"].append(num(hrow, "50%"))
+                    if num(hrow, "95%") is not None:
+                        b["ttft"].append(num(hrow, "95%"))
+            if not by_ts:
+                continue
+            t0 = min(by_ts)
+            points = []
+            for ts in sorted(by_ts):
+                b = by_ts[ts]
+                points.append({
+                    "t": round(ts - t0, 3),
+                    "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
+                    "ttft_p95": round(max(b["ttft"]), 1) if b["ttft"] else None,
+                    "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
+                    "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
+                    "rps": round(b["rps"], 3),
+                    "tok_s": None,   # locust 无 token 口径
+                    "errors": int(b["errors"]),
+                })
+            timeseries["series"].append({"users": int(users), "run": 0,
+                                         "label": f"locust:u{users}", "points": points})
+        if out.failures:
+            timeseries["errors"] = [
+                {"key": f["detail"].rsplit(" ×", 1)[0], "count": int(
+                    f["detail"].rsplit(" ×", 1)[1] or 0)}
+                for f in out.failures]
+        if timeseries["series"]:
+            ts_path = Path(cfg["output_dir"]).parent / "timeseries.json"
+            ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
+                               encoding="utf-8")
+            out.report_files["timeseries.json"] = str(ts_path)
         base = Path(cfg["output_dir"]).parent
         for pattern in ("locust_raw/**/*.html", "locust_raw/**/*_stats.csv",
+                        "locust_raw/**/*_stats_history.csv",
                         "logs/locust.log"):
             for p in sorted(base.glob(pattern)):
                 out.report_files[p.name] = str(p)

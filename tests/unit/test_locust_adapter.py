@@ -72,7 +72,7 @@ class TestBuildConfig:
             ({"prompt": "p", "mode": "baseline", "baseline": {"parallel": 4},
               "parallel": [1], "duration": 60}, "不要直接配"),
             ({"prompt": "p", "parallel": [0], "duration": 60}, "parallel"),
-            ({"dataset": "a.jsonl", "prompt": "p", "duration": 60}, "二选一"),
+            ({"dataset": "a.jsonl", "prompt": "p", "duration": 60}, "三选一"),
             ({}, "perf.dataset"),
         ]
         for perf, err in cases:
@@ -127,18 +127,20 @@ class TestWriteLoad:
             assert key in text
 
 
-def _write_stats(directory: Path, users: int, agg: dict, ttft: dict | None) -> None:
+def _write_stats(directory: Path, users: int, agg: dict, ttft: dict | None,
+                 post: dict | None = None) -> None:
     directory.mkdir(parents=True)
     cols = ["Type", "Name", "Request Count", "Failure Count", "Median Response Time",
             "Average Response Time", "Min Response Time", "Max Response Time",
             "Average Content Size", "Requests/s", "Failures/s",
             "50%", "66%", "75%", "80%", "90%", "95%", "98%", "99%", "99.9%",
             "99.99%", "100%"]
+    post = post if post is not None else dict(agg, Type="POST", Name="POST /chat/completions")
     post = {"Type": "POST", "Name": "POST /chat/completions",
-            "Request Count": str(agg["Request Count"]),
-            "Failure Count": str(agg["Failure Count"]),
-            "Average Response Time": agg["Average Response Time"],
-            "Requests/s": agg["Requests/s"], "95%": agg["95%"]}
+            "Request Count": post.get("Request Count", agg["Request Count"]),
+            "Failure Count": post.get("Failure Count", agg["Failure Count"]),
+            "Average Response Time": post.get("Average Response Time"),
+            "Requests/s": post.get("Requests/s"), "95%": post.get("95%")}
     rows = [post]
     if ttft is not None:
         rows.append({"Type": "TTFT", "Name": "POST /chat/completions",
@@ -183,6 +185,65 @@ class TestCollect:
         assert result.failures == [{"dataset": "locust:u4",
                                     "case": "POST",
                                     "detail": "HTTPError('HTTP 429') ×3"}]
+
+    def test_post_row_preferred_over_polluted_aggregated(self, tmp_path):
+        """口径修复：Aggregated 被 POST+TTFT 双事件污染，终局指标取 POST 行。"""
+        agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "200",
+               "Failure Count": "6", "Average Response Time": "18200",
+               "Requests/s": "1.1", "95%": "29100"}
+        post = {"Request Count": "100", "Failure Count": "3",
+                "Average Response Time": "9100", "Requests/s": "0.55", "95%": "14550"}
+        _write_stats(tmp_path / "locust_raw", 4, agg, ("560", "1100"), post=post)
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        by_metric = {r.metric: r for r in result.rows}
+        assert by_metric["qps"].value == pytest.approx(0.55)   # POST 行，非 1.1
+        assert by_metric["latency_avg_ms"].value == pytest.approx(9100)
+        assert by_metric["error_rate"].value == pytest.approx(0.03)
+
+    def test_stats_history_timeseries(self, tmp_path):
+        """--csv-full-history 产出 → 秒级时序 + timeseries.json 落盘。"""
+        agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "100",
+               "Failure Count": "3", "Average Response Time": "9100",
+               "Requests/s": "0.55", "95%": "14550"}
+        _write_stats(tmp_path / "locust_raw", 4, agg, ("560", "1100"))
+        (tmp_path / "locust_raw" / "locust_u4_failures.csv").write_text(
+            "Method,Name,Error,Occurrences\n"
+            "POST,POST /chat/completions,\"HTTPError('HTTP 429')\",3\n",
+            encoding="utf-8")
+        history_cols = ["Timestamp", "User Count", "Type", "Name", "Requests/s",
+                        "Failures/s", "50%", "95%"]
+        hist_rows = [
+            {"Timestamp": "100", "User Count": "4", "Type": "POST",
+             "Name": "POST /chat/completions", "Requests/s": "2.0",
+             "Failures/s": "1.0", "50%": "8000", "95%": "14000"},
+            {"Timestamp": "100", "User Count": "4", "Type": "TTFT",
+             "Name": "POST /chat/completions", "Requests/s": "2.0",
+             "Failures/s": "0.0", "50%": "500", "95%": "1000"},
+            {"Timestamp": "101", "User Count": "4", "Type": "POST",
+             "Name": "POST /chat/completions", "Requests/s": "3.0",
+             "Failures/s": "0.0", "50%": "9000", "95%": "15000"},
+            {"Timestamp": "101", "User Count": "4", "Type": "Aggregated",
+             "Name": "Aggregated", "Requests/s": "6.0", "Failures/s": "0.0",
+             "50%": "9000", "95%": "15000"},                      # 应被忽略
+        ]
+        import csv as _csv
+        with (tmp_path / "locust_raw" / "locust_u4_stats_history.csv").open(
+                "w", newline="", encoding="utf-8") as fh:
+            w = _csv.DictWriter(fh, fieldnames=history_cols)
+            w.writeheader()
+            w.writerows(hist_rows)
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        ts = json.loads((tmp_path / "timeseries.json").read_text(
+            encoding="utf-8"))
+        assert ts["engine"] == "locust" and ts["bucket_seconds"] == 1.0
+        assert len(ts["series"]) == 1
+        p0, p1 = ts["series"][0]["points"]
+        assert p0["t"] == 0 and p0["rps"] == pytest.approx(2.0)   # POST 行口径
+        assert p0["errors"] == 1
+        assert p0["ttft_avg"] == pytest.approx(750.0)             # (500+1000)/2
+        assert p1["t"] == 1 and p1["rps"] == pytest.approx(3.0)
+        assert ts["errors"] == [{"key": "HTTPError('HTTP 429')", "count": 3}]
+        assert "timeseries.json" in result.report_files
 
     def test_non_stream_no_ttft_rows(self, tmp_path):
         agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "10",

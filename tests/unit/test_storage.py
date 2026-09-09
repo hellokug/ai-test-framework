@@ -100,3 +100,39 @@ async def test_bg_task(repo):
     task = await repo.get_bg_task(tid)
     assert task["status"] == "done"
     assert task["finished_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_legacy_db_details_column_migration(tmp_path):
+    """老库（无 details 列）init 时轻迁移补列，免重建。"""
+    import sqlalchemy as sa
+
+    from aite.storage.db import Database
+    from aite.storage.repositories import SqlAlchemyRepository
+
+    db_file = tmp_path / "legacy.db"
+    engine = sa.create_engine(f"sqlite:///{db_file}")
+    with engine.begin() as conn:
+        conn.execute(sa.text(
+            "CREATE TABLE test_run (id CHAR(36) PRIMARY KEY, run_name VARCHAR(512),"
+            " suite_id CHAR(36), status VARCHAR(32), overall_score FLOAT,"
+            " config_snapshot JSON, total_cases INT, error_cases INT,"
+            " cost_usd FLOAT, started_at DATETIME, finished_at DATETIME,"
+            " error TEXT)"))
+        conn.execute(sa.text(
+            "INSERT INTO test_run (id, run_name, status, config_snapshot,"
+            " total_cases, error_cases, cost_usd, started_at)"
+            " VALUES ('r1', 'legacy', 'passed', '{}', 1, 0, 0,"
+            " CURRENT_TIMESTAMP)"))
+    engine.dispose()
+
+    db = Database(f"sqlite+aiosqlite:///{db_file}")
+    repo = SqlAlchemyRepository(db)
+    await repo.init()
+    try:
+        run = await repo.get_run("r1")
+        assert run["details"] == {}            # 补列成功且默认空
+        await repo.update_run("r1", details={"work_dir": "x"})
+        assert (await repo.get_run("r1"))["details"]["work_dir"] == "x"
+    finally:
+        await repo.close()

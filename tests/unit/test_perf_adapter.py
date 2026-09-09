@@ -320,12 +320,68 @@ class TestDatasetLoad:
         assert cfg["dataset"] == "ds.jsonl"
         assert "--prompt" not in args
 
-    def test_dataset_and_prompt_mutually_exclusive(self):
-        with pytest.raises(ValueError, match="二选一"):
+    def test_dataset_prompt_synthetic_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="三选一"):
             PerfAdapter().build_config(make_request(
                 perf={"dataset": "a.jsonl", "prompt": "p"}))
+        with pytest.raises(ValueError, match="三选一"):
+            PerfAdapter().build_config(make_request(
+                perf={"prompt": "p", "synthetic": {"count": 10, "prompt_length": 200}}))
         with pytest.raises(ValueError, match="perf.dataset"):
             PerfAdapter().build_config(make_request(perf={}))
+        with pytest.raises(ValueError, match="synthetic"):
+            PerfAdapter().build_config(make_request(
+                perf={"synthetic": {"count": 0}}))
+
+    def test_synthetic_load(self, tmp_path):
+        """合成负载：确定性生成 + 走 custom 数据集路径。"""
+        from aite.tools.perf_adapter import generate_synthetic_prompts
+
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "synthetic": {"count": 3, "prompt_length": 100}, "parallel": [2],
+            "number": 2}))
+        assert cfg["synthetic"] == {"count": 3, "prompt_length": 100}
+        assert "--prompt" not in cfg["args"]
+        assert cfg["args"][cfg["args"].index("--dataset") + 1] == "custom"
+        p1 = generate_synthetic_prompts(3, 100)
+        assert p1 == generate_synthetic_prompts(3, 100)      # 确定性
+        assert len(p1) == 3 and all(len(p) >= 100 for p in p1)
+
+    def test_timeseries_aggregation(self, tmp_path):
+        """collect 从 benchmark_data.db 聚合桶级时序并落 timeseries.json。"""
+        import sqlite3
+
+        d = tmp_path / "perf_raw" / "m" / "parallel_2_number_4"
+        d.mkdir(parents=True)
+        (d / "benchmark_summary.json").write_text(json.dumps(SUMMARY), encoding="utf-8")
+        conn = sqlite3.connect(d / "benchmark_data.db")
+        conn.execute("CREATE TABLE result (start_time REAL, completed_time REAL,"
+                     " latency REAL, first_chunk_latency REAL, success INT,"
+                     " completion_tokens INT)")
+        # 0-5s 桶：2 成功（ttft 0.1/0.3s，latency 1/2s，54 tok）+1 失败；5-10s 桶：1 成功
+        conn.executemany(
+            "INSERT INTO result VALUES (?,?,?,?,?,?)",
+            [(0.0, 1.0, 1.0, 0.1, 1, 54), (1.0, 2.5, 1.5, 0.3, 1, 54),
+             (2.0, 3.0, 0.5, None, 0, 0), (6.0, 7.0, 1.0, 0.2, 1, 60)])
+        conn.commit()
+        conn.close()
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path))
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        assert ts["engine"] == "evalscope-perf"
+        assert ts["bucket_seconds"] == 5.0
+        assert len(ts["series"]) == 1
+        line = ts["series"][0]
+        assert line["users"] == 4 and line["label"] == "perf:c4"
+        b0, b1 = line["points"]
+        assert b0["t"] == 0 and b0["rps"] == pytest.approx(0.6)   # 3 条 / 5s
+        assert b0["ttft_avg"] == pytest.approx(200.0)             # (100+300)/2
+        assert b0["errors"] == 1
+        assert b1["t"] == 5 and b1["ttft_p95"] == pytest.approx(200.0)
+        assert "timeseries.json" in result.report_files
+        # bucket_seconds 可配
+        cfg = PerfAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [2], "number": 2, "bucket_seconds": 10}))
+        assert cfg["dataset"] == ""      # 不影响 build_config 主体
 
     def test_max_tokens_bad_range(self):
         with pytest.raises(ValueError, match="max_tokens"):

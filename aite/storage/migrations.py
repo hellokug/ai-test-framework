@@ -17,19 +17,22 @@ logger = logging.getLogger("aite.storage.migrations")
 
 # (table, column, ddl-fragment)
 _PENDING_COLUMNS: list[tuple[str, sa.Column]] = [
-    # future: ("test_run", sa.Column("web_url", sa.String(1024), nullable=True)),
+    ("test_run", sa.Column("details", sa.JSON(), nullable=True)),
 ]
 
 
 async def apply(engine: AsyncEngine) -> None:
     if not _PENDING_COLUMNS:
         return
-    inspector = sa.inspect(engine.sync_engine)
-    for table, column in _PENDING_COLUMNS:
-        existing = {c["name"] for c in inspector.get_columns(table)}
-        if column.name not in existing:
-            logger.info("migrating: adding %s.%s", table, column.name)
-            async with engine.begin() as conn:
+    async with engine.connect() as conn:
+        for table, column in _PENDING_COLUMNS:
+
+            def _existing_columns(sync_conn, _t=table) -> set[str]:
+                return {c["name"] for c in sa.inspect(sync_conn).get_columns(_t)}
+
+            existing = await conn.run_sync(_existing_columns)
+            if column.name not in existing:
+                logger.info("migrating: adding %s.%s", table, column.name)
                 await conn.execute(
                     sa.text(f"ALTER TABLE {table} ADD COLUMN {column.name} {_ddl_type(column)}")
                 )

@@ -57,10 +57,11 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 - [ ] C4 入口与文档
       - [x] C4a 基准目录接口：`aite tool benchmarks` CLI + `list_tasks()` Python API，
             数据形状 REST-ready（2026-09-02，见进度记录）
-      - [x] C4b REST 端点·工具域切片（2026-09-09）：`GET /api/v1/tools/engines`
-            与 `GET /api/v1/tools/benchmarks?engine=`（前端建任务表单的引擎/
-            场景选择器数据源）；任务创建/执行复用既有 `POST /api/v1/runs` +
-            SSE——REST 形态完整，剩余 UI 配套归模块 F
+      - [x] C4b REST 端点（2026-09-09 完成）：`GET /api/v1/tools/engines`、
+            `GET /api/v1/tools/benchmarks?engine=`；**四域任务 CRUD/运行打通**——
+            POST /suites 与 /runs 补 engine 路由（此前工具域 suite 被
+            SuiteConfig extra=forbid 挡死 422/误路由），DELETE /suites 实现
+            （run.suite_id 置 NULL 保留审计）；详见进度记录
       - [ ] C4c 文档收尾（dataset-guide / README 复核）
 
 验证方式：真实 evalscope 跑 ceval/gsm8k 小样本，结果入库、Web 趋势可见。
@@ -230,17 +231,20 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
 TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；请求报错统计
 展示（哪些错误码、各多少个、是什么错）。
 
-- [ ] F1 任务创建表单：引擎选择器（`GET /tools/engines` 已就绪）+ 场景/数据集
-      选择器（`GET /tools/benchmarks` 已就绪）+ 模式/时长/负载/模型参数表单 →
-      组装 suite config 走 `POST /runs`（链路已有，本项纯前端）
-- [ ] F2 大屏实时曲线：现链路为档级汇总（run 完成后入 `run_metric_summary`），
-      大屏需要**时间序列**数据（逐秒/逐请求）——需扩展工具层输出时序文件
-      （evalscope perf 明细 json / locust csv 已含）+ 新增时序读取端点 + SSE
-      推送；错误码统计（locust `_failures.csv` 聚合已入 failures；evalscope
-      perf 错误分布需从明细提取）
-- [ ] F3 负载自动生成：数据集不选时框架生成固定输入输出（内置合成负载：
-      按 max_tokens/上下文长度目标构造确定性 prompt，复用 long_context 的
-      haystack 占位符思路）
+- [ ] F1 任务创建表单（前端后置，用户指示接口优先）：引擎选择器
+      （`GET /tools/engines`）+ 场景/数据集选择器（`GET /tools/benchmarks`）+
+      模式/时长/负载/模型参数表单 → 组装 suite config 走 `POST /runs`
+      （四域路由已通，本项纯前端）
+- [x] F2 压测时序数据层（2026-09-09 完成，前端大屏后置）：两适配器统一产出
+      `timeseries.json`（work_dir 下；`GET /runs/{id}/timeseries` 读取）——
+      evalscope-perf 从各档 benchmark_data.db 逐请求明细事后聚合（5s 桶
+      可配，TTFT/延迟分位线性插值、rps/tok_s/errors）；locust 加
+      `--csv-full-history` 原生 1s 打点透传。**顺带修口径 bug**：locust
+      Aggregated 行被 POST+TTFT 双事件污染，终局指标改取 POST 行。
+      产出经 `test_run.details` 落库（老库轻迁移补列），跨进程可找回
+- [x] F3 负载自动生成（2026-09-09 完成）：`perf.synthetic: {count,
+      prompt_length}` 与 dataset/prompt 三选一；确定性模板生成固定输入
+      （输入一致 → 曲线可比），两适配器共用 generate_synthetic_prompts
 
 ### 模块 G：执行机纳管（2026-09-09 立项，需求已对齐未实施）
 
@@ -281,7 +285,7 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
 
 ## Backlog（原打磨项，v1 后重排）
 
-- Judge pairwise/multi 补完、`DELETE /suites` 实现、变体展开上限保护、
+- Judge pairwise/multi 补完、变体展开上限保护、
   Judge 失败降级、价格表外置、trends/Agent 连接器测试、存储清理策略、
   趋势查询索引。
 - 指标按数据集覆盖（metrics_per_dataset）：当前 metrics 为 suite 级全局，
@@ -319,3 +323,4 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
 - 2026-09-08 **模块 E：性能压测（evalscope-perf 适配器）完成**。引擎选型经用户挑战修正：压测客户端不自研（客户端能力会污染测量），「两者都要，perf 先」——evalscope perf 打头阵（零新依赖、LLM 原生 TTFT/TPOT/ITL/吞吐分档、并发梯度/warmup/开环限速内置），locust 后置备选。交付：`aite/tools/perf_adapter.py`（perf yaml 段 → CLI 参数映射 / subprocess 执行 / benchmark_summary+percentile 解析 → 每档每指标一行 perf:c<并发> 入库）、examples/perf_evalscope.yaml、README 性能压测章节。+16 单测含离线端到端（真实 evalscope perf 子进程打 fake OpenAI 端点全链路 6.4s 跑通）。踩坑：① evalscope 包无 `__main__`（CLI 是 console script，须 shutil.which 定位子进程）；② `--number` 与 `--parallel` 必须等长（标量自动复制对齐）；③ **工具层阈值方向**——`passed >= 硬编码`对延迟/错误率类"越低越好"指标是反的（自研引擎本有 higher_is_better 语义，工具层一直没接；evalscope 全是准确率类未暴露，perf 一上就露馅），ToolMetricRow 加方向字段（默认 True 向后兼容）+ overall 行透传。
 - 2026-09-08 模块 E 补强 E4+E5（用户评审：固定提示词不真实、缺压测模式与时长配置）：负载层数据集驱动（perf.dataset 导出逐行 prompt + max_tokens 区间采样）+ 模式层四选一（baseline 基准/ramp 爬坡/probe 摸高 SLA 二分搜索/soak 长稳 duration 驱动）；v1 直配写法保留兼容。collect 统一 glob 两种产出布局（普通 parallel_X_number_Y 与摸高 sla_tuning/sla_parallel_N_run_i）按并发聚合。+14 单测（模式映射/ramp 展开/sla 构造/导出/三场景离线 e2e）。中途熔断上游不支持，记 backlog。
 - 2026-09-09 模块 E 补强 E6+E7 + 工具域 REST（C4b 切片）：①时长参数统一（用户评审：所有场景都要能用 duration 控制总时长，与单档时长分开）——duration 全模式 = 整场总时长（单档直传/多档均分/probe 看门狗截断收已完成轮次），新增 level_duration 每档秒数（probe = 每轮墙钟上限），两键互斥；number 联动扩展到全模式（时长驱动未显式配 → 放大安全上限，修复非 soak 配 duration 被 8 条先到为准掐死的坑）。②locust 适配器转正（engine: locust，复用 perf 段，probe 报错不支持，spawn_rate 新增，指标命名与 evalscope-perf 对齐，_failures.csv 错误明细进 failures）。③工具域 REST：GET /tools/engines + /tools/benchmarks（前端建任务表单数据源；任务执行复用 POST /runs + SSE）。立项模块 F（前端任务编排与大屏）/G（执行机纳管）/H（性能数据归档）/I（可靠性 chaos 框架），需求已对齐未实施。+16 单测（E6 时长语义/看门狗/截断容错）+16 单测（locust build_config/负载落盘/CSV 解析/执行守卫）+4 web 冒烟（322 全绿）。
+- 2026-09-09 接口完善（用户指示：前端后置、接口优先；审计发现四域里只有自研引擎域的 CRUD/运行真实可用——SuiteConfig extra=forbid 把工具域 suite 挡死）：①POST /suites 与 POST /runs 补 engine 路由（工具域走 parse_tool_suite 轻 fail-fast，运行侧新增 _execute_tool_run 与 CLI 同源）；②DELETE /suites 实现（501 转正，run.suite_id 置 NULL 保留审计）；③test_run 加 details JSON 列（产出目录/报告文件/失败明细落库，老库 PRAGMA 轻迁移补列——顺带修复迁移代码路径首次执行暴露的 async inspect 错误）；④压测时序数据层（F2）：timeseries.json 统一形状（evalscope-perf 逐请求 db 事后 5s 桶聚合 / locust --csv-full-history 原生 1s），GET /runs/{id}/timeseries 端点；修 locust Aggregated 口径 bug（改取 POST 行）；⑤F3 synthetic 合成负载（三选一，确定性生成）。+10 单测（假工具 e2e 路由/timeseries/迁移/口径/时序聚合），332 全绿。

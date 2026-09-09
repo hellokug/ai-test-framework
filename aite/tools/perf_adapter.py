@@ -5,11 +5,14 @@ evalscope perf 子命令（vLLM 社区同源的 LLM 压测方案：aiohttp + 多
 TTFT/TPOT/ITL/吞吐原生分档），aite 负责编排与统一入库——不自研压测客户端
 （单进程 asyncio 客户端在高并发下自身即瓶颈，测的是客户端排队不是服务端）。
 
-**负载**（``perf.dataset`` 与 ``perf.prompt`` 二选一）：
+**负载**（``dataset`` / ``prompt`` / ``synthetic`` 三选一）：
 
 - ``dataset``：本地 jsonl/csv 文件，行数 = 条数，输入键同平台数据集约定
   （input/question/instruction/prompt/query/user 取首个命中）；适配器导出为
   逐行 prompt 文件（evalscope ``custom`` 数据集），打流时逐条取用
+- ``prompt``：固定提示词
+- ``synthetic``：合成负载 {count, prompt_length}——确定性生成固定输入
+  （输入一致则输出分布一致，曲线可比）
 - ``max_tokens``：标量 = 定长；``[min, max]`` = 每请求均匀采样（输出长度分布）
 - ``min/max_prompt_length`` + ``tokenizer_path``：按真实 token 数过滤输入
 
@@ -46,6 +49,7 @@ import csv
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -64,6 +68,7 @@ logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 3600     # 整场压测总超时（秒），req.extra.timeout 可覆盖
 _DURATION_DRIVEN_NUMBER_CAP = 1_000_000   # 时长驱动安全上限（先到为准，防默认条数提前结束）
+DEFAULT_BUCKET_SECONDS = 5.0   # 时序聚合桶间隔（秒），perf.bucket_seconds 可覆盖
 
 _MODES = {"baseline", "ramp", "probe", "soak"}
 # evalscope SLA 可断言指标（sla_run.get_metric_values 键）；
@@ -165,6 +170,100 @@ def _export_prompts(dataset: str, dest: Path) -> int:
     return len(prompts)
 
 
+_SYNTHETIC_SKELETON = (
+    "请围绕以下主题撰写一段说明文字，要求内容连贯、信息量充足：{filler}。"
+    "主题编号 {i}，请从多个角度展开论述，保持输出长度稳定。"
+)
+
+
+def generate_synthetic_prompts(count: int, prompt_length: int) -> list[str]:
+    """确定性合成负载：固定句式骨架 + 填充文本到目标字符数（每次生成完全一致）。
+
+    「框架自动生成固定输入输出」——无数据集时压测可复现（输入一致则输出分布
+    一致，TTFT/吞吐曲线可比）。填充用循环数字串避免真实语义导致的缓存命中。
+    """
+    if count < 1 or prompt_length < 1:
+        raise ValueError("perf.synthetic 的 count / prompt_length 须为 ≥1 整数")
+    prompts = []
+    for i in range(1, count + 1):
+        filler_cycle = "0123456789"
+        filler = (filler_cycle * (prompt_length // len(filler_cycle) + 1))[:prompt_length]
+        prompts.append(_SYNTHETIC_SKELETON.format(i=i, filler=filler)[: prompt_length + 60])
+    return prompts
+
+
+def _quantile(sorted_vals: list[float], q: float) -> float | None:
+    """线性插值分位数（与 numpy 默认插值一致）。"""
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = pos - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
+    """单档 benchmark_data.db → 桶级时序点（大屏曲线数据源）。
+
+    逐请求记录（evalscope perf 子进程流式写入）事后聚合：按 completed_time 落桶，
+    t = 桶起点相对该档首个请求开始的秒数。成功请求计 TTFT/延迟分位，失败计错误数；
+    rps/tok_s = 桶内完成请求数 / completion_tokens 和 ÷ 桶时长。
+    """
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT completed_time, latency, first_chunk_latency, success,"
+            " completion_tokens FROM result ORDER BY completed_time").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    t0 = rows[0][0]
+    buckets: dict[int, dict] = {}
+    for completed, latency, ttft, ok, tokens in rows:
+        idx = int(max((completed or 0) - t0, 0.0) // bucket)
+        b = buckets.setdefault(idx, {"n": 0, "errors": 0, "tokens": 0.0,
+                                     "ttft": [], "latency": []})
+        b["n"] += 1
+        b["tokens"] += float(tokens or 0)
+        if ok:
+            if ttft is not None:
+                b["ttft"].append(float(ttft) * 1000.0)   # 秒 → 毫秒
+            if latency is not None:
+                b["latency"].append(float(latency) * 1000.0)
+        else:
+            b["errors"] += 1
+
+    def _ms(vals: list[float], *, avg: bool) -> float | None:
+        if not vals:
+            return None
+        return round((sum(vals) / len(vals)) if avg else _quantile(vals, 0.95), 1)
+
+    series = []
+    for idx in sorted(buckets):
+        b = buckets[idx]
+        series.append({
+            "t": round(idx * bucket, 3),
+            "ttft_avg": _ms(b["ttft"], avg=True),
+            "ttft_p95": _ms(b["ttft"], avg=False),
+            "latency_avg": _ms(b["latency"], avg=True),
+            "latency_p95": _ms(b["latency"], avg=False),
+            "rps": round(b["n"] / bucket, 3),
+            "tok_s": round(b["tokens"] / bucket, 1),
+            "errors": b["errors"],
+        })
+    return series
+
+
 @register_tool("evalscope-perf")
 class PerfAdapter(ToolAdapter):
     name = "evalscope-perf"
@@ -177,13 +276,28 @@ class PerfAdapter(ToolAdapter):
             raise ValueError("evalscope-perf 需要 target.model")
         url, api_key = api_endpoint(req.target)
 
-        # ---- 负载：dataset 与 prompt 二选一 ----
+        # ---- 负载：dataset / prompt / synthetic 三选一 ----
         dataset = str(cfg.get("dataset") or "").strip()
         prompt = str(cfg.get("prompt") or "").strip()
-        if dataset and prompt:
-            raise ValueError("perf.dataset 与 perf.prompt 二选一")
-        if not dataset and not prompt:
-            raise ValueError("perf 需要 perf.dataset（数据集文件）或 perf.prompt（固定提示词）")
+        synthetic = cfg.get("synthetic")
+        chosen = [k for k, v in (("dataset", dataset), ("prompt", prompt),
+                                 ("synthetic", synthetic)) if v]
+        if len(chosen) > 1:
+            raise ValueError("perf.dataset / perf.prompt / perf.synthetic 三选一")
+        if not chosen:
+            raise ValueError("perf 需要 perf.dataset（数据集文件）/ perf.prompt（固定提示词）"
+                             " / perf.synthetic（合成负载）三选一")
+        if synthetic:
+            if (not isinstance(synthetic, dict)
+                    or not isinstance(synthetic.get("count"), int)
+                    or isinstance(synthetic.get("count"), bool) or synthetic["count"] < 1
+                    or not isinstance(synthetic.get("prompt_length"), int)
+                    or isinstance(synthetic.get("prompt_length"), bool)
+                    or synthetic["prompt_length"] < 1):
+                raise ValueError("perf.synthetic 须为 {count: ≥1, prompt_length: ≥1}"
+                                 "（条数 / 每条目标字符数）")
+            synthetic = {"count": synthetic["count"],
+                         "prompt_length": synthetic["prompt_length"]}
         output_dir = req.work_dir / "perf_raw"
 
         # ---- 模式 → 并发列表 / probe 参数 ----
@@ -280,7 +394,8 @@ class PerfAdapter(ToolAdapter):
             # 整数秒发整数（CLI 可读性：30 而非 30.0）
             dur = int(per_level) if per_level == int(per_level) else per_level
             args += ["--duration", str(dur)]
-        if dataset:
+        if dataset or synthetic:
+            # dataset 由 run 阶段导出 / synthetic 由 run 阶段生成，统一走 custom 数据集
             args += ["--dataset", "custom",
                      "--dataset-path", str(req.work_dir / "load" / "prompts.txt")]
         else:
@@ -315,6 +430,7 @@ class PerfAdapter(ToolAdapter):
             "duration_watchdog": int(total_duration) if watchdog else None,
             "output_dir": str(output_dir),
             "dataset": dataset,   # run 阶段导出 prompt 文件用
+            "synthetic": synthetic,   # run 阶段生成 prompt 文件用
         }
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
@@ -322,6 +438,13 @@ class PerfAdapter(ToolAdapter):
         if cfg["dataset"]:   # 负载导出：平台数据集文件 → 逐行 prompt（custom 数据集）
             n = _export_prompts(cfg["dataset"], req.work_dir / "load" / "prompts.txt")
             logger.info("perf 数据集负载导出 %d 条 prompt", n)
+        elif cfg["synthetic"]:   # 合成负载：确定性生成（输入一致 → 曲线可比）
+            prompts = generate_synthetic_prompts(**cfg["synthetic"])
+            path = req.work_dir / "load" / "prompts.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(prompts) + "\n", encoding="utf-8")
+            logger.info("perf 合成负载生成 %d 条 prompt（%d 字符）",
+                        len(prompts), cfg["synthetic"]["prompt_length"])
         await run_sync_in_thread(self._exec, cfg)
         return self.collect(req)
 
@@ -372,7 +495,7 @@ class PerfAdapter(ToolAdapter):
         if not summaries:
             raise RuntimeError(f"未找到压测产出（{cfg['output_dir']}/**/benchmark_summary.json），"
                                "查看 logs/perf.log")
-        grouped: dict[int, list[tuple[dict, dict]]] = {}   # 并发 → [(summary, p95行)]
+        grouped: dict[int, list[tuple[dict, dict, Path]]] = {}   # 并发 → [(summary, p95行, 路径)]
         for summary_path in summaries:
             try:
                 data = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -389,7 +512,18 @@ class PerfAdapter(ToolAdapter):
                 except ValueError:
                     rows = []
                 p95 = next((r for r in rows if r.get("Percentiles") == "95%"), {})
-            grouped.setdefault(concurrency, []).append((data, p95))
+            grouped.setdefault(concurrency, []).append((data, p95, summary_path))
+
+        # ---- 时序聚合（大屏曲线数据源）：逐档 benchmark_data.db → 桶级点 ----
+        bucket = cfg.get("bucket_seconds")
+        if bucket is not None:
+            bucket = float(bucket)
+            if bucket <= 0:
+                raise ValueError("perf.bucket_seconds 须为正数（秒）")
+        else:
+            bucket = DEFAULT_BUCKET_SECONDS
+        timeseries: dict = {"engine": self.name, "bucket_seconds": bucket,
+                            "series": [], "errors": []}
 
         for concurrency, items in sorted(grouped.items()):
             label = f"perf:c{concurrency}"
@@ -397,7 +531,7 @@ class PerfAdapter(ToolAdapter):
             def mean(display_key: str, source: str = "summary",
                      *, _items=items) -> float | None:
                 vals = []
-                for data, p95 in _items:
+                for data, p95, _path in _items:
                     v = (data.get(display_key) if source == "summary"
                          else p95.get(display_key))
                     if v is not None:
@@ -412,8 +546,8 @@ class PerfAdapter(ToolAdapter):
             for name, (key, scale) in _PERCENTILE_METRICS.items():
                 v = mean(key, source="p95")
                 metrics[name] = v * scale if v is not None else None
-            total = sum(int(d.get("Total Requests") or 0) for d, _ in items)
-            failed = sum(int(d.get("Failed Requests") or 0) for d, _ in items)
+            total = sum(int(d.get("Total Requests") or 0) for d, _p, _path in items)
+            failed = sum(int(d.get("Failed Requests") or 0) for d, _p, _path in items)
             if total:
                 metrics["error_rate"] = failed / total
             for name, value in metrics.items():
@@ -430,10 +564,31 @@ class PerfAdapter(ToolAdapter):
             tps = metrics.get("output_tps")
             if tps is not None:
                 out.raw_score[label] = float(tps)
+
+            for run_idx, (_d, _p, summary_path) in enumerate(items):
+                points = _aggregate_level_db(
+                    summary_path.parent / "benchmark_data.db", bucket)
+                if points:
+                    timeseries["series"].append({
+                        "users": concurrency, "run": run_idx, "label": label,
+                        "points": points})
+
+        total_failed = sum(int(d.get("Failed Requests") or 0)
+                           for items in grouped.values() for d, _p, _path in items)
+        if total_failed:
+            # evalscope 错误文本在 pickle 响应里，只给计数（文本级错误分布见 locust）
+            timeseries["errors"] = [{"key": "failed", "count": total_failed}]
         base = Path(cfg["output_dir"]).parent
+        if timeseries["series"]:
+            ts_path = base / "timeseries.json"
+            ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
+                               encoding="utf-8")
+            out.report_files["timeseries.json"] = str(ts_path)
         for pattern in ("perf_raw/**/performance_summary.txt",
                         "perf_raw/**/perf_report.html",
                         "perf_raw/**/sla_summary.json",
+                        "perf_raw/**/workload_timeline.json",
+                        "perf_raw/**/benchmark_data.db",
                         "logs/perf.log"):
             for p in sorted(base.glob(pattern)):
                 out.report_files[p.name] = str(p)

@@ -7,7 +7,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from aite.core.interfaces import Repository
 from aite.core.types import MetricResult, TargetResponse, TestCase, utcnow
@@ -70,6 +70,21 @@ class SqlAlchemyRepository(Repository):
                 select(TestSuiteRow).where(TestSuiteRow.name == name)
             )).scalar_one_or_none()
             return self._suite_dict(row) if row else None
+
+    async def delete_suite(self, name: str) -> bool:
+        """删除 suite；引用它的 run 解引用（suite_id 置 NULL）保留审计历史。"""
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(TestSuiteRow).where(TestSuiteRow.name == name)
+            )).scalar_one_or_none()
+            if row is None:
+                return False
+            await session.execute(
+                update(TestRunRow).where(TestRunRow.suite_id == row.id)
+                .values(suite_id=None))
+            await session.delete(row)
+            await session.commit()
+            return True
 
     async def list_suites(self) -> list[dict]:
         async with self.db.sessions() as session:
@@ -142,7 +157,7 @@ class SqlAlchemyRepository(Repository):
 
     async def update_run(self, run_id: str, **fields: Any) -> None:
         allowed = {"status", "overall_score", "total_cases", "error_cases", "cost_usd",
-                   "finished_at", "error"}
+                   "finished_at", "error", "details"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return
@@ -177,6 +192,7 @@ class SqlAlchemyRepository(Repository):
             "overall_score": row.overall_score, "config": row.config_snapshot or {},
             "total_cases": row.total_cases, "error_cases": row.error_cases,
             "cost_usd": row.cost_usd, "error": row.error,
+            "details": row.details or {},
             "started_at": aware(row.started_at).isoformat() if row.started_at else None,
             "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
         }

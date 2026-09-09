@@ -42,11 +42,20 @@ overall 加权行）→ 阈值判定 → Web 趋势并列可比。**存储契约
   按并发聚合（两种产出布局，容错跳过截断损坏文件）。
 - **locust_adapter.py**：通用 HTTP 压测备选（engine: locust）。复用同一 perf 段；
   probe 报错不支持、必配时长键、number 忽略、新增 spawn_rate；每档独立
-  `locust --headless --csv` 子进程，locustfile 由适配器生成（SSE 首包计时 TTFT
-  自定义事件）；collect 解析 _stats/_failures CSV → `locust:u<N>` 指标行
-  （与 evalscope-perf 命名对齐）+ 错误明细进 failures。
-- **web/routers/tools.py**：工具域 REST（C4b 切片）——GET /tools/engines、
-  GET /tools/benchmarks?engine=；任务执行复用 POST /runs + tasks/{id}/stream。
+  `locust --headless --csv --csv-full-history` 子进程，locustfile 由适配器生成
+  （SSE 首包计时 TTFT 自定义事件）；collect 解析 _stats/_failures/history CSV
+  → `locust:u<N>` 指标行（**取 POST 行**——Aggregated 被 POST+TTFT 双事件污染）
+  + 错误明细 + 秒级时序。
+- **负载三选一**：dataset / prompt / `synthetic: {count, prompt_length}`
+  （确定性合成负载，两适配器共用 generate_synthetic_prompts）。
+- **时序管线（F2 数据层）**：两适配器统一产出 work_dir/timeseries.json
+  （evalscope-perf 从 benchmark_data.db 逐请求 5s 桶聚合 / locust history 1s
+  透传）→ `GET /runs/{run_id}/timeseries` 端点；产出经 test_run.details 落库
+  （models.py 新列 + storage/migrations.py 老库轻迁移）。
+- **web/routers/tools.py + suites.py + runs.py**：四域 REST——GET
+  /tools/engines、/tools/benchmarks；POST /suites|/runs 带 engine 自动路由
+  工具域（parse_tool_suite 校验 / _execute_tool_run 后台执行）；DELETE
+  /suites 实现。API 全表见 README Web 平台章节。
 - 测试：`tests/unit/test_tools.py`（parse/overall）、各 adapter 各自文件
   （test_perf_adapter / test_locust_adapter / test_pytest_adapter）、
   web 冒烟在 tests/integration/test_reporting_web.py。
@@ -99,11 +108,13 @@ aite tool benchmarks pytest            # 场景清单
 
 - 模块 A 数据集治理：暂缓（需求已存档 requirements-datasetgov.md）
 - 模块 B 指标标准性：收缩，仅剩 tokenize 中文分词（低优先）
-- 模块 C evalscope 适配器：C0-C4a、C4b（工具域 REST 切片）完成；
+- 模块 C evalscope 适配器：C0-C4b 完成（REST 四域任务 CRUD/运行打通）；
   **未完：C3 平台数据集灌入、C4c 文档收尾**
 - 模块 D 功能测试：D1-D9 全部完成（两域 8 场景 52 例）
 - 模块 E 性能压测：E1-E7 全部完成（数据集负载 + 四模式 + 时长统一双键
-  duration/level_duration + locust 适配器）；F/G/H/I 已立项未实施
+  duration/level_duration + locust 适配器）
+- 模块 F 性能大屏：F2 数据层 + F3 合成负载完成；**F1 前端面板后置**
+  （用户指示接口优先）；G/H/I 已立项未实施
 - 运行环境：conda env `evalscope`（Python 3.10，aite+evalscope 同装）；
   本地 Ollama（qwen2.5:3b / deepseek-r1:8b）；locust 未装（单测离线，
   真实压测需 `pip install 'aite[locust]'`）
@@ -114,9 +125,11 @@ aite tool benchmarks pytest            # 场景清单
 判定（与历史 run 比退化%，perf 与功能通用）；perf 原始参数透传扩展（open-loop/
 rate/sla-number-multiplier 细项）；locust worker 分布式形态（现单机多档）。
 
-**前端与大屏（模块 F）**：任务创建表单（引擎/模式/数据集/负载自动生成 F3）+
-时序曲线大屏（TTFT/TPOT/吞吐/响应时间/响应码 + 错误码统计，需工具层时序输出
-扩展 F2）——REST 目录端点已就绪，时序链路未建。
+**前端与大屏（模块 F 剩余）**：任务创建表单（F1）+ 时序曲线大屏 UI——
+REST/时序数据链路已全部就绪（/tools/engines、/tools/benchmarks、POST /runs
+四域路由、/runs/{id}/timeseries），纯前端工作量；现有免构建 SPA（Vue3+ECharts
+CDN，aite/web/static）加面板三处：index.html nav+section、app.js go()/mounted()
+白名单、复用 .card/.tbl/.chart 样式类。
 
 **执行机纳管（模块 G）**：agent 注册/心跳/任务下发；本机 Linux 调试环境接入。
 
@@ -147,7 +160,11 @@ instruction_following 已有设计评审记录，未实施）。
 | evalscope 无 __main__；--number 与 --parallel 等长 | 同上 |
 | probe 产出布局 sla_tuning/ 与普通 parallel_ 不同 | roadmap E5 |
 | evalscope --duration = 单次 run 墙钟预算（软退出），非整场总时长；probe 每轮 number 被强制 = 并发×2（sla_number_multiplier 可调） | roadmap E6 |
-| 看门狗截断的产出文件可能写盘损坏，collect 须容错跳过 | 同上 |
+| 看门狗截断的产出文件可能写盘损坏，collect 须容错跳过 | roadmap E6 |
+| evalscope --duration 是单次 run 预算、probe 每轮 number 被强制 = 并发×2 | roadmap E6 |
+| SuiteConfig extra=forbid——工具域 suite 必须经 engine 分支旁路 load_suite | roadmap C4b |
+| locust Aggregated 行被 POST+TTFT 双事件污染，统计取 POST 行 | roadmap F2 |
+| async engine 上 sa.inspect(sync_engine) 会 MissingGreenlet，须 conn.run_sync | roadmap 进度 2026-09-09 |
 | run_task 返回值不可依赖，一律走文件收集 | roadmap C2 |
 
 ## 7. 新会话开工模板
