@@ -65,10 +65,12 @@ def create_app(storage_url: str = "sqlite+aiosqlite:///./aite.db",
         runs,
         suites,
         tasks,
+        tools,
         trends,
     )
 
-    for router in (runs, suites, cases, models, trends, reports, manual_eval, tasks):
+    for router in (runs, suites, cases, models, trends, reports, manual_eval,
+                   tasks, tools):
         app.include_router(router.router, prefix="/api/v1")
 
     if STATIC_DIR.exists():

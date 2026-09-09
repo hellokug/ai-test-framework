@@ -29,14 +29,27 @@ overall 加权行）→ 阈值判定 → Web 趋势并列可比。**存储契约
 
 - **base.py**：ToolRunRequest（含 tests_dir/cases/perf 字段）/ ToolMetricRow
   （含 higher_is_better 方向）/ ToolRunResult（含 failures）/ ToolAdapter(ABC) /
-  `@register_tool` 注册表 / `api_endpoint`。**纯函数 build_config 可单测**是惯例。
+  `@register_tool` 注册表 / `api_endpoint` / `list_tools`（REST 引擎枚举）。
+  **纯函数 build_config 可单测**是惯例。
 - **evalscope_adapter.py**：精度基准。进程内 run_task，文件收集 reports/*.json。
 - **pytest_adapter.py**：功能测试。逐场景 subprocess pytest + junit-xml 收集；
   tools.cases 用 nodeid 精确定向。
-- **perf_adapter.py**：压测。subprocess 调 evalscope CLI（包无 __main__，须
-  shutil.which）；perf.dataset 导出逐行 prompt；四模式（baseline/ramp/probe/soak）；
-  collect 统一 glob `**/benchmark_summary.json` 按并发聚合（两种产出布局）。
-- 测试：`tests/unit/test_tools.py`（parse/overall）、各 adapter 各自文件。
+- **perf_adapter.py**：压测（evalscope-perf）。subprocess 调 evalscope CLI（包无
+  __main__，须 shutil.which）；perf.dataset 导出逐行 prompt；四模式
+  （baseline/ramp/probe/soak）；**时长双键**——duration=整场总时长（单档直传/
+  多档均分/probe 看门狗截断）、level_duration=每档秒数（probe=每轮上限），互斥；
+  时长驱动自动放大 number 缺省；collect 统一 glob `**/benchmark_summary.json`
+  按并发聚合（两种产出布局，容错跳过截断损坏文件）。
+- **locust_adapter.py**：通用 HTTP 压测备选（engine: locust）。复用同一 perf 段；
+  probe 报错不支持、必配时长键、number 忽略、新增 spawn_rate；每档独立
+  `locust --headless --csv` 子进程，locustfile 由适配器生成（SSE 首包计时 TTFT
+  自定义事件）；collect 解析 _stats/_failures CSV → `locust:u<N>` 指标行
+  （与 evalscope-perf 命名对齐）+ 错误明细进 failures。
+- **web/routers/tools.py**：工具域 REST（C4b 切片）——GET /tools/engines、
+  GET /tools/benchmarks?engine=；任务执行复用 POST /runs + tasks/{id}/stream。
+- 测试：`tests/unit/test_tools.py`（parse/overall）、各 adapter 各自文件
+  （test_perf_adapter / test_locust_adapter / test_pytest_adapter）、
+  web 冒烟在 tests/integration/test_reporting_web.py。
 
 ### functional 功能测试（`aite/functional/`）
 
@@ -69,7 +82,8 @@ pytest tests/unit/test_functional_cases.py tests/unit/test_functional_scenarios.
 pytest aite/functional/scenarios/<场景> --collect-only -q -p aite.functional.harness -p no:cacheprovider
 
 # 压测域改动
-pytest tests/unit/test_perf_adapter.py tests/unit/test_tools.py -q -W ignore
+pytest tests/unit/test_perf_adapter.py tests/unit/test_locust_adapter.py \
+       tests/unit/test_tools.py -q -W ignore
 
 # 工具层契约/共享链路改动（影响多域时跑全量）
 pytest tests/ -q -W ignore
@@ -81,22 +95,35 @@ aite run -c examples/perf_evalscope.yaml
 aite tool benchmarks pytest            # 场景清单
 ```
 
-## 4. 当前状态（2026-09-08）
+## 4. 当前状态（2026-09-09）
 
 - 模块 A 数据集治理：暂缓（需求已存档 requirements-datasetgov.md）
 - 模块 B 指标标准性：收缩，仅剩 tokenize 中文分词（低优先）
-- 模块 C evalscope 适配器：C0-C4a 完成；**未完：C3 平台数据集灌入、C4b REST、
-  C4c 文档收尾**
+- 模块 C evalscope 适配器：C0-C4a、C4b（工具域 REST 切片）完成；
+  **未完：C3 平台数据集灌入、C4c 文档收尾**
 - 模块 D 功能测试：D1-D9 全部完成（两域 8 场景 52 例）
-- 模块 E 性能压测：E1-E5 全部完成（数据集负载 + 四模式）
+- 模块 E 性能压测：E1-E7 全部完成（数据集负载 + 四模式 + 时长统一双键
+  duration/level_duration + locust 适配器）；F/G/H/I 已立项未实施
 - 运行环境：conda env `evalscope`（Python 3.10，aite+evalscope 同装）；
-  本地 Ollama（qwen2.5:3b / deepseek-r1:8b）
+  本地 Ollama（qwen2.5:3b / deepseek-r1:8b）；locust 未装（单测离线，
+  真实压测需 `pip install 'aite[locust]'`）
 
 ## 5. Backlog（按模块分组，新会话按条认领）
 
-**tools/perf**：locust 适配器（通用 HTTP/极端规模分布式）；压测中途熔断
-（上游不支持，需 watchdog 或提 feature）；基线回归判定（与历史 run 比退化%，
-perf 与功能通用）；perf 原始参数透传扩展（open-loop/rate/sla-auto-tune 细项）。
+**tools/perf**：压测中途熔断（上游不支持，需 watchdog 或提 feature）；基线回归
+判定（与历史 run 比退化%，perf 与功能通用）；perf 原始参数透传扩展（open-loop/
+rate/sla-number-multiplier 细项）；locust worker 分布式形态（现单机多档）。
+
+**前端与大屏（模块 F）**：任务创建表单（引擎/模式/数据集/负载自动生成 F3）+
+时序曲线大屏（TTFT/TPOT/吞吐/响应时间/响应码 + 错误码统计，需工具层时序输出
+扩展 F2）——REST 目录端点已就绪，时序链路未建。
+
+**执行机纳管（模块 G）**：agent 注册/心跳/任务下发；本机 Linux 调试环境接入。
+
+**性能数据归档（模块 H）**：run 冷热分层、原始产出压缩归档与检索恢复。
+
+**可靠性 chaos（模块 I）**：先调研 chaosblade/chaos-mesh/Litmus 可集成性，
+不可行自研五能力（对象感知/注入/检测/恢复/业务观测），与 reliability 域打通。
 
 **tools/evalscope（模块 C 收尾）**：C3 平台数据集 → evalscope 自定义格式转换；
 C4b `/api/v1/tools/...` REST 端点（与前端阶段一并）；C4c 文档复核。
@@ -119,6 +146,8 @@ instruction_following 已有设计评审记录，未实施）。
 | 工具层阈值方向（越低越好 <=） | roadmap 模块 E |
 | evalscope 无 __main__；--number 与 --parallel 等长 | 同上 |
 | probe 产出布局 sla_tuning/ 与普通 parallel_ 不同 | roadmap E5 |
+| evalscope --duration = 单次 run 墙钟预算（软退出），非整场总时长；probe 每轮 number 被强制 = 并发×2（sla_number_multiplier 可调） | roadmap E6 |
+| 看门狗截断的产出文件可能写盘损坏，collect 须容错跳过 | 同上 |
 | run_task 返回值不可依赖，一律走文件收集 | roadmap C2 |
 
 ## 7. 新会话开工模板

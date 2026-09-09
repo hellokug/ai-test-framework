@@ -27,9 +27,13 @@ from aite.tools.base import (
     get_tool,
 )
 from aite.tools.base import (
+    list_tools as list_tools,
+)
+from aite.tools.base import (
     register_tool as register_tool,
 )
 from aite.tools.evalscope_adapter import EvalscopeAdapter  # noqa: F401  (registers)
+from aite.tools.locust_adapter import LocustAdapter  # noqa: F401  (registers)
 from aite.tools.perf_adapter import PerfAdapter  # noqa: F401  (registers)
 from aite.tools.pytest_adapter import PytestAdapter  # noqa: F401  (registers)
 from aite.utils.logging import get_logger

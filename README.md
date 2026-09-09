@@ -214,8 +214,8 @@ junit-xml 与场景日志，无需翻文件定位）。体积有预算：输入�
 
 压测**不自研客户端**（单进程 asyncio 客户端在高并发下自身即瓶颈——测的是客户端
 排队而非服务端能力），委托给 evalscope perf 子命令执行（aiohttp + 多 worker，
-vLLM 社区同源的 LLM 压测方案），aite 负责编排与统一入库。locust 适配器为后置
-备选（非 LLM 端点 / 极端规模分布式场景）。
+vLLM 社区同源的 LLM 压测方案），aite 负责编排与统一入库。locust 适配器已接入
+（见下节「locust 压测」，非 LLM 端点 / 极端规模分布式场景）。
 
 **负载**（`perf.dataset` 与 `perf.prompt` 二选一）：`dataset` 指向本地 jsonl/csv
 （行数 = 条数，输入键同平台数据集约定：input/question/instruction/prompt/query/
@@ -227,9 +227,20 @@ user 取首个命中），适配器导出为逐行 prompt 文件逐条取用；`
 | 模式 | 配置 | 语义 |
 |---|---|---|
 | `baseline` 基准 | `baseline: {parallel: 4}` | 固定并发测稳态 |
-| `ramp` 爬坡 | `ramp: {from: 1, to: 16, step: 4}` | 并发梯度一次全扫（to 必含）；`duration` = 单档运行秒数 |
+| `ramp` 爬坡 | `ramp: {from: 1, to: 16, step: 4}` | 并发梯度一次全扫（to 必含） |
 | `probe` 摸高 | `probe: {max_parallel: 32, sla: {avg_ttft: 3000}}` | SLA 约束下二分搜索最大可持续并发（sla 指标：avg/p99 × latency·ttft·tpot、rps、tps；单位 latency 秒、ttft/tpot 毫秒） |
-| `soak` 长稳 | `soak: {parallel: 8}` + `duration: 3600` | 时间驱动持续压测（number 自动放大为安全上限） |
+| `soak` 长稳 | `soak: {parallel: 8}` + `duration: 3600` | 时间驱动持续压测 |
+
+**时长**（`duration` 与 `level_duration` 二选一，全模式可用）：
+
+| 键 | 语义 |
+|---|---|
+| `duration` | **整场压测总时长**（秒）。单档模式直传；ramp/多档梯度均分为每档秒数（近似预算，不含 warmup/档间开销）；probe 搜索轮数不可预知 → **看门狗**：到点杀子进程，收集已完成轮次（日志标注截断，不报错） |
+| `level_duration` | **每档固定秒数**。多档直传；probe = 每轮墙钟上限（每轮采样数由 SLA 逻辑强制 = 并发×2）；单档模式与 `duration` 等价 |
+
+联动规则：配了任一时长键且未显式配 `number` → number 自动放大安全上限
+（时长驱动，防默认 8 条被"先到为准"掐死）；显式配 `number` 则与时长先到为准。
+evalscope 底层 `--duration` 为软退出：到点后不派新请求、在途请求跑完。
 
 ```yaml
 # examples/perf_evalscope.yaml（节选）
@@ -258,10 +269,37 @@ perf_report.html、执行日志）。
 是云端 API 容量评估与模型/部署配置对比；**中途熔断**（跑到一半按错误率/延迟
 停止）上游不支持，档间判定（probe 的 SLA 搜索）可用，记 backlog。
 
+### locust 压测（engine: locust）
+
+通用 HTTP 压测备选（`pip install 'aite[locust]'`），与 evalscope-perf 并列
+互补：非 OpenAI 兼容端点改造 / 极端规模分布式（worker 模式）场景用；LLM 原生
+指标（TPOT/ITL/吞吐分档）需求用 evalscope-perf。
+
+- **复用同一 `perf` 配置段**（同键同语义）：负载 dataset/prompt、模式
+  baseline/ramp/soak + 直配（**probe 不支持**，配置即报错——SLA 二分搜索是
+  evalscope perf 专有）、时长 duration/level_duration 同语义（locust 每档
+  独立 `-t` 进程到点自退出，无看门狗）
+- **locust 特有**：`spawn_rate`（每秒拉起用户数，缺省 = 档位并发）；`number`
+  无语义（locust 按时长/用户数驱动），配了忽略；**必配一个时长键**
+- 指标对齐 evalscope-perf 命名（`dataset="locust:u<用户数>"`）：ttft_ms（流式
+  首包计时，自定义 TTFT 事件）/ latency_avg_ms / latency_p95_ms / qps /
+  error_rate + **错误明细**（`_failures.csv` → 错误文本×次数，CLI 汇总打印）；
+  tpot/itl/output_tps locust 无来源不产出
+
+```bash
+pip install 'aite[locust]'
+aite run -c examples/locust.yaml
+```
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、
 模型管理、人工评测闭环（领取/评分/导出 CSV）、后台任务。可选 `AITE_WEB_TOKEN` Bearer 鉴权。
+
+工具域 REST（C4b 切片）：`GET /api/v1/tools/engines`（引擎选择器）、
+`GET /api/v1/tools/benchmarks?engine=…`（基准/场景目录）；任务创建/执行复用
+`POST /api/v1/runs`（config 直传 engine 块后台执行）+ `GET /api/v1/tasks/{id}/stream`
+（SSE 进度）——前端建任务表单的两个目录数据源已就绪。
 
 ## 存储
 

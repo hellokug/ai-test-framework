@@ -188,3 +188,22 @@ metrics: [{exact_match: {threshold: 0.5}}]
         resp = client.get("/")
         assert resp.status_code == 200
         assert b"aite" in resp.content
+
+    def test_tools_engines(self, client):
+        data = client.get("/api/v1/tools/engines").json()
+        names = {e["name"] for e in data["items"]}
+        assert {"evalscope", "evalscope-perf", "pytest", "locust"} <= names
+
+    def test_tools_benchmarks_catalog(self, client):
+        data = client.get("/api/v1/tools/benchmarks",
+                          params={"engine": "evalscope-perf"}).json()
+        assert data["engine"] == "evalscope-perf"
+        assert data["items"][0]["name"] == "chat"
+        assert "ttft_ms" in data["items"][0]["metrics"]
+
+    def test_tools_benchmarks_unknown_engine_404(self, client):
+        resp = client.get("/api/v1/tools/benchmarks", params={"engine": "nope"})
+        assert resp.status_code == 404
+
+    def test_tools_benchmarks_requires_engine(self, client):
+        assert client.get("/api/v1/tools/benchmarks").status_code == 422

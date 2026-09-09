@@ -91,6 +91,11 @@ def get_tool(name: str) -> ToolAdapter:
         raise KeyError(f"unknown tool engine '{name}'; available: {sorted(_TOOLS)}") from None
 
 
+def list_tools() -> list[str]:
+    """已注册工具引擎名（REST /tools/engines 与前端引擎选择器数据源）。"""
+    return sorted(_TOOLS)
+
+
 def api_endpoint(target: dict, *, suffix: str = "/chat/completions") -> tuple[str, str]:
     """openai_compatible target → (完整请求 URL, api_key)。
 

@@ -16,15 +16,24 @@ TTFT/TPOT/ITL/吞吐原生分档），aite 负责编排与统一入库——不�
 **模式**（``perf.mode`` 四选一；省略 = 兼容直配 ``parallel``/``number``）：
 
 - ``baseline``：固定并发基准 → 单值 ``--parallel``
-- ``ramp``：爬坡（from/to/step 展开为并发梯度，``to`` 必含）→ 多值
-  ``--parallel``；``duration`` = 单档运行秒数
+- ``ramp``：爬坡（from/to/step 展开为并发梯度，``to`` 必含）→ 多值 ``--parallel``
 - ``probe``：摸高（SLA 约束下二分搜索最大可持续并发）→ ``--sla-auto-tune``；
   ``sla: {指标: 上限}`` 全部按 ``<`` 组成 AND 组
-- ``soak``：长稳（时间驱动）→ ``--parallel`` + ``--duration``；number 自动
-  放大为安全上限（默认 1000 会让长稳提前结束）
+- ``soak``：长稳（时间驱动）→ ``--parallel`` + ``--duration``
+
+**时长**（``duration`` 与 ``level_duration`` 二选一）：
+
+- ``duration``：整场压测总时长（秒）。单档模式（baseline/soak/直配单档）总时长
+  即单档时长直传；多档梯度均分为每档秒数（近似预算，不含 warmup/档间开销）；
+  probe 搜索轮数不可预知、无法均分 → 看门狗：到时杀子进程，收集已完成轮次
+  （日志标注截断，不报错）
+- ``level_duration``：每档固定秒数。多档直传；probe = 每轮墙钟上限（每轮采样
+  数仍由 SLA 逻辑强制 = 并发×2）；单档模式与 duration 等价
 
 采样：``warmup_num`` 预热不计入；``stream: true``（默认）才有真 TTFT；
-``number``/``duration`` 先到为准。中途熔断上游不支持（SLA 档间判定），backlog。
+``number``/``--duration`` 先到为准；时长驱动（配了任一时长键且未显式配
+``number``）时 number 自动放大安全上限（防默认条数提前结束），否则缺省 8。
+中途熔断上游不支持（SLA 档间判定），backlog。
 
 collect 从各档 ``benchmark_summary.json`` / ``benchmark_percentile.json`` 提取
 指标 → 每档每指标一行 ``dataset="perf:c<并发>"``；阈值方向区分越高/越低越好。
@@ -54,7 +63,7 @@ from aite.utils.logging import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 3600     # 整场压测总超时（秒），req.extra.timeout 可覆盖
-SOAK_NUMBER_CAP = 1_000_000   # 长稳模式安全上限（duration 驱动，number 先到即停）
+_DURATION_DRIVEN_NUMBER_CAP = 1_000_000   # 时长驱动安全上限（先到为准，防默认条数提前结束）
 
 _MODES = {"baseline", "ramp", "probe", "soak"}
 # evalscope SLA 可断言指标（sla_run.get_metric_values 键）；
@@ -177,14 +186,12 @@ class PerfAdapter(ToolAdapter):
             raise ValueError("perf 需要 perf.dataset（数据集文件）或 perf.prompt（固定提示词）")
         output_dir = req.work_dir / "perf_raw"
 
-        # ---- 模式 → 并发列表 / duration / probe 参数 ----
+        # ---- 模式 → 并发列表 / probe 参数 ----
         mode = cfg.get("mode")
         if mode is not None and mode not in _MODES:
             raise ValueError(f"perf.mode 须 ∈ {sorted(_MODES)}")
         parallel: list[int] | None = None
-        duration: float | None = None
         probe_args: list[str] = []
-        soak = False
         if mode == "baseline":
             b = cfg.get("baseline") or {}
             if not isinstance(b.get("parallel"), int) or isinstance(b.get("parallel"), bool):
@@ -197,7 +204,6 @@ class PerfAdapter(ToolAdapter):
             if not isinstance(s.get("parallel"), int) or isinstance(s.get("parallel"), bool):
                 raise ValueError("perf.soak 需要 parallel（整数）")
             parallel = [s["parallel"]]
-            soak = True
         elif mode == "probe":
             p = cfg.get("probe") or {}
             max_parallel = p.get("max_parallel")
@@ -224,14 +230,35 @@ class PerfAdapter(ToolAdapter):
         if not _positive_ints(parallel):
             raise ValueError("perf.parallel 须为 ≥1 的整数数组")
 
-        # ---- 采样：number（先到为准）/ duration ----
-        duration = float(cfg["duration"]) if cfg.get("duration") is not None else duration
-        if duration is not None and duration <= 0:
-            raise ValueError("perf.duration 须为正数（秒）")
+        # ---- 时长：duration（整场总时长）与 level_duration（每档秒数）二选一 ----
+        total_duration = cfg.get("duration")
+        level_duration = cfg.get("level_duration")
+        if total_duration is not None and level_duration is not None:
+            raise ValueError("perf.duration 与 perf.level_duration 二选一"
+                             "（整场总时长 / 每档秒数）")
+        if total_duration is not None:
+            total_duration = float(total_duration)
+            if total_duration <= 0:
+                raise ValueError("perf.duration 须为正数（秒）")
+        if level_duration is not None:
+            level_duration = float(level_duration)
+            if level_duration <= 0:
+                raise ValueError("perf.level_duration 须为正数（秒）")
+        # probe 轮数不可预知，总时长无法均分 → 看门狗（到点杀进程收已完成轮次）
+        watchdog = mode == "probe" and total_duration is not None
+        # --duration 值：level_duration 直传；duration 单档直传、多档均分
+        per_level: float | None = None
+        if level_duration is not None:
+            per_level = level_duration
+        elif total_duration is not None and not watchdog:
+            per_level = total_duration if len(parallel) == 1 else total_duration / len(parallel)
+
+        # ---- 采样：number（显式配 → 先到为准；时长驱动 → 自动放大） ----
         number = cfg.get("number")
         if number is None:
-            # 长稳缺省放大安全上限（duration 驱动，避免默认值提前结束）；其余模式默认 8
-            number = SOAK_NUMBER_CAP if soak else 8
+            # 时长驱动缺省放大安全上限（防默认 8 条被先到为准掐死）；否则缺省 8
+            number = (_DURATION_DRIVEN_NUMBER_CAP
+                      if (per_level is not None or watchdog) else 8)
         if isinstance(number, int) and not isinstance(number, bool) and number >= 1:
             number = [number] * len(parallel)   # 标量自动对齐梯度长度
         if not _positive_ints(number) or len(number) != len(parallel):
@@ -249,9 +276,9 @@ class PerfAdapter(ToolAdapter):
             "--outputs-dir", str(output_dir),
             "--stream" if cfg.get("stream", True) else "--no-stream",
         ]
-        if duration is not None:
+        if per_level is not None:
             # 整数秒发整数（CLI 可读性：30 而非 30.0）
-            dur = int(duration) if duration == int(duration) else duration
+            dur = int(per_level) if per_level == int(per_level) else per_level
             args += ["--duration", str(dur)]
         if dataset:
             args += ["--dataset", "custom",
@@ -278,10 +305,14 @@ class PerfAdapter(ToolAdapter):
         if cfg.get("no_test_connection"):
             args.append("--no-test-connection")
         args += probe_args
+        # 看门狗即总时长预算：覆盖 extra.timeout（用户显式给的整场预算优先于兜底超时）
+        timeout = (int(total_duration) if watchdog
+                   else int(req.extra.get("timeout", DEFAULT_TIMEOUT)))
         return {
             "args": args,
             "env": {"PYTHONIOENCODING": "utf-8"},
-            "timeout": int(req.extra.get("timeout", DEFAULT_TIMEOUT)),
+            "timeout": timeout,
+            "duration_watchdog": int(total_duration) if watchdog else None,
             "output_dir": str(output_dir),
             "dataset": dataset,   # run 阶段导出 prompt 文件用
         }
@@ -307,6 +338,17 @@ class PerfAdapter(ToolAdapter):
             proc = subprocess.run([binary, *cfg["args"]], capture_output=True,
                                   env=env, timeout=cfg["timeout"])
         except subprocess.TimeoutExpired as exc:
+            out = (exc.stdout or b"").decode("utf-8", errors="replace")
+            err = (exc.stderr or b"").decode("utf-8", errors="replace")
+            if cfg.get("duration_watchdog"):
+                # probe + duration 总时长预算：到点截断不报错，已完成轮次的
+                # 产出文件在盘上，collect 正常收集（无轮次完成则 collect 报错）
+                logger.warning("perf 总时长预算 %ss 耗尽，截断 probe 搜索"
+                               "（已完成轮次保留）", cfg["duration_watchdog"])
+                log_path.write_text(
+                    f"DURATION_BUDGET_EXHAUSTED after {cfg['duration_watchdog']}s\n"
+                    f"{out}{err}", encoding="utf-8")
+                return
             log_path.write_text(f"TIMEOUT after {cfg['timeout']}s\n{exc}",
                                 encoding="utf-8")
             raise RuntimeError(f"压测超时（{cfg['timeout']}s）") from exc
@@ -332,12 +374,20 @@ class PerfAdapter(ToolAdapter):
                                "查看 logs/perf.log")
         grouped: dict[int, list[tuple[dict, dict]]] = {}   # 并发 → [(summary, p95行)]
         for summary_path in summaries:
-            data = json.loads(summary_path.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(summary_path.read_text(encoding="utf-8"))
+            except ValueError:
+                # 看门狗截断可能杀在写盘中途：跳过损坏产出，收集其余轮次
+                logger.warning("跳过损坏/截断的压测产出 %s", summary_path)
+                continue
             concurrency = int(data.get("Concurrency") or 0)
             p95: dict = {}
             pct_path = summary_path.parent / "benchmark_percentile.json"
             if pct_path.is_file():
-                rows = json.loads(pct_path.read_text(encoding="utf-8"))
+                try:
+                    rows = json.loads(pct_path.read_text(encoding="utf-8"))
+                except ValueError:
+                    rows = []
                 p95 = next((r for r in rows if r.get("Percentiles") == "95%"), {})
             grouped.setdefault(concurrency, []).append((data, p95))
 

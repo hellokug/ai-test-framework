@@ -57,7 +57,10 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 - [ ] C4 入口与文档
       - [x] C4a 基准目录接口：`aite tool benchmarks` CLI + `list_tasks()` Python API，
             数据形状 REST-ready（2026-09-02，见进度记录）
-      - [ ] C4b REST 端点（`/api/v1/tools/...`，与前端阶段一并做）
+      - [x] C4b REST 端点·工具域切片（2026-09-09）：`GET /api/v1/tools/engines`
+            与 `GET /api/v1/tools/benchmarks?engine=`（前端建任务表单的引擎/
+            场景选择器数据源）；任务创建/执行复用既有 `POST /api/v1/runs` +
+            SSE——REST 形态完整，剩余 UI 配套归模块 F
       - [ ] C4c 文档收尾（dataset-guide / README 复核）
 
 验证方式：真实 evalscope 跑 ceval/gsm8k 小样本，结果入库、Web 趋势可见。
@@ -177,13 +180,30 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
       （输出长度分布）；`tokenizer_path` / `min/max_prompt_length` 透传。
 - [x] E5 模式层（2026-09-08 完成，用户评审：缺爬坡/摸高/基准/长稳与时长配置）：
       `perf.mode` 四选一——baseline（固定并发）/ ramp（from/to/step 展开并发
-      梯度，to 必含，duration = 单档秒数）/ probe（`--sla-auto-tune` SLA 下二分
-      搜索最大并发，sla 指标集 fail-fast 校验）/ soak（duration 驱动，number
-      自动放大安全上限防默认 1000 提前结束）；省略 mode = v1 直配兼容。
+      梯度，to 必含）/ probe（`--sla-auto-tune` SLA 下二分搜索最大并发，sla
+      指标集 fail-fast 校验）/ soak（duration 驱动）；省略 mode = v1 直配兼容。
       **压测中途熔断上游不支持**（SLA 档间判定才有），记 backlog。
       踩坑：probe 产出布局为 `sla_tuning/sla_parallel_N_run_i/`（非
       `parallel_X_number_Y/`），collect 改统一 glob `**/benchmark_summary.json`
       按并发聚合（多 run 均值），两种布局都覆盖。
+- [x] E6 时长参数统一（2026-09-09 完成，用户评审：所有场景都要能用 duration
+      控制任务执行总时间——总时长与单档时长必须分开）：`duration` 全模式统一为
+      **整场总时长**（单档直传 / 多档均分 / probe 轮数不可预知 → 看门狗：subprocess
+      timeout=duration 到点截断，收集已完成轮次不报错，collect 容错跳过截断损坏
+      的产出文件）；新增 `level_duration` 每档秒数（多档直传 / probe = 每轮墙钟
+      上限，顺手补上 probe 每轮时长控制缺口——每轮采样数被 SLA 逻辑强制 = 并发×2，
+      duration 是控每轮时长的唯一入口）；两键互斥 fail-fast。number 联动：时长
+      驱动且未显式配 number → 放大安全上限（原 soak 专属规则扩展到全模式，修复
+      非 soak 配 duration 被"先到为准"8 条掐死的隐藏坑）。v1 直配多档下 duration
+      语义从每档秒数改为总量均分（无外部使用方，直接改）。
+- [x] E7 locust 适配器（2026-09-09 完成，backlog 既有条目转正，用户终态需求：
+      通用 HTTP/分布式备选）：`engine: locust`，复用同一 perf 配置段（同键同
+      语义）；probe 明确报错不支持；必配时长键（locust 无请求数上限语义，
+      number 忽略）；新增 spawn_rate。每档独立 `locust --headless -u/-r/-t
+      --csv` 子进程；locustfile 由适配器生成（SSE 逐块读首包计时 TTFT，自定义
+      TTFT 事件进统计，不污染延迟统计）；collect 解析 `_stats.csv`/`_failures.csv`
+      → 指标行 `dataset="locust:u<N>"`（命名与 evalscope-perf 对齐趋势可比）+
+      错误明细（错误文本×次数）进 failures。pyproject extras `locust`。
 
 关键决策：
 
@@ -201,6 +221,58 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
 
 验证方式：离线端到端（fake OpenAI 端点跑真实 evalscope perf 子进程）+
 真实 Ollama 端到端 `aite run -c examples/perf_evalscope.yaml`。
+
+### 模块 F：前端任务编排与压测大屏（2026-09-09 立项，需求已对齐未实施）
+
+用户终态需求（前端阶段核心场景）：创建压测任务表单——指定任务参数、选择测试
+工具（evalscope-perf / locust）、并发模式/QPS 模式、基准/爬坡等模式、自定义
+模型参数、选择数据集**或由框架自动生成固定输入输出**；执行中有大屏曲线——
+TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；请求报错统计
+展示（哪些错误码、各多少个、是什么错）。
+
+- [ ] F1 任务创建表单：引擎选择器（`GET /tools/engines` 已就绪）+ 场景/数据集
+      选择器（`GET /tools/benchmarks` 已就绪）+ 模式/时长/负载/模型参数表单 →
+      组装 suite config 走 `POST /runs`（链路已有，本项纯前端）
+- [ ] F2 大屏实时曲线：现链路为档级汇总（run 完成后入 `run_metric_summary`），
+      大屏需要**时间序列**数据（逐秒/逐请求）——需扩展工具层输出时序文件
+      （evalscope perf 明细 json / locust csv 已含）+ 新增时序读取端点 + SSE
+      推送；错误码统计（locust `_failures.csv` 聚合已入 failures；evalscope
+      perf 错误分布需从明细提取）
+- [ ] F3 负载自动生成：数据集不选时框架生成固定输入输出（内置合成负载：
+      按 max_tokens/上下文长度目标构造确定性 prompt，复用 long_context 的
+      haystack 占位符思路）
+
+### 模块 G：执行机纳管（2026-09-09 立项，需求已对齐未实施）
+
+压测需要多机打流（单机客户端即瓶颈）。用户要求：纳管执行机（注册/心跳/状态），
+执行任务时可选择执行机；**本机 Linux 环境作调试**。
+
+- [ ] G1 执行机 agent：注册到平台（name/标签/容量）+ 心跳 + 拉取任务执行
+      （执行机跑 aite worker 形态，或 locust worker 分布式形态二选一评审）
+- [ ] G2 任务下发路由：suite 加 `executor` 字段 → 平台调度到选定执行机；
+      结果回传统一入库（执行机本地产出上报或共享存储）
+- [ ] G3 本机 Linux 调试环境接入（WSL2 或局域网 Linux 主机作首台执行机）
+
+### 模块 H：性能数据归档（2026-09-09 立项，需求已对齐未实施）
+
+- [ ] 归档策略：run 级冷热分层（活跃 run 在库、历史归档）、原始产出
+      （benchmark_summary/percentile/明细）压缩归档与索引、按 run/时间/模型
+      检索恢复；存储清理策略（backlog 既有项并入）
+
+### 模块 I：可靠性 chaos 框架（2026-09-09 立项，需求已对齐未实施）
+
+先调研开源 chaos 工具可集成性（chaosblade / chaos-mesh / Litmus / Pumba），
+评估维度：故障类型覆盖（进程/网络/资源/IO）、K8s 依赖、Python API 或 CLI、
+许可证。不可行则自研。自研需覆盖五能力：
+
+- [ ] I1 故障对象感知：探测被测系统拓扑（进程/容器/节点/网络路径），故障注入
+      点发现与展示
+- [ ] I2 故障注入：故障类型库（kill/挂起/CPU 打满/内存压力/网络延迟丢包断连/
+      磁盘满）+ 编排（单发/组合/时序）
+- [ ] I3 检测：被测系统健康探测 + 故障生效确认（注入失败与故障无效应区分）
+- [ ] I4 恢复：故障自动回收/兜底清理（防故障泄漏），run 结束必恢复校验
+- [ ] I5 业务观测：故障期间业务指标采集（错误率/延迟毛刺/恢复时长 MTTR），
+      与模块 F 大屏复用时序链路；与 reliability.yaml 既有可靠性评测打通
 
 ## 基线（已完成）
 
@@ -246,3 +318,4 @@ latency_p95/ttft/tokens_per_sec 均在），缺的是压测编排层（并发梯
 - 2026-09-07 API 契约域场景整合（用户评审反馈：分得太细）：9 细场景合并为 4 大场景（38 例不变，用例 id 不变）——api_params（请求侧 22 例：参数校验+可选参数+json_mode+tool_choice+输入鲁棒性）、api_stream（流式 4）、api_limits（输出侧 7：限制+长输出）、api_shape（响应体契约 5）。口径：按请求侧/流式/输出侧/响应侧划分，场景粒度=一个 pass_rate 汇总主题。注意：历史 run 中的旧场景名（api_optional_params 等）不再产出新行，趋势对比按新场景名重建。
 - 2026-09-08 **模块 E：性能压测（evalscope-perf 适配器）完成**。引擎选型经用户挑战修正：压测客户端不自研（客户端能力会污染测量），「两者都要，perf 先」——evalscope perf 打头阵（零新依赖、LLM 原生 TTFT/TPOT/ITL/吞吐分档、并发梯度/warmup/开环限速内置），locust 后置备选。交付：`aite/tools/perf_adapter.py`（perf yaml 段 → CLI 参数映射 / subprocess 执行 / benchmark_summary+percentile 解析 → 每档每指标一行 perf:c<并发> 入库）、examples/perf_evalscope.yaml、README 性能压测章节。+16 单测含离线端到端（真实 evalscope perf 子进程打 fake OpenAI 端点全链路 6.4s 跑通）。踩坑：① evalscope 包无 `__main__`（CLI 是 console script，须 shutil.which 定位子进程）；② `--number` 与 `--parallel` 必须等长（标量自动复制对齐）；③ **工具层阈值方向**——`passed >= 硬编码`对延迟/错误率类"越低越好"指标是反的（自研引擎本有 higher_is_better 语义，工具层一直没接；evalscope 全是准确率类未暴露，perf 一上就露馅），ToolMetricRow 加方向字段（默认 True 向后兼容）+ overall 行透传。
 - 2026-09-08 模块 E 补强 E4+E5（用户评审：固定提示词不真实、缺压测模式与时长配置）：负载层数据集驱动（perf.dataset 导出逐行 prompt + max_tokens 区间采样）+ 模式层四选一（baseline 基准/ramp 爬坡/probe 摸高 SLA 二分搜索/soak 长稳 duration 驱动）；v1 直配写法保留兼容。collect 统一 glob 两种产出布局（普通 parallel_X_number_Y 与摸高 sla_tuning/sla_parallel_N_run_i）按并发聚合。+14 单测（模式映射/ramp 展开/sla 构造/导出/三场景离线 e2e）。中途熔断上游不支持，记 backlog。
+- 2026-09-09 模块 E 补强 E6+E7 + 工具域 REST（C4b 切片）：①时长参数统一（用户评审：所有场景都要能用 duration 控制总时长，与单档时长分开）——duration 全模式 = 整场总时长（单档直传/多档均分/probe 看门狗截断收已完成轮次），新增 level_duration 每档秒数（probe = 每轮墙钟上限），两键互斥；number 联动扩展到全模式（时长驱动未显式配 → 放大安全上限，修复非 soak 配 duration 被 8 条先到为准掐死的坑）。②locust 适配器转正（engine: locust，复用 perf 段，probe 报错不支持，spawn_rate 新增，指标命名与 evalscope-perf 对齐，_failures.csv 错误明细进 failures）。③工具域 REST：GET /tools/engines + /tools/benchmarks（前端建任务表单数据源；任务执行复用 POST /runs + SSE）。立项模块 F（前端任务编排与大屏）/G（执行机纳管）/H（性能数据归档）/I（可靠性 chaos 框架），需求已对齐未实施。+16 单测（E6 时长语义/看门狗/截断容错）+16 单测（locust build_config/负载落盘/CSV 解析/执行守卫）+4 web 冒烟（322 全绿）。

@@ -9,7 +9,7 @@ import pytest
 
 from aite.tools.base import ToolRunRequest
 from aite.tools.perf_adapter import (
-    SOAK_NUMBER_CAP,
+    _DURATION_DRIVEN_NUMBER_CAP,
     PerfAdapter,
     _expand_ramp,
     _export_prompts,
@@ -107,7 +107,7 @@ class TestModes:
         args = cfg["args"]
         i = args.index("--parallel")
         assert args[i + 1:i + 4] == ["1", "5", "9"]        # to=9 已含，3 档
-        assert args[args.index("--duration") + 1] == "30"  # 单档运行秒数
+        assert args[args.index("--duration") + 1] == "10"  # 总 30s 均分 3 档
         j = args.index("--number")
         assert args[j + 1:j + 4] == ["5", "5", "5"]        # 标量对齐档数
 
@@ -132,8 +132,8 @@ class TestModes:
             "prompt": "p", "mode": "soak", "soak": {"parallel": 8}, "duration": 3600}))
         args = cfg["args"]
         assert args[args.index("--parallel") + 1] == "8"
-        assert args[args.index("--duration") + 1] == "3600"
-        assert args[args.index("--number") + 1] == str(SOAK_NUMBER_CAP)  # 安全上限
+        assert args[args.index("--duration") + 1] == "3600"   # 单档：总时长即每档
+        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
 
     def test_mode_conflicts_and_errors(self):
         with pytest.raises(ValueError, match="不要直接配"):
@@ -149,6 +149,8 @@ class TestModes:
             ({"prompt": "p", "mode": "probe", "probe": {"max_parallel": 8,
                                                         "sla": {"nope": 1}}}, "sla"),
             ({"prompt": "p", "duration": -1}, "duration"),
+            ({"prompt": "p", "level_duration": 0}, "level_duration"),
+            ({"prompt": "p", "duration": 60, "level_duration": 30}, "二选一"),
         ]:
             with pytest.raises(ValueError, match=err):
                 PerfAdapter().build_config(make_request(perf=perf))
@@ -159,6 +161,120 @@ class TestModes:
             perf={"prompt": "p", "parallel": [1, 4], "number": 8}))
         i = cfg["args"].index("--parallel")
         assert cfg["args"][i + 1:i + 3] == ["1", "4"]
+
+
+class TestDuration:
+    """时长层：duration（整场总时长）/ level_duration（每档秒数）各模式语义。"""
+
+    def test_baseline_duration_passthrough_and_cap(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "baseline", "baseline": {"parallel": 4},
+            "duration": 300}))
+        args = cfg["args"]
+        assert args[args.index("--duration") + 1] == "300"   # 单档直传
+        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
+
+    def test_ramp_duration_split_evenly(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "ramp",
+            "ramp": {"from": 1, "to": 16, "step": 4}, "duration": 90}))
+        args = cfg["args"]
+        i = args.index("--parallel")
+        levels = args[i + 1:i + 6]
+        assert len(levels) == 5                              # 1/5/9/13/16 共 5 档
+        assert args[args.index("--duration") + 1] == "18"    # 总 90s 均分 5 档（整数秒）
+        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
+
+    def test_ramp_level_duration_passthrough(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "ramp",
+            "ramp": {"from": 1, "to": 9, "step": 4}, "level_duration": 60}))
+        assert cfg["args"][cfg["args"].index("--duration") + 1] == "60"   # 每档 60s 直传
+
+    def test_v1_multilevel_duration_split(self):
+        cfg = PerfAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [1, 4, 8], "duration": 60}))
+        assert cfg["args"][cfg["args"].index("--duration") + 1] == "20"   # 60/3 档（整数秒）
+
+    def test_probe_duration_watchdog(self):
+        """probe 总时长无法均分 → 看门狗：timeout=duration、CLI 不带 --duration。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "probe",
+            "probe": {"max_parallel": 8, "sla": {"avg_ttft": 2000}}, "duration": 600}))
+        assert "--duration" not in cfg["args"]
+        assert cfg["timeout"] == 600                          # 看门狗即总时长预算
+        assert cfg["duration_watchdog"] == 600
+        assert cfg["args"][cfg["args"].index("--number") + 1] == str(
+            _DURATION_DRIVEN_NUMBER_CAP)
+
+    def test_probe_level_duration_per_round(self):
+        """probe + level_duration = 每轮墙钟上限（deepcopy 继承，先到为准）。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "probe",
+            "probe": {"max_parallel": 8, "sla": {"avg_ttft": 2000}},
+            "level_duration": 120}))
+        assert cfg["args"][cfg["args"].index("--duration") + 1] == "120"
+        assert cfg["duration_watchdog"] is None
+        assert cfg["timeout"] == 3600                         # 未配 duration 不动看门狗
+
+    def test_explicit_number_not_amplified(self):
+        """显式配 number → 尊重先到为准（时长只作上限）。"""
+        cfg = PerfAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [4], "duration": 120, "number": 50}))
+        assert cfg["args"][cfg["args"].index("--number") + 1] == "50"
+
+    def test_no_duration_default_number_unchanged(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "baseline", "baseline": {"parallel": 4}}))
+        assert cfg["args"][cfg["args"].index("--number") + 1] == "8"
+
+    def test_watchdog_exec_returns_normally(self, tmp_path, monkeypatch):
+        """_exec 看门狗分支：TimeoutExpired → 落日志不报错（截断语义）。"""
+        import subprocess as sp
+
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "mode": "probe",
+            "probe": {"max_parallel": 8, "sla": {"avg_ttft": 2000}}, "duration": 600}))
+
+        def fake_run(*args, **kw):
+            raise sp.TimeoutExpired(cmd="evalscope", timeout=600)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+        import shutil as sh
+        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
+        PerfAdapter()._exec(cfg)                              # 不应抛错
+        log = (tmp_path / "logs" / "perf.log").read_text(encoding="utf-8")
+        assert "DURATION_BUDGET_EXHAUSTED" in log
+
+    def test_exec_plain_timeout_still_raises(self, tmp_path, monkeypatch):
+        """无看门狗的普通超时维持报错语义。"""
+        import subprocess as sp
+
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        cfg["timeout"] = 1
+
+        def fake_run(*args, **kw):
+            raise sp.TimeoutExpired(cmd="evalscope", timeout=1)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+        import shutil as sh
+        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
+        with pytest.raises(RuntimeError, match="超时"):
+            PerfAdapter()._exec(cfg)
+
+    def test_collect_tolerates_truncated_summary(self, tmp_path):
+        """看门狗截断可能杀在写盘中途：损坏产出跳过，其余轮次照常收集。"""
+        d = tmp_path / "perf_raw" / "m" / "sla_parallel_8_run_0"
+        d.mkdir(parents=True)
+        (d / "benchmark_summary.json").write_text('{"Concurrency": 8, "Tot',
+                                                  encoding="utf-8")
+        good = tmp_path / "perf_raw" / "m" / "sla_parallel_4_run_0"
+        good.mkdir()
+        (good / "benchmark_summary.json").write_text(json.dumps(SUMMARY),
+                                                     encoding="utf-8")
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path))
+        assert {r.dataset for r in result.rows} == {"perf:c4"}
 
 
 class TestDatasetLoad:

@@ -21,8 +21,10 @@ perf:
   # probe: {max_parallel: 32, sla: {avg_ttft: 3000}}   # 摸高：SLA 下二分搜索最大并发
   # soak: {parallel: 8}            # 长稳：时间驱动（配 duration）
 
-  number: 4                         # 每档采样数（标量自动对齐档位）
-  # duration: 60                   # 每档运行秒数（与 number 先到为准；soak 用它驱动）
+  number: 4                         # 每档采样数（标量自动对齐档位；与时长先到为准）
+  # duration: 600                  # 整场总时长（秒）：单档直传；ramp 均分每档；
+  #                                # probe 轮数不可预知 → 看门狗到点截断收已完成轮次
+  # level_duration: 60             # 每档固定秒数（与 duration 二选一）；probe = 每轮上限
   warmup_num: 1                     # 预热请求，不计入统计
   stream: true                      # 默认流式——非流式测不到真 TTFT
 
