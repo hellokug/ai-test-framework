@@ -11,9 +11,9 @@ target:                           # 复用平台统一 target 配置
 
 tools:
   # 用法一（内置场景）：datasets = 场景名，可用 `aite tool benchmarks pytest` 查看
-  datasets: [basic_chat, structured_output, tool_calling, long_context]
+  datasets: [api_limits]
   metric_thresholds: {pass_rate: 1.0}   # auto 等价于 1.0（零容忍）；不配则无判定
-  # cases: [yes_no]           # 用例级过滤（默认全部）：单用例问题复现；id 取自
+  #  cases: [yes_no]           # 用例级过滤（默认全部）：单用例问题复现；id 取自
   #                            # cases.jsonl，仅支持数据驱动场景；无匹配用例的场景自动跳过
   # extra_args:
   #   timeout: 1800              # 单场景总超时（秒），默认 1800
