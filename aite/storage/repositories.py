@@ -13,6 +13,8 @@ from aite.core.interfaces import Repository
 from aite.core.types import MetricResult, TargetResponse, TestCase, utcnow
 from aite.storage.db import Database
 from aite.storage.models import (
+    AgentNodeRow,
+    AgentTaskRow,
     BgTaskRow,
     ManualEvalScoreRow,
     ManualEvalTaskRow,
@@ -481,3 +483,150 @@ class SqlAlchemyRepository(Repository):
                 "created_at": aware(row.created_at).isoformat(),
                 "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
             }
+
+    # ---------------------------------------------------------------- agents
+    async def register_agent(self, name: str, labels: list[str],
+                             version: str | None) -> dict:
+        """注册执行机；重名接管（同一台机器 agent 重启复用行，id 不变）。"""
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(AgentNodeRow).where(AgentNodeRow.name == name)
+            )).scalar_one_or_none()
+            if row is None:
+                row = AgentNodeRow(id=new_id(), name=name)
+                session.add(row)
+            row.labels = labels
+            row.agent_version = version
+            row.status = "online"
+            row.last_heartbeat = utcnow()
+            await session.commit()
+            return {"id": str(row.id), "name": row.name, "labels": row.labels,
+                    "status": row.status}
+
+    async def heartbeat_agent(self, agent_id: str, current_task_id: str | None) -> dict | None:
+        """心跳：刷新在线状态与当前任务；返回节点信息（None=未注册）。"""
+        async with self.db.sessions() as session:
+            row = await session.get(AgentNodeRow, agent_id)
+            if row is None:
+                return None
+            row.status = "online"
+            row.last_heartbeat = utcnow()
+            row.current_task_id = current_task_id
+            await session.commit()
+            return {"id": str(row.id), "name": row.name, "status": row.status,
+                    "current_task_id": current_task_id}
+
+    async def list_agents(self) -> list[dict]:
+        async with self.db.sessions() as session:
+            rows = (await session.execute(
+                select(AgentNodeRow).order_by(AgentNodeRow.name)
+            )).scalars().all()
+            return [{
+                "id": str(r.id), "name": r.name, "labels": r.labels,
+                "status": r.status, "agent_version": r.agent_version,
+                "current_task_id": str(r.current_task_id) if r.current_task_id else None,
+                "last_heartbeat": aware(r.last_heartbeat).isoformat(),
+            } for r in rows]
+
+    async def get_agent_by_name(self, name: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(AgentNodeRow).where(AgentNodeRow.name == name)
+            )).scalar_one_or_none()
+            return {"id": str(row.id), "name": row.name} if row else None
+
+    async def sweep_stale_agents(self, timeout_s: float) -> int:
+        """懒式回收：心跳超时的节点标 offline，其在跑任务标 error（状态机闭合）。"""
+        cutoff = utcnow() - timedelta(seconds=timeout_s)
+        async with self.db.sessions() as session:
+            stale = (await session.execute(
+                select(AgentNodeRow).where(
+                    AgentNodeRow.status == "online",
+                    AgentNodeRow.last_heartbeat < cutoff)
+            )).scalars().all()
+            if not stale:
+                return 0
+            stale_ids = [r.id for r in stale]
+            for r in stale:
+                r.status = "offline"
+            tasks = (await session.execute(
+                select(AgentTaskRow).where(
+                    AgentTaskRow.node_id.in_(stale_ids),
+                    AgentTaskRow.status.in_(("dispatched", "running")))
+            )).scalars().all()
+            for t in tasks:
+                t.status = "error"
+                t.error = "agent offline (heartbeat timeout)"
+                t.finished_at = utcnow()
+            await session.commit()
+            return len(tasks)
+
+    async def create_agent_task(self, run_name: str, engine: str, suite_raw: dict,
+                                node_id: str | None = None) -> dict:
+        async with self.db.sessions() as session:
+            row = AgentTaskRow(id=new_id(), run_name=run_name, engine=engine,
+                               suite_raw=_json_safe(suite_raw), node_id=node_id)
+            session.add(row)
+            await session.commit()
+            return {"id": str(row.id), "status": row.status}
+
+    async def claim_agent_task(self, agent_id: str) -> dict | None:
+        """认领：优先该节点被指派的 queued 任务，其次未指派节点的任务。"""
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(AgentTaskRow).where(
+                    AgentTaskRow.status == "queued",
+                    (AgentTaskRow.node_id == agent_id) | (AgentTaskRow.node_id.is_(None)))
+                .order_by(AgentTaskRow.created_at).limit(1)
+            )).scalar_one_or_none()
+            if row is None:
+                return None
+            row.status = "dispatched"
+            row.dispatched_at = utcnow()
+            node = await session.get(AgentNodeRow, agent_id)
+            if node is not None:
+                node.current_task_id = str(row.id)
+            await session.commit()
+            return {"id": str(row.id), "run_name": row.run_name,
+                    "engine": row.engine, "suite_raw": row.suite_raw}
+
+    async def update_agent_task(self, task_id: str, status: str | None = None,
+                                result: dict | None = None,
+                                error: str | None = None) -> None:
+        async with self.db.sessions() as session:
+            row = await session.get(AgentTaskRow, task_id)
+            if row is None:
+                return
+            if status:
+                row.status = status
+            if result is not None:
+                row.result = _json_safe(result)
+            if error is not None:
+                row.error = error
+            if status in ("done", "error", "stale"):
+                row.finished_at = utcnow()
+            await session.commit()
+
+    async def list_agent_tasks(self, limit: int = 50) -> list[dict]:
+        async with self.db.sessions() as session:
+            rows = (await session.execute(
+                select(AgentTaskRow).order_by(AgentTaskRow.created_at.desc()).limit(limit)
+            )).scalars().all()
+            return [self._agent_task_dict(r) for r in rows]
+
+    async def get_agent_task(self, task_id: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = await session.get(AgentTaskRow, task_id)
+            return self._agent_task_dict(row) if row else None
+
+    @staticmethod
+    def _agent_task_dict(row: AgentTaskRow) -> dict:
+        return {
+            "id": str(row.id), "node_id": str(row.node_id) if row.node_id else None,
+            "status": row.status, "run_name": row.run_name, "engine": row.engine,
+            "suite_raw": row.suite_raw or {},
+            "result": row.result, "error": row.error,
+            "created_at": aware(row.created_at).isoformat(),
+            "dispatched_at": aware(row.dispatched_at).isoformat() if row.dispatched_at else None,
+            "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
+        }

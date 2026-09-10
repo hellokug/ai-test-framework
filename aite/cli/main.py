@@ -111,6 +111,7 @@ def run(
     concurrency: int | None = typer.Option(None, help="override concurrency"),
     max_cost_usd: float | None = typer.Option(None, help="cost circuit breaker (USD)"),
     report_formats: str | None = typer.Option(None, help="override report formats csv"),
+    agent: str | None = typer.Option(None, "--agent", help="派发到指定执行机（名称）"),
     quiet: bool = typer.Option(False, "--quiet", help="no live progress, log only"),
     log_level: str = typer.Option("INFO"),
 ) -> None:
@@ -125,9 +126,15 @@ def run(
 
     raw = _yaml.safe_load(config.read_text(encoding="utf-8")) or {}
     sreq = resolve_suite(raw)   # engine 路由 + 校验（与 Web 同源）
+    dataset_ids = [d.strip() for d in datasets.split(",")] if datasets else None
+
+    if agent:
+        # 派发到执行机（模块 G）：创建 agent_task → 轮询终态 → 打印结果
+        _dispatch_to_agent(raw, agent, log_level)
+        return
+
     storage_url = (sreq.config.storage.url if sreq.config
                    else storage_url_of(raw))
-    dataset_ids = [d.strip() for d in datasets.split(",")] if datasets else None
 
     async def _run() -> int:
         async with repo_session(storage_url) as repo:
@@ -427,3 +434,64 @@ def main() -> None:  # console_scripts entrypoint
 
 if __name__ == "__main__":
     main()
+
+
+agent_app = typer.Typer(help="执行机 agent（模块 G：拉取式纳管）")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("serve")
+def agent_serve(
+    master: str = typer.Option(..., "--master", help="master 地址（aite serve）"),
+    name: str = typer.Option(..., "--name", help="执行机名称（注册标识）"),
+    labels: str | None = typer.Option(None, help="逗号分隔标签"),
+    token: str | None = typer.Option(None, help="bearer token（master 开启鉴权时）"),
+    interval: float = typer.Option(5.0, help="心跳间隔（秒）"),
+    log_level: str = typer.Option("INFO"),
+) -> None:
+    """常驻执行机 agent：注册 → 心跳领任务 → 执行 → 回传 master。"""
+    setup_logging(log_level, quiet=False)
+    from aite.service.agent_client import AgentClient
+
+    client = AgentClient(master=master, name=name,
+                         labels=[x.strip() for x in labels.split(",")] if labels else [],
+                         token=token, interval=interval)
+    client.run_forever()
+
+
+def _dispatch_to_agent(raw: dict, node: str, log_level: str) -> None:
+    """CLI 派发：创建 agent_task → 轮询终态 → 打印（同步桥接）。"""
+    import time
+
+    from aite import config as _cfg
+    from aite.service.agent_service import dispatch_task
+    from aite.storage import repo_session
+
+    async def _create():
+        async with repo_session(_cfg.DEFAULT_DB_URL) as repo:
+            return await dispatch_task(repo, raw, node)
+
+    task = asyncio.run(_create())
+    console.print(f"[green]已派发[/green] task={task['id']} → {node}，"
+                  f"等待执行机回传…")
+    err_console.print("提示: agent 侧执行；本命令轮询 master 直至终态")
+
+    deadline = time.time() + 86400
+    while time.time() < deadline:
+        time.sleep(3)
+
+        async def _poll():
+            async with repo_session(_cfg.DEFAULT_DB_URL) as repo:
+                return await repo.get_agent_task(task["id"])
+
+        current = asyncio.run(_poll())
+        if current["status"] in ("done", "error", "stale"):
+            if current["status"] == "done":
+                result = current.get("result") or {}
+                console.print(f"[green]完成[/green] run_id={result.get('run_id')} "
+                              f"status={result.get('status')}")
+                raise SystemExit(0 if result.get("status") == "passed" else 1)
+            err_console.print(f"[red]派发失败[/red]: {current.get('error')}")
+            raise SystemExit(1)
+    err_console.print("[red]等待超时（24h）[/red]")
+    raise SystemExit(1)

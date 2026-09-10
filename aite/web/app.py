@@ -77,6 +77,7 @@ def create_app(storage_url: str = config.DEFAULT_DB_URL,
     app.state.aite = state
 
     from aite.web.routers import (
+        agents,
         cases,
         manual_eval,
         models,
@@ -89,7 +90,7 @@ def create_app(storage_url: str = config.DEFAULT_DB_URL,
     )
 
     for router in (runs, suites, cases, models, trends, reports, manual_eval,
-                   tasks, tools):
+                   tasks, tools, agents):
         app.include_router(router.router, prefix="/api/v1")
 
     if STATIC_DIR.exists():

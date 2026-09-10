@@ -106,12 +106,123 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     return req, raw
 
 
-async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
-    """执行工具型 suite：跑外部工具 → 结果统一入库 → 返回 RunReport。"""
+async def execute_tool(raw: dict, work_dir: Path | None = None
+                       ) -> tuple[ToolRunResult, dict, ToolRunRequest]:
+    """纯执行：构造请求 → 适配器执行 → 结果（不落库，agent 回传场景用）。
+
+    work_dir 缺省走 parse_tool_suite 的 reports/tool/<engine>/<run>/<stamp>。
+    """
     engine_name = raw.get("engine")
     adapter = get_tool(engine_name)
     req, cfg_snapshot = parse_tool_suite(raw)
+    if work_dir is not None:
+        req.work_dir = Path(work_dir)
+    result = await adapter.run(req)
+    return result, cfg_snapshot, req
 
+
+def build_tool_report(raw: dict, repo: Any, result: ToolRunResult,
+                      work_dir: Path) -> RunReport:
+    """纯入库（同步部分）：ToolRunResult → RunReport 聚合与 details（不写库）。"""
+    engine_name = raw.get("engine")
+    req, cfg_snapshot = parse_tool_suite(raw)
+    report = RunReport(
+        run_name=req.run_name, pass_strategy="all_of", started_at=utcnow(),
+        config=cfg_snapshot,
+    )
+    summaries = [
+        MetricSummary(
+            metric=r.metric, dataset=r.dataset, group=r.group,
+            aggregation="mean", value=r.value, threshold=r.threshold,
+            passed=r.passed, count=r.count, pass_rate=None,
+            higher_is_better=r.higher_is_better,
+        )
+        for r in result.rows
+    ]
+    summaries.extend(build_overall_rows(result.rows))
+    report.summaries = summaries
+    n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))
+                    for v in result.perf.values())
+    # total_cases 回退：首个 metric 组的 count 总和（多数据集/多场景求和，而非首行）
+    first_metric = result.rows[0].metric if result.rows else None
+    total_counts = sum(r.count for r in result.rows if r.metric == first_metric)
+    report.total_cases = n_samples or total_counts
+    failed = any(r.passed is False for r in result.rows)
+    report.status = "failed" if failed else "passed"
+    report.details["tool"] = engine_name
+    report.details["reports"] = result.report_files
+    report.details["raw_score"] = result.raw_score
+    if result.failures:   # 用例级失败详情（CLI 打印，入库不含 details 无膨胀）
+        report.details["failures"] = result.failures[:50]
+    if result.perf:
+        report.details["perf"] = result.perf
+    report.details["work_dir"] = str(work_dir)
+    report.finished_at = utcnow()
+    _ = repo   # 签名对齐 persist_tool_result；此处不触库
+    return report
+
+
+async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
+                              work_dir: Path, run_id: str | None = None) -> RunReport:
+    """纯入库（异步）：指标汇总落库 → 终态与 details 回写。
+
+    master 回传场景与本地执行共用（agent 场景 work_dir 为 master 侧重建目录）；
+    run_id 传入时复用已建 run 行（本地执行先建行保持 running 中间态可见）。
+    """
+    req, cfg_snapshot = parse_tool_suite(raw)
+    report = RunReport(
+        run_name=req.run_name, pass_strategy="all_of", started_at=utcnow(),
+        config=cfg_snapshot,
+    )
+    if run_id is None:
+        suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)
+        run_id = await repo.create_run(req.run_name, cfg_snapshot, suite_id)
+    report.run_id = run_id
+
+    summaries = [
+        MetricSummary(
+            metric=r.metric, dataset=r.dataset, group=r.group,
+            aggregation="mean", value=r.value, threshold=r.threshold,
+            passed=r.passed, count=r.count, pass_rate=None,
+            higher_is_better=r.higher_is_better,
+        )
+        for r in result.rows
+    ]
+    summaries.extend(build_overall_rows(result.rows))
+    report.summaries = summaries
+    n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))
+                    for v in result.perf.values())
+    first_metric = result.rows[0].metric if result.rows else None
+    total_counts = sum(r.count for r in result.rows if r.metric == first_metric)
+    report.total_cases = n_samples or total_counts
+    failed = any(r.passed is False for r in result.rows)
+    report.status = "failed" if failed else "passed"
+    report.details["tool"] = raw.get("engine")
+    report.details["reports"] = result.report_files
+    report.details["raw_score"] = result.raw_score
+    if result.failures:
+        report.details["failures"] = result.failures[:50]
+    if result.perf:
+        report.details["perf"] = result.perf
+    report.finished_at = utcnow()
+
+    for s in summaries:
+        await repo.save_metric_summary(run_id, s)
+    await repo.update_run(
+        run_id, status=report.status,
+        overall_score=next(iter(result.raw_score.values()), None),
+        total_cases=report.total_cases,
+        finished_at=report.finished_at,
+        details={"reports": result.report_files, "work_dir": str(work_dir),
+                 "failures": result.failures[:50]},
+    )
+    return report
+
+
+async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
+    """本地执行工具型 suite：先建 run 行（running 可见）→ 执行 → 入库。"""
+    engine_name = raw.get("engine")
+    req, cfg_snapshot = parse_tool_suite(raw)
     report = RunReport(
         run_name=req.run_name, pass_strategy="all_of", started_at=utcnow(),
         config=cfg_snapshot,
@@ -119,48 +230,10 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
     suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)
     run_id = await repo.create_run(req.run_name, cfg_snapshot, suite_id)
     report.run_id = run_id
-
     try:
+        adapter = get_tool(engine_name)
         result = await adapter.run(req)
-        summaries = [
-            MetricSummary(
-                metric=r.metric, dataset=r.dataset, group=r.group,
-                aggregation="mean", value=r.value, threshold=r.threshold,
-                passed=r.passed, count=r.count, pass_rate=None,
-                higher_is_better=r.higher_is_better,
-            )
-            for r in result.rows
-        ]
-        summaries.extend(build_overall_rows(result.rows))
-        report.summaries = summaries
-        n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))
-                        for v in result.perf.values())
-        # total_cases 回退：首个 metric 组的 count 总和（多数据集/多场景求和，而非首行）
-        first_metric = result.rows[0].metric if result.rows else None
-        total_counts = sum(r.count for r in result.rows if r.metric == first_metric)
-        report.total_cases = n_samples or total_counts
-        failed = any(r.passed is False for r in result.rows)
-        report.status = "failed" if failed else "passed"
-        report.details["tool"] = engine_name
-        report.details["reports"] = result.report_files
-        report.details["raw_score"] = result.raw_score
-        if result.failures:   # 用例级失败详情（CLI 打印，入库不含 details 无膨胀）
-            report.details["failures"] = result.failures[:50]
-        if result.perf:
-            report.details["perf"] = result.perf
-        report.finished_at = utcnow()
-
-        for s in summaries:
-            await repo.save_metric_summary(run_id, s)
-        await repo.update_run(
-            run_id, status=report.status,
-            overall_score=next(iter(result.raw_score.values()), None),
-            total_cases=report.total_cases,
-            finished_at=report.finished_at,
-            # 元数据落库：产出目录 + 报告文件 + 失败明细（大屏/时序端点经此找回产出）
-            details={"reports": result.report_files, "work_dir": str(req.work_dir),
-                     "failures": result.failures[:50]},
-        )
+        return await persist_tool_result(raw, repo, result, req.work_dir, run_id=run_id)
     except Exception as exc:  # noqa: BLE001 - run-level failure must be persisted
         logger.exception("tool run failed")
         report.status = "error"
@@ -168,4 +241,4 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
         await repo.update_run(run_id, status="error", error=str(exc)[:2000],
                               finished_at=utcnow(),
                               details={"work_dir": str(req.work_dir)})
-    return report
+        return report

@@ -189,6 +189,37 @@ class BgTaskRow(Base):
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
 
 
+class AgentNodeRow(Base):
+    """执行机（模块 G）：拉取式 agent 注册/心跳记录。"""
+
+    __tablename__ = "agent_node"
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(sa.String(128), unique=True)
+    labels: Mapped[list] = mapped_column(sa.JSON(), default=list)
+    status: Mapped[str] = mapped_column(sa.String(32), default="online", index=True)
+    agent_version: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    current_task_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
+    last_heartbeat: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    registered_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+
+
+class AgentTaskRow(Base):
+    """派发到执行机的任务队列（一期压测域；回传结果统一入库 test_run）。"""
+
+    __tablename__ = "agent_task"
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    node_id: Mapped[str | None] = mapped_column(GUID(), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(sa.String(32), default="queued", index=True)
+    suite_raw: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    run_name: Mapped[str] = mapped_column(sa.String(512))
+    engine: Mapped[str] = mapped_column(sa.String(64))
+    result: Mapped[dict | None] = mapped_column(sa.JSON(), nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    dispatched_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
+
+
 def aware(dt: datetime | None) -> datetime | None:
     """SQLite returns naive datetimes; normalize to UTC-aware."""
     if dt is None:
