@@ -329,20 +329,26 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
 > 七原则 + 补充原则已写入 CLAUDE.md「架构设计原则」节，为代码评审基线。
 > 评审证据与问题清单见当日会话记录；以下为待落地项。
 
-- [ ] P1-1 service 层引入：`aite/service/`（run_service/suite_service）收口
-      engine 路由判断/parse 校验/bg_task 编排/limit 改写（CLI 与 Web 各持一份的
-      重复），`run_tool_suite` 拆出 overall 加权聚合，CLI repo 样板收
-      asynccontextmanager
-- [ ] P1-2 适配器 DRY 收敛：`aite/tools/perf_common.py` 抽 _expand_ramp/时长
-      双键/负载三选一/_MODES/DEFAULT_TIMEOUT/_positive_ints（_export_prompts
-      转公开）；subprocess 执行三连抽 `tools/subproc.py`；report_files glob
-      抽 helper
-- [ ] P1-3 超长函数拆分（>80 行 ×4）：perf build_config(164)/locust collect(123)/
-      perf collect(111)/engine _evaluate(91)，拆后用 AST 脚本回归
-- [ ] P2-1 aite/config.py：默认 DB ×5 / reports ×4 / 端口 / 超时 / 环境变量名收口
+- [x] P1-1 service 层引入（2026-09-10）：`aite/service/run_service.py`——
+      resolve_suite（engine 路由 + 校验，CLI/POST /suites/POST /runs 三处收口）、
+      execute_suite（四域统一执行）；build_repository 上移 aite.storage；
+      repo_session contextmanager 消除 CLI 五处样板；run_tool_suite 拆出
+      build_overall_rows 聚合纯函数
+- [x] P1-2 适配器 DRY 收敛（2026-09-10）：`aite/tools/perf_common.py`
+      （expand_ramp/resolve_load/resolve_mode_parallel/resolve_durations/
+      export_prompts 转公开/常量）+ `aite/tools/subproc.py`（run_tool_subprocess/
+      which_or_fail/glob_report_files，pytest/perf/locust/evalscope 四适配器切换）
+- [x] P1-3 超长函数拆分（2026-09-10）：4 个 >80 行函数全部拆解达标
+      （perf build_config 164→<40、perf collect 111→<50、locust collect
+      123→<60、engine _evaluate 91→<50）；新增 scripts/audit_func_len.py
+      AST 审计脚本（全仓 ≤80 行，提交前可跑）
+- [x] P2-1 config.py（2026-09-10）：DB URL ×5 / reports ×4 / 端口 / AITE_DB
+      收口；app.py 版本号改用 aite.__version__
 - [ ] P2-2 契约补齐：collect 进 ToolAdapter ABC；delete_suite/details 进
       Repository 接口；registry 加 unregister（测试不再 pop 私有 dict）
 - [ ] P2-3 路由瘦身：cases/manual_eval/tasks/reports 的解析/聚合/文件 IO 下沉；
       context.build_gateway 反感知（metrics 自带 needs_llm 属性）；Case.check
       14 键改 dict 分派
 - 2026-09-10 架构全码评审（用户给定七原则）+ P0 整改完成：①原则入约——CLAUDE.md 新增「架构设计原则」节（七原则 + 5 条补充：单一事实来源/错误显式化/契约同步演进/时间 UTC 统一/外部边界纪律）与「测试策略」节（分域选测不默认全量）；②P0 修复——SSE 频道错位（stream_run 按 run_id 反查 bg_task 订阅正确频道，历史 run 回存态终态帧；此前订阅 runs:{run_id} 永无事件）、bg_task 状态机闭合（startup 标 stale + shutdown cancel 后回写 error，repo 新增 get_bg_task_by_run/mark_stale_bg_tasks）、harness docstring 非法转义 SyntaxWarning、_parse_dt 静默吞坏时间戳改显式告警；③评审修正——engine 成本熔断 check-then-act 是在途成本不可见的固有软预算近似（+= 均在同步段原子），加注释说明不改逻辑。P1/P2 整改项立「架构整改」节待认领。+4 测试（stale 标记/stream 解析/历史 run/404），分域验证 91 项全绿。
+- 2026-09-10 P1 架构整改完成（三个独立提交）：①P1-2+P1-3——tools/perf_common.py 与 tools/subproc.py 落地（DRY 收敛 + 私有名转公开），4 个 >80 行函数全部拆解（build_config/_probe_args/_resolve_number/_assemble_args；collect 拆分组聚合/时序/报告收集；engine _evaluate 拆 _eval_entry/_run_judges），scripts/audit_func_len.py AST 审计入基线；②P1-1+P2-1——aite/service/run_service.py（resolve_suite/execute_suite 统一 CLI 与 Web 编排），aite/config.py 默认值收口（DB URL ×5/reports ×4/端口/版本号），storage.build_repository 上移 + repo_session 样板收口。踩坑：heredoc 写码时 
+ 转义会被吃掉（三次断行 SyntaxError），多行 Python 代码修改改用 Edit 工具。337 全绿 + ruff 干净 + 函数长度审计达标。
