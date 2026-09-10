@@ -138,12 +138,13 @@ CDN，aite/web/static）加面板三处：index.html nav+section、app.js go()/m
 **可靠性 chaos（模块 I）**：先调研 chaosblade/chaos-mesh/Litmus 可集成性，
 不可行自研五能力（对象感知/注入/检测/恢复/业务观测），与 reliability 域打通。
 
-**架构整改（P0/P1/P2-1 已完成，剩 P2-2/P2-3）**：service 层（aite/service/
-run_service.py——新增编排一律进 service，API 路由保持薄）、tools/perf_common.py
-+ tools/subproc.py（两压测适配器共享解析与子进程执行）、aite/config.py（默认值
-收口，新默认值一律进 config）、scripts/audit_func_len.py（提交前可跑的 80 行
-函数审计）。剩余 P2：契约补齐（collect 进 ABC/unregister）+ 路由瘦身
-（cases/manual_eval/tasks 下沉 + Case.check dict 分派），条目见 roadmap。
+**架构整改（2026-09-10 全部完成）**：service 层（run_service + web_service——
+新增编排一律进 service，API 路由保持「校验 → service → 返回」）、tools/
+perf_common.py + tools/subproc.py（压测适配器共享解析与子进程执行）、
+aite/config.py（默认值收口，新默认值一律进 config）、契约补齐（collect 进
+ToolAdapter、delete_suite 进 Repository、unregister_tool）、Metric 契约新增
+needs_llm 类属性（LLM 型指标混入 LLMMetricMixin 即自动标记，core 无指标名单）、
+scripts/audit_func_len.py（80 行函数审计）。写新代码前读 CLAUDE.md 架构原则节。
 
 **tools/evalscope（模块 C 收尾）**：C3 平台数据集 → evalscope 自定义格式转换；
 C4b `/api/v1/tools/...` REST 端点（与前端阶段一并）；C4c 文档复核。

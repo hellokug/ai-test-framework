@@ -62,11 +62,15 @@ class ToolAdapter(ABC):
 
     @abstractmethod
     def build_config(self, req: ToolRunRequest) -> dict:
-        """平台配置 → 工具原生 run 配置。"""
+        """平台配置 → 工具原生 run 配置（纯函数，可单测）。"""
 
     @abstractmethod
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         """执行评测并收集结果（阻塞调用应在 to_thread 中进行）。"""
+
+    def collect(self, req: ToolRunRequest) -> ToolRunResult:
+        """收集工具产出 → 指标行/报告文件/失败明细（run 收尾统一调用）。"""
+        raise NotImplementedError
 
     @abstractmethod
     def list_tasks(self) -> list[dict]:
@@ -82,6 +86,11 @@ def register_tool(name: str):
         _TOOLS[name] = cls
         return cls
     return _wrap
+
+
+def unregister_tool(name: str) -> bool:
+    """注销引擎（测试隔离用；生产代码不卸载）。"""
+    return _TOOLS.pop(name, None) is not None
 
 
 def get_tool(name: str) -> ToolAdapter:

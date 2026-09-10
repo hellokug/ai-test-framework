@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from aite.core.types import TestCase
+from aite.service.web_service import parse_jsonl_records, to_import_cases
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["cases"])
@@ -50,22 +50,11 @@ async def add_case(body: CaseIn, state: Any = Depends(get_state)):
 @router.post("/cases/import")
 async def import_cases(body: ImportRequest, state: Any = Depends(get_state)):
     suite_id = await state.repo.upsert_suite(body.suite)
-    from aite.core.loader import DatasetConfig
-    from aite.datasets.local import LocalFileDataset
-
-    records = []
-    for line in body.jsonl.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError as exc:
-            raise HTTPException(422, f"invalid JSONL line: {exc}") from exc
-    config = DatasetConfig(type="local", path="uploaded.jsonl", fields=body.fields)
-    loader = LocalFileDataset()
-    cases = loader._to_cases(records, config, "uploaded")
+    try:
+        records = parse_jsonl_records(body.jsonl)
+        cases = to_import_cases(records, body.fields)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     for case in cases:
-        case.dataset = "uploaded"
         await state.repo.save_test_case(suite_id, case)
     return {"imported": len(cases)}

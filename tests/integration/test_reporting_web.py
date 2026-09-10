@@ -226,7 +226,7 @@ class TestToolSuiteApi:
     def fake_tool(self, tmp_path):
         """注册一个假压测引擎：run 时写 timeseries.json 到 work_dir。"""
 
-        from aite.tools.base import ToolAdapter, ToolMetricRow, ToolRunResult, register_tool
+        from aite.tools.base import ToolAdapter, ToolMetricRow, ToolRunResult, register_tool, unregister_tool
 
         @register_tool("fake-perf")
         class _FakePerf(ToolAdapter):
@@ -258,9 +258,7 @@ class TestToolSuiteApi:
                     dataset="fake:c4", metric="qps", value=2.0, count=10)])
 
         yield _FakePerf
-        # 反注册避免污染其他测试
-        from aite.tools.base import _TOOLS
-        _TOOLS.pop("fake-perf", None)
+        unregister_tool("fake-perf")   # 反注册避免污染其他测试
 
     def _perf_config(self):
         return {

@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from aite.service.web_service import compute_platform_stats
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["tasks"])
@@ -28,12 +29,4 @@ async def get_task(task_id: str, state: Any = Depends(get_state)):
 @router.get("/stats")
 async def stats(state: Any = Depends(get_state)):
     runs = await state.repo.list_runs(limit=500)
-    statuses: dict[str, int] = {}
-    for r in runs:
-        statuses[r["status"]] = statuses.get(r["status"], 0) + 1
-    return {
-        "runs_total": len(runs),
-        "runs_by_status": statuses,
-        "total_cost_usd": round(sum(r.get("cost_usd", 0) or 0 for r in runs), 6),
-        "active_tasks": len(state.tasks),
-    }
+    return compute_platform_stats(runs, active_tasks=len(state.tasks))

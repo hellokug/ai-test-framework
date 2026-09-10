@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -13,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from aite.service import execute_suite, resolve_suite
+from aite.service.web_service import load_run_timeseries
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["runs"])
@@ -131,14 +131,12 @@ async def run_timeseries(run_id: str, state: Any = Depends(get_state)):
     run = await state.repo.get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
-    work_dir = (run.get("details") or {}).get("work_dir")
-    ts_path = Path(work_dir) / "timeseries.json" if work_dir else None
-    if not ts_path or not ts_path.is_file():
-        raise HTTPException(404, "no perf timeseries for this run")
     try:
-        data = json.loads(ts_path.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        raise HTTPException(500, f"corrupted timeseries: {exc}") from exc
+        data = load_run_timeseries(run)
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    if data is None:
+        raise HTTPException(404, "no perf timeseries for this run")
     data["run_id"] = run_id
     data["status"] = run["status"]
     return data

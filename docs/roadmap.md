@@ -344,11 +344,19 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
       AST 审计脚本（全仓 ≤80 行，提交前可跑）
 - [x] P2-1 config.py（2026-09-10）：DB URL ×5 / reports ×4 / 端口 / AITE_DB
       收口；app.py 版本号改用 aite.__version__
-- [ ] P2-2 契约补齐：collect 进 ToolAdapter ABC；delete_suite/details 进
-      Repository 接口；registry 加 unregister（测试不再 pop 私有 dict）
-- [ ] P2-3 路由瘦身：cases/manual_eval/tasks/reports 的解析/聚合/文件 IO 下沉；
-      context.build_gateway 反感知（metrics 自带 needs_llm 属性）；Case.check
-      14 键改 dict 分派
+- [x] P2-2 契约补齐（2026-09-10）：collect 进 ToolAdapter ABC（带默认
+      NotImplementedError 实现——编排方只调 run，collect 为 run 的收尾契约）；
+      delete_suite 进 Repository 接口（契约同步演进，原则 10）；新增
+      unregister_tool，测试不再 pop 私有 _TOOLS dict
+- [x] P2-3 路由瘦身（2026-09-10）：新增 aite/service/web_service.py——cases
+      的 JSONL 解析/转换（loader._to_cases 转公开 to_cases）、manual_eval 候选
+      筛选、tasks 统计聚合、timeseries 磁盘读取全部下沉，四个路由瘦身为
+      「校验 → service → 返回」；context.build_gateway 反感知——Metric 契约
+      新增 needs_llm 类属性（LLMMetricMixin 经 __init_subclass__ 混入即标记，
+      规避 MRO 遮蔽），core 硬编码指标名单删除，新增 LLM 型指标零修改此处；
+      harness Case.check 按断言域拆三个方法（内容/结构/工具，保持可叠加语义
+      与顺序——非类型分派，不做 dict 注册避免过度设计）
 - 2026-09-10 架构全码评审（用户给定七原则）+ P0 整改完成：①原则入约——CLAUDE.md 新增「架构设计原则」节（七原则 + 5 条补充：单一事实来源/错误显式化/契约同步演进/时间 UTC 统一/外部边界纪律）与「测试策略」节（分域选测不默认全量）；②P0 修复——SSE 频道错位（stream_run 按 run_id 反查 bg_task 订阅正确频道，历史 run 回存态终态帧；此前订阅 runs:{run_id} 永无事件）、bg_task 状态机闭合（startup 标 stale + shutdown cancel 后回写 error，repo 新增 get_bg_task_by_run/mark_stale_bg_tasks）、harness docstring 非法转义 SyntaxWarning、_parse_dt 静默吞坏时间戳改显式告警；③评审修正——engine 成本熔断 check-then-act 是在途成本不可见的固有软预算近似（+= 均在同步段原子），加注释说明不改逻辑。P1/P2 整改项立「架构整改」节待认领。+4 测试（stale 标记/stream 解析/历史 run/404），分域验证 91 项全绿。
 - 2026-09-10 P1 架构整改完成（三个独立提交）：①P1-2+P1-3——tools/perf_common.py 与 tools/subproc.py 落地（DRY 收敛 + 私有名转公开），4 个 >80 行函数全部拆解（build_config/_probe_args/_resolve_number/_assemble_args；collect 拆分组聚合/时序/报告收集；engine _evaluate 拆 _eval_entry/_run_judges），scripts/audit_func_len.py AST 审计入基线；②P1-1+P2-1——aite/service/run_service.py（resolve_suite/execute_suite 统一 CLI 与 Web 编排），aite/config.py 默认值收口（DB URL ×5/reports ×4/端口/版本号），storage.build_repository 上移 + repo_session 样板收口。踩坑：heredoc 写码时 
  转义会被吃掉（三次断行 SyntaxError），多行 Python 代码修改改用 Edit 工具。337 全绿 + ruff 干净 + 函数长度审计达标。
+- 2026-09-10 P2 架构整改完成：①契约补齐——collect 以默认实现进 ToolAdapter ABC（编排方只调 run，collect 是 run 收尾步骤故不做 @abstractmethod），delete_suite 进 Repository 接口，unregister_tool 替代测试 pop 私有 dict；②路由瘦身——web_service.py 落地，四个路由的解析/筛选/聚合/文件 IO 下沉，_to_cases 转公开；③build_gateway 反感知——Metric 契约加 needs_llm 类属性，LLMMetricMixin 用 __init_subclass__ 混入即标记（踩坑：显式 ClassVar 在 MRO 中被前置的 Metric 基类 False 遮蔽，6 个 LLM 指标漏标，__init_subclass__ 直接写子类解决），删除 core 硬编码名单；④Case.check 按断言域拆三方法——评审后判断该链是可叠加断言（非类型分派），dict 注册属过度设计，按域分组保序即可。337 全绿 + ruff 干净 + 函数审计达标。架构整改全部完成。

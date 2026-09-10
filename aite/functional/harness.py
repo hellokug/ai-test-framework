@@ -529,7 +529,11 @@ class Case:
         return _replace(copy.deepcopy(self.messages))
 
     def check(self, response: dict) -> None:
-        """按 expect 校验响应（失败抛 AssertionError，信息含期望与实际）。"""
+        """按 expect 校验响应（失败抛 AssertionError，信息含期望与实际）。
+
+        断言键为封闭集合（校验期白名单），按域分组顺序执行、可叠加：
+        内容质量 → 结构/流式 → 工具行为。
+        """
         if "_status" in response:   # 预期错误模式：只跑 http_status（和 resp）断言
             self._check_error_response(response)
             return
@@ -537,68 +541,82 @@ class Case:
         choice0: dict = (choices[0] or {}) if choices else {}
         message: dict = choice0.get("message") or {}
         content = (message.get("content") or "").strip()
-        ic = bool(self.expect.get("ignore_case"))
-        if self.expect.get("nonempty"):
+        self._check_content(content)
+        self._check_shape(response, choice0, content)
+        tool_calls = message.get("tool_calls") or []
+        first_tool = (tool_calls[0].get("function") or {}) if tool_calls else None
+        self._check_tool(first_tool)
+
+    def _check_content(self, content: str) -> None:
+        """内容域断言：非空/乱码/泄露/复读/包含。"""
+        expect = self.expect
+        ic = bool(expect.get("ignore_case"))
+        if expect.get("nonempty"):
             assert content, "期望回复非空，实际为空"
-        if self.expect.get("no_garbled"):
+        if expect.get("no_garbled"):
             bad = _garbled_evidence(content)
             assert bad is None, f"期望无乱码，检测到 {bad}（回复: {_brief(content)}）"
-        if "no_leak" in self.expect:
+        if "no_leak" in expect:
             hit = _leak_evidence(content, self._extra_leak)
             assert hit is None, f"期望无内部标签泄露，检测到 {hit!r}（回复: {_brief(content)}）"
-        if self.expect.get("no_repeat"):
+        if expect.get("no_repeat"):
             ev = _repeat_evidence(content)
             assert ev is None, f"期望无复读，检测到 {ev}（回复: {_brief(content)}）"
-        if "contains" in self.expect:
-            needle = str(self.expect["contains"])
+        if "contains" in expect:
+            needle = str(expect["contains"])
             hit = (needle.lower() in content.lower()) if ic else (needle in content)
             assert hit, f"期望回复包含 {needle!r}，实际: {_brief(content)}"
-        if "not_contains" in self.expect:
-            needle = str(self.expect["not_contains"])
+        if "not_contains" in expect:
+            needle = str(expect["not_contains"])
             hit = (needle.lower() in content.lower()) if ic else (needle in content)
             assert not hit, f"期望回复不包含 {needle!r}，实际: {_brief(content)}"
-        if "finish_reason" in self.expect:
+
+    def _check_shape(self, response: dict, choice0: dict, content: str) -> None:
+        """结构域断言：finish_reason/流式分块/SSE 收尾/响应体/JSON。"""
+        expect = self.expect
+        if "finish_reason" in expect:
             actual = choice0.get("finish_reason")
-            assert actual == self.expect["finish_reason"], (
-                f"期望 finish_reason={self.expect['finish_reason']!r}，"
-                f"实际 {actual!r}")
-        if "chunks_min" in self.expect:
+            assert actual == expect["finish_reason"], (
+                f"期望 finish_reason={expect['finish_reason']!r}，实际 {actual!r}")
+        if "chunks_min" in expect:
             n = response.get("_chunks") or 0
-            assert n >= self.expect["chunks_min"], (
-                f"期望流式 chunk 数 ≥ {self.expect['chunks_min']}，实际 {n}"
+            assert n >= expect["chunks_min"], (
+                f"期望流式 chunk 数 ≥ {expect['chunks_min']}，实际 {n}"
                 "（非流式响应或未分块？）")
-        if "sse_done" in self.expect:
-            assert response.get("_sse_ok") is self.expect["sse_done"], (
-                f"期望 SSE 收尾 data: [DONE]={self.expect['sse_done']}，"
+        if "sse_done" in expect:
+            assert response.get("_sse_ok") is expect["sse_done"], (
+                f"期望 SSE 收尾 data: [DONE]={expect['sse_done']}，"
                 f"实际 {response.get('_sse_ok')}")
-        if "resp" in self.expect:
-            specs = self.expect["resp"]
+        if "resp" in expect:
+            specs = expect["resp"]
             for spec in (specs if isinstance(specs, list) else [specs]):
                 self._check_resp_spec(spec, response, "resp")
-        if "no_tool" in self.expect:
-            assert not (message.get("tool_calls") or []), (
-                f"期望不发起 tool call，实际: {_brief(message.get('tool_calls'))}")
-        if "json" in self.expect:
+        if "json" in expect:
             try:
                 data = json.loads(strip_fences(content))
             except ValueError as exc:
                 raise AssertionError(
                     f"期望合法 JSON，解析失败: {exc}；实际: {_brief(content)}") from None
-            _check_json_spec(self.expect["json"], data, "json", ic)
-        tool_calls = message.get("tool_calls") or []
-        first_tool = (tool_calls[0].get("function") or {}) if tool_calls else None
-        if "tool" in self.expect:
+            _check_json_spec(expect["json"], data, "json",
+                             bool(expect.get("ignore_case")))
+
+    def _check_tool(self, first_tool: dict | None) -> None:
+        """工具域断言：no_tool / tool 选择 / tool arguments 包含。"""
+        expect = self.expect
+        if "no_tool" in expect:
+            assert not first_tool, "期望不发起 tool call，实际有 tool call"
+        if "tool" in expect:
             assert first_tool is not None, "期望发起 tool call，实际没有"
-            assert first_tool.get("name") == self.expect["tool"], (
-                f"期望选择工具 {self.expect['tool']!r}，实际 {first_tool.get('name')!r}")
-        if "tool_args_contains" in self.expect:
+            assert first_tool.get("name") == expect["tool"], (
+                f"期望选择工具 {expect['tool']!r}，实际 {first_tool.get('name')!r}")
+        if "tool_args_contains" in expect:
             assert first_tool is not None, "期望发起 tool call，实际没有"
             try:
-                args = json.loads(first_tool.get("arguments") or "")
+                args = json.loads((first_tool or {}).get("arguments") or "")
             except ValueError as exc:
                 raise AssertionError(f"tool call arguments 不是合法 JSON: {exc}") from None
             dump = json.dumps(args, ensure_ascii=False).lower()
-            needle = str(self.expect["tool_args_contains"]).lower()
+            needle = str(expect["tool_args_contains"]).lower()
             assert needle in dump, (
                 f"期望 tool arguments 包含 {needle!r}，实际: {_brief(dump)}")
 

@@ -56,7 +56,15 @@ def looks_like_refusal(text: str) -> bool:
 
 
 class LLMMetricMixin:
-    """Convenience for metrics that optionally call the gateway."""
+    """Convenience for metrics that optionally call the gateway.
+
+    混入即标记 ``needs_llm=True``（__init_subclass__ 直接写在子类上，避免被
+    MRO 中 Metric 基类的 False 遮蔽）。
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.needs_llm = True
 
     async def llm_json(self, ctx, system: str, user: str, *,
                        model: str | None = None, max_tokens: int = 800) -> dict[str, Any] | None:

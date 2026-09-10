@@ -63,6 +63,8 @@ class Metric(ABC):
     aggregation: ClassVar[str] = "mean"       # mean|rate|p50|p95|p99|min|max|sum
     higher_is_better: ClassVar[bool] = True
     wants_variants: ClassVar[bool] = False
+    # 需要网关（LLM/embedding 调用）的指标置 True——engine 据此决定是否建 LLMGateway
+    needs_llm: ClassVar[bool] = False
 
     threshold: float | None = None
     params: dict[str, Any]
@@ -160,6 +162,10 @@ class Repository(ABC):
     # -- suites / cases ------------------------------------------------------
     @abstractmethod
     async def upsert_suite(self, name: str, config: dict[str, Any] | None = None) -> str: ...
+
+    @abstractmethod
+    async def delete_suite(self, name: str) -> bool:
+        """删除 suite；引用它的 run 解引用（suite_id 置 NULL）保留审计。"""
 
     @abstractmethod
     async def save_test_case(self, suite_id: str, case: TestCase) -> int: ...

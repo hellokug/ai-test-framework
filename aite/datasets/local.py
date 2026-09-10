@@ -40,11 +40,11 @@ class LocalFileDataset:
                 raise FileNotFoundError(f"dataset file not found: {path}")
             records = _read_records(path)
             dataset_label = str(path)
-            for case in self._to_cases(records, config, dataset_label):
+            for case in self.to_cases(records, config, dataset_label):
                 yield case
         return _gen()
 
-    def _to_cases(self, records: list[dict], config: DatasetConfig,
+    def to_cases(self, records: list[dict], config: DatasetConfig,
                   dataset_label: str) -> list[TestCase]:
         mapping = config.fields or {}
         stem = Path(config.path or "case").stem

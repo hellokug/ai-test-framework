@@ -27,6 +27,7 @@ def _reference_text(case) -> str:
 @register_metric("embedding_similarity")
 class EmbeddingSimilarity(Metric):
     """Cosine similarity between output and expected answer embeddings."""
+    needs_llm: ClassVar[bool] = True
 
     name: ClassVar[str] = "embedding_similarity"
 
@@ -44,6 +45,7 @@ class EmbeddingSimilarity(Metric):
 @register_metric("answer_relevancy")
 class AnswerRelevancy(Metric):
     """RAG metric: cosine(question, answer) - does the answer address the question?"""
+    needs_llm: ClassVar[bool] = True
 
     name: ClassVar[str] = "answer_relevancy"
 

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from aite.service.web_service import select_manual_tasks
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["manual-eval"])
@@ -33,11 +34,7 @@ async def create_tasks(body: TaskCreate, state: Any = Depends(get_state)):
     if not body.run_id:
         raise HTTPException(422, "run_id required")
     results = await state.repo.list_case_results(body.run_id, limit=None)
-    results = [r for r in results if r.get("variant", "base") == "base"]
-    if body.case_result_ids:
-        results = [r for r in results if r["id"] in set(body.case_result_ids)]
-    else:
-        results = results[: body.limit]
+    results = select_manual_tasks(results, body.case_result_ids, body.limit)
     if not results:
         raise HTTPException(404, "no case results found for this run")
     created = []
