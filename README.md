@@ -293,6 +293,41 @@ pip install 'aite[locust]'
 aite run -c examples/locust.yaml
 ```
 
+## 执行机纳管（模块 G 一期）
+
+压测多机打流：**拉取式 agent**（执行机只做出站 HTTP，零入站端口/零凭据，
+NAT/防火墙友好）+ **结果 HTTP 回传** master 统一入库（对 master 存储无要求）。
+一期支持压测域两引擎（evalscope-perf / locust），协议与引擎域解耦。
+
+**master 侧（aite serve）**：
+
+| 端点 | 说明 |
+|---|---|
+| `POST /api/v1/agents/register` | agent 注册（重名接管） |
+| `POST /api/v1/agents/{id}/heartbeat` | 心跳（响应携带认领到的任务——心跳即派发） |
+| `GET /api/v1/agents` | 执行机列表（状态/标签/在跑任务） |
+| `POST /api/v1/agent-tasks` | 派发任务：`{"config": <suite>, "node": "node-1"}` |
+| `POST /api/v1/agent-tasks/{id}/result` | agent 回传（master 重建产出目录走统一入库） |
+| `GET /api/v1/agent-tasks` | 任务队列列表 |
+
+**agent 侧（执行机）**——两种接入方式：
+
+```bash
+# 方式一：pip 裸跑（调试机/WSL2）
+pip install "aite[locust]"
+aite agent serve --master http://<master>:8300 --name node-1 [--labels lab] [--token T]
+
+# 方式二：docker（正式执行机；perf 层含 evalscope）
+docker build -f deploy/agent.Dockerfile -t aite-agent .
+docker run -d aite-agent aite agent serve --master http://<master>:8300 --name node-1
+```
+
+**派发**：`aite run -c perf-suite.yaml --agent node-1`（轮询终态并回显 run_id）
+或 `POST /agent-tasks`。结果收回 master 后与本地执行完全同构：
+run_metric_summary 汇总、timeseries 大屏端点、details 产出目录（master 侧
+`reports/agent/<run>/<stamp>/` 重建）全部可用。状态机闭合：心跳超 30s 的节点
+标 offline，其在跑任务标 error（agent offline）。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、

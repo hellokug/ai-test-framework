@@ -246,16 +246,23 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
       prompt_length}` 与 dataset/prompt 三选一；确定性模板生成固定输入
       （输入一致 → 曲线可比），两适配器共用 generate_synthetic_prompts
 
-### 模块 G：执行机纳管（2026-09-09 立项，需求已对齐未实施）
+### 模块 G：执行机纳管（一期 2026-09-11 完成）
 
-压测需要多机打流（单机客户端即瓶颈）。用户要求：纳管执行机（注册/心跳/状态），
-执行任务时可选择执行机；**本机 Linux 环境作调试**。
+形态经用户对齐：**拉取式 agent**（出站 HTTP 零入站端口）+ **结果 HTTP 回传**
+（SQLite 兼容，不要求共享数据库）+ 一期压测域白名单（协议与域解耦）。
 
-- [ ] G1 执行机 agent：注册到平台（name/标签/容量）+ 心跳 + 拉取任务执行
-      （执行机跑 aite worker 形态，或 locust worker 分布式形态二选一评审）
-- [ ] G2 任务下发路由：suite 加 `executor` 字段 → 平台调度到选定执行机；
-      结果回传统一入库（执行机本地产出上报或共享存储）
-- [ ] G3 本机 Linux 调试环境接入（WSL2 或局域网 Linux 主机作首台执行机）
+- [x] G1a 契约与地基：agent_node/agent_task 表；run_tool_suite 拆分
+      execute_tool（纯执行）/ persist_tool_result（纯入库，支持复用 run_id）
+- [x] G1b master：/agents 注册（重名接管）/心跳即派发（响应携带任务，免独立
+      拉取端点）/回传入库（master 重建 reports/agent/<run> 目录，统一入库链路
+      与大屏端点照常）/懒式 stale 回收（30s 心跳超时，状态机闭合）
+- [x] G1c agent：aite agent serve——心跳后台线程 + 执行主循环（长任务期间
+      心跳不中断防误判 stale）；引擎白名单双保险
+- [x] G1d 入口与交付物：aite run --agent <节点> 派发轮询；
+      deploy/agent.Dockerfile 分层镜像（base=locust / with-perf=evalscope）；
+      README 执行机纳管章节
+- [ ] G2 二期：标签调度与负载选择、locust 原生 master/worker 分布式通道、
+      任务重排队/重试策略、执行机容量与并发上限
 
 ### 模块 H：性能数据归档（2026-09-09 立项，需求已对齐未实施）
 
@@ -360,3 +367,4 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
 - 2026-09-10 P1 架构整改完成（三个独立提交）：①P1-2+P1-3——tools/perf_common.py 与 tools/subproc.py 落地（DRY 收敛 + 私有名转公开），4 个 >80 行函数全部拆解（build_config/_probe_args/_resolve_number/_assemble_args；collect 拆分组聚合/时序/报告收集；engine _evaluate 拆 _eval_entry/_run_judges），scripts/audit_func_len.py AST 审计入基线；②P1-1+P2-1——aite/service/run_service.py（resolve_suite/execute_suite 统一 CLI 与 Web 编排），aite/config.py 默认值收口（DB URL ×5/reports ×4/端口/版本号），storage.build_repository 上移 + repo_session 样板收口。踩坑：heredoc 写码时 
  转义会被吃掉（三次断行 SyntaxError），多行 Python 代码修改改用 Edit 工具。337 全绿 + ruff 干净 + 函数长度审计达标。
 - 2026-09-10 P2 架构整改完成：①契约补齐——collect 以默认实现进 ToolAdapter ABC（编排方只调 run，collect 是 run 收尾步骤故不做 @abstractmethod），delete_suite 进 Repository 接口，unregister_tool 替代测试 pop 私有 dict；②路由瘦身——web_service.py 落地，四个路由的解析/筛选/聚合/文件 IO 下沉，_to_cases 转公开；③build_gateway 反感知——Metric 契约加 needs_llm 类属性，LLMMetricMixin 用 __init_subclass__ 混入即标记（踩坑：显式 ClassVar 在 MRO 中被前置的 Metric 基类 False 遮蔽，6 个 LLM 指标漏标，__init_subclass__ 直接写子类解决），删除 core 硬编码名单；④Case.check 按断言域拆三方法——评审后判断该链是可叠加断言（非类型分派），dict 注册属过度设计，按域分组保序即可。337 全绿 + ruff 干净 + 函数审计达标。架构整改全部完成。
+- 2026-09-11 模块 G 一期完成（执行机纳管）：拉取式 agent（aite agent serve，心跳后台线程 + 执行主循环防长任务误判 stale）+ master 心跳即派发 + HTTP 回传统一入库（persist_tool_result 复用，master 侧重建 reports/agent/<run> 目录使大屏时序端点照常）；aite run --agent 派发入口；deploy/agent.Dockerfile 分层镜像；+10 测试（347 全绿）。二期（G2）：标签调度/locust 原生分布式/重试策略。

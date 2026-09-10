@@ -114,7 +114,10 @@ aite tool benchmarks pytest            # 场景清单
 - 模块 E 性能压测：E1-E7 全部完成（数据集负载 + 四模式 + 时长统一双键
   duration/level_duration + locust 适配器）
 - 模块 F 性能大屏：F2 数据层 + F3 合成负载完成；**F1 前端面板后置**
-  （用户指示接口优先）；G/H/I 已立项未实施
+  （用户策略：前端最后统一对接）
+- 模块 G 执行机纳管：**一期完成**（拉取式 agent + HTTP 回传 + 压测域白名单；
+  agent 通道 REST 见 README；剩 G2 二期：标签调度/locust 原生分布式/重试）
+- 模块 H 归档 / 模块 I 可靠性 chaos：立项未实施
 - 运行环境：conda env `evalscope`（Python 3.10，aite+evalscope 同装）；
   本地 Ollama（qwen2.5:3b / deepseek-r1:8b）；locust 未装（单测离线，
   真实压测需 `pip install 'aite[locust]'`）
@@ -131,7 +134,8 @@ REST/时序数据链路已全部就绪（/tools/engines、/tools/benchmarks、PO
 CDN，aite/web/static）加面板三处：index.html nav+section、app.js go()/mounted()
 白名单、复用 .card/.tbl/.chart 样式类。
 
-**执行机纳管（模块 G）**：agent 注册/心跳/任务下发；本机 Linux 调试环境接入。
+**执行机纳管（模块 G 二期）**：标签调度与负载选择、locust 原生 master/worker
+分布式通道、任务重排队/重试、容量与并发上限（一期见 README 执行机纳管章节）。
 
 **性能数据归档（模块 H）**：run 冷热分层、原始产出压缩归档与检索恢复。
 
