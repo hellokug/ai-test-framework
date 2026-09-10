@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from aite import config
 from aite.core.types import MetricSummary, RunReport, utcnow
 from aite.tools.base import (
     ToolAdapter as ToolAdapter,
@@ -41,6 +42,32 @@ from aite.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def build_overall_rows(rows: list[ToolMetricRow]) -> list[MetricSummary]:
+    """工具域 overall 行（dataset=None）构建：与自研引擎口径对齐。
+
+    CLI 汇总表只显示 overall 行，趋势页汇总视图也依赖它。多档/多数据集按
+    count 加权平均；阈值方向取该 metric 组首行（同 metric 方向应一致，
+    如 perf 的延迟类 <=）。
+    """
+    by_metric: dict[str, list[ToolMetricRow]] = {}
+    for r in rows:
+        by_metric.setdefault(r.metric, []).append(r)
+    overall: list[MetricSummary] = []
+    for metric, mrows in by_metric.items():
+        total = sum(r.count for r in mrows)
+        value = (sum(r.value * r.count for r in mrows) / total) if total else None
+        thr = next((r.threshold for r in mrows if r.threshold is not None), None)
+        higher = mrows[0].higher_is_better
+        overall.append(MetricSummary(
+            metric=metric, dataset=None, group=None, aggregation="mean",
+            value=value, threshold=thr, count=total, pass_rate=None,
+            higher_is_better=higher,
+            passed=((value >= thr) if higher else (value <= thr))
+            if (thr is not None and value is not None) else None,
+        ))
+    return overall
+
+
 def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     """工具型 suite yaml → (ToolRunRequest, 原始配置快照)。
 
@@ -56,7 +83,7 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
         raise ValueError("tool suite requires tools.datasets (benchmark names)")
     run_name = raw.get("run_name") or "tool-run"
     stamp = utcnow().astimezone().strftime("%Y%m%d-%H%M%S")
-    work_dir = (Path(raw.get("output_dir") or "./reports") / "tool"
+    work_dir = (Path(raw.get("output_dir") or config.DEFAULT_REPORTS_DIR) / "tool"
                 / str(raw["engine"]) / run_name / stamp)
     mt = tools_cfg.get("metric_thresholds")
     cases = tools_cfg.get("cases")
@@ -104,30 +131,13 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
             )
             for r in result.rows
         ]
-        # overall 行（dataset=None）：与自研引擎口径对齐；CLI 汇总表只显示 overall 行，
-        # 趋势页的汇总视图也依赖它。多数据集时按 count 加权平均；阈值方向取
-        # 该 metric 组首行（同 metric 方向应一致，如 perf 的延迟类 <=）。
-        by_metric: dict[str, list[Any]] = {}
-        for r in result.rows:
-            by_metric.setdefault(r.metric, []).append(r)
-        for metric, mrows in by_metric.items():
-            total = sum(r.count for r in mrows)
-            value = (sum(r.value * r.count for r in mrows) / total) if total else None
-            thr = next((r.threshold for r in mrows if r.threshold is not None), None)
-            higher = mrows[0].higher_is_better
-            summaries.append(MetricSummary(
-                metric=metric, dataset=None, group=None, aggregation="mean",
-                value=value, threshold=thr, count=total, pass_rate=None,
-                higher_is_better=higher,
-                passed=((value >= thr) if higher else (value <= thr))
-                if (thr is not None and value is not None) else None,
-            ))
+        summaries.extend(build_overall_rows(result.rows))
         report.summaries = summaries
         n_samples = sum(int(v.get("summary", {}).get("n_samples", 0))
                         for v in result.perf.values())
         # total_cases 回退：首个 metric 组的 count 总和（多数据集/多场景求和，而非首行）
-        first_group = next(iter(by_metric.values()), [])
-        total_counts = sum(r.count for r in first_group)
+        first_metric = result.rows[0].metric if result.rows else None
+        total_counts = sum(r.count for r in result.rows if r.metric == first_metric)
         report.total_cases = n_samples or total_counts
         failed = any(r.passed is False for r in result.rows)
         report.status = "failed" if failed else "passed"

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from aite import config
 from aite.storage.models import Base
 
 logger = logging.getLogger("aite.storage")
@@ -22,7 +23,7 @@ def _sqlite_url(url: str) -> str:
 
 
 class Database:
-    def __init__(self, url: str = "sqlite+aiosqlite:///./aite.db") -> None:
+    def __init__(self, url: str = config.DEFAULT_DB_URL) -> None:
         self.url = url
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None

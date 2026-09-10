@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aite import config
 from aite.utils.text import PERTURBATION_KINDS
 
 PASS_STRATEGIES = ("all_of", "any_of", "weighted_score")
@@ -108,7 +109,7 @@ class JudgeConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    url: str = "sqlite+aiosqlite:///./aite.db"
+    url: str = config.DEFAULT_DB_URL
 
 
 class SuiteConfig(BaseModel):
@@ -122,7 +123,7 @@ class SuiteConfig(BaseModel):
     pass_strategy: str = "all_of"
     weights: dict[str, float] = Field(default_factory=dict)   # metric -> weight (weighted_score)
     report: list[str] = Field(default_factory=lambda: ["rich", "json", "html"])
-    output_dir: str = "./reports"
+    output_dir: str = config.DEFAULT_REPORTS_DIR
     storage: StorageConfig = Field(default_factory=StorageConfig)
     plugins: list[str] = Field(default_factory=list)
     concurrency: int | None = None               # CLI/override of target rate_limit.concurrency

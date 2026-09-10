@@ -8,6 +8,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from aite.service import resolve_suite
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["suites"])
@@ -36,9 +37,6 @@ async def get_suite(name: str, state: Any = Depends(get_state)):
 
 @router.post("/suites")
 async def save_suite(body: SuiteIn, state: Any = Depends(get_state)):
-    from aite.core.loader import load_suite
-    from aite.tools import parse_tool_suite
-
     try:
         if body.config_yaml:
             parsed = yaml.safe_load(body.config_yaml)
@@ -47,14 +45,10 @@ async def save_suite(body: SuiteIn, state: Any = Depends(get_state)):
         else:
             raise HTTPException(422, "config_yaml or config required")
         parsed.setdefault("run_name", body.name)
-        if isinstance(parsed, dict) and parsed.get("engine"):
-            # 工具域 suite：load_suite 的 SuiteConfig（extra=forbid）不认 engine/tools，
-            # 走 parse_tool_suite 轻 fail-fast 校验，原 dict 入库
-            parse_tool_suite(parsed)
-            snapshot = parsed
-        else:
-            suite = load_suite(parsed)
-            snapshot = suite.snapshot()
+        # engine 路由 + 校验收口 service 层（CLI/POST /runs 同源）
+        sreq = resolve_suite(parsed)
+        # 工具域存原 dict（自研域存强类型 snapshot）
+        snapshot = parsed if sreq.is_tool else sreq.config.snapshot()
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

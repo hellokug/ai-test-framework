@@ -12,8 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from aite.core.engine import ExecutionEngine
-from aite.core.loader import load_suite
+from aite.service import execute_suite, resolve_suite
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["runs"])
@@ -54,66 +53,29 @@ async def launch_run(body: LaunchRequest, state: Any = Depends(get_state)):
             raw = stored["config"]
         else:
             raise HTTPException(422, "provide config_yaml, config or suite_name")
-        if not isinstance(raw, dict):
-            raise HTTPException(422, "suite config must be a mapping")
-        if raw.get("engine"):
-            # 工具域（evalscope/pytest/evalscope-perf/locust）：与 CLI 同源路由，
-            # parse_tool_suite 做 fail-fast 校验（SuiteConfig extra=forbid 不认 engine）
-            from aite.tools import parse_tool_suite
-
-            parse_tool_suite(raw)
-            suite = raw
-        else:
-            suite = load_suite(raw)
+        sreq = resolve_suite(raw)   # engine 路由 + 校验（service 层，CLI 同源）
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(422, f"invalid suite config: {exc}") from exc
 
-    is_tool = isinstance(suite, dict)
     bg_id = await state.repo.create_bg_task(
-        "run_suite", {"run_name": suite.run_name if not is_tool else suite.get("run_name"),
-                      "limit": body.limit})
-    task = asyncio.create_task(
-        _execute_tool_run(state, bg_id, suite, body.limit) if is_tool
-        else _execute_run(state, bg_id, suite, body.limit))
+        "run_suite", {"run_name": sreq.run_name, "limit": body.limit})
+    task = asyncio.create_task(_execute_run(state, bg_id, sreq, body.limit))
     state.tasks[bg_id] = task
-    return {"task_id": bg_id, "run_name": suite.get("run_name") if is_tool else suite.run_name,
-            "status": "started"}
+    return {"task_id": bg_id, "run_name": sreq.run_name, "status": "started"}
 
 
-async def _execute_tool_run(state: Any, bg_id: str, raw: dict, limit: int | None) -> None:
-    """工具域后台执行：run_tool_suite（与 CLI aite run -c 同源；limit→limit_per_subset）。"""
-    from aite.tools import run_tool_suite
+async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None) -> None:
+    """后台执行（四域统一走 service 的 execute_suite）。"""
 
-    if limit:
-        raw.setdefault("tools", {}).setdefault("limit_per_subset", limit)
-
-    await state.repo.update_bg_task(bg_id, status="running")
-    try:
-        report = await run_tool_suite(raw, state.repo)
-        await state.repo.update_bg_task(
-            bg_id, status="done", run_id=report.run_id,
-            result={"status": report.status, "summaries": len(report.summaries),
-                    "reports": report.details.get("reports", {})})
-        state.bus.publish(f"runs:{bg_id}", {"type": "done", "run_id": report.run_id,
-                                            "status": report.status})
-    except Exception as exc:  # noqa: BLE001
-        await state.repo.update_bg_task(bg_id, status="error", error=str(exc)[:2000])
-        state.bus.publish(f"runs:{bg_id}", {"type": "error", "error": str(exc)})
-    finally:
-        state.bus.close(f"runs:{bg_id}")
-        state.tasks.pop(bg_id, None)
-
-
-async def _execute_run(state: Any, bg_id: str, suite: Any, limit: int | None) -> None:
     def on_event(event: dict) -> None:
         state.bus.publish(f"runs:{bg_id}", event)
 
     await state.repo.update_bg_task(bg_id, status="running")
-    engine = ExecutionEngine(state.repo, event_cb=on_event)
     try:
-        report = await engine.run_suite(suite, limit=limit)
+        report = await execute_suite(sreq.raw, state.repo, limit=limit,
+                                     event_cb=on_event)
         await state.repo.update_bg_task(
             bg_id, status="done", run_id=report.run_id,
             result={"status": report.status, "summaries": len(report.summaries),

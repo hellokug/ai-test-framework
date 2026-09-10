@@ -11,11 +11,11 @@ from rich.console import Console
 from rich.table import Table
 
 from aite import __version__
-from aite.core.engine import ExecutionEngine, build_repository
-from aite.core.loader import load_suite
+from aite import config as aite_config
 from aite.core.registry import registry
 from aite.reporting.rebuild import rebuild_report
 from aite.reporting.renderers import report_relpath
+from aite.storage import repo_session
 from aite.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -66,14 +66,14 @@ SAMPLE_JSONL = """\
 """
 
 
-def _db_url(config=None, db: str | None = None) -> str:
+def _db_url(suite_config=None, db: str | None = None) -> str:
     if db:
         return db
-    if os.environ.get("AITE_DB"):
-        return os.environ["AITE_DB"]
-    if config is not None:
-        return config.storage.url
-    return "sqlite+aiosqlite:///./aite.db"
+    if os.environ.get(aite_config.ENV_DB_URL):
+        return os.environ[aite_config.ENV_DB_URL]
+    if suite_config is not None:
+        return suite_config.storage.url
+    return aite_config.DEFAULT_DB_URL
 
 
 @app.command()
@@ -117,51 +117,27 @@ def run(
     """Run a test suite; exit code 0 = passed, 1 = failed/error (CI friendly)."""
     setup_logging(log_level, quiet=quiet)
 
-    # 工具型 suite（engine: evalscope 等）路由到工具适配层，不走自研引擎
     import yaml as _yaml
 
+    from aite.cli.progress import RichProgressReporter
+    from aite.service import execute_suite, resolve_suite, storage_url_of
+    from aite.storage import repo_session
+
     raw = _yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-    if isinstance(raw, dict) and raw.get("engine"):
-        if limit:
-            raw.setdefault("tools", {}).setdefault("limit_per_subset", limit)
-        from aite.tools import run_tool_suite
-
-        async def _tool_run() -> int:
-            storage_url = (raw.get("storage") or {}).get(
-                "url", "sqlite+aiosqlite:///./aite.db")
-            repo = build_repository(storage_url)
-            await repo.init()
-            try:
-                report = await run_tool_suite(raw, repo)
-                _print_report_summary(report)
-                return report.exit_code
-            finally:
-                await repo.close()
-
-        raise SystemExit(asyncio.run(_tool_run()))
-
-    suite = load_suite(config)
-    if concurrency:
-        suite.concurrency = concurrency
-    if max_cost_usd is not None:
-        suite.max_cost_usd = max_cost_usd
-    if report_formats:
-        suite.report = [f.strip() for f in report_formats.split(",") if f.strip()]
+    sreq = resolve_suite(raw)   # engine 路由 + 校验（与 Web 同源）
+    storage_url = (sreq.config.storage.url if sreq.config
+                   else storage_url_of(raw))
     dataset_ids = [d.strip() for d in datasets.split(",")] if datasets else None
 
-    from aite.cli.progress import RichProgressReporter
-
     async def _run() -> int:
-        repo = build_repository(suite.storage.url)
-        await repo.init()
-        try:
-            progress = None if quiet else RichProgressReporter()
-            engine = ExecutionEngine(repo, progress=progress)
-            report = await engine.run_suite(suite, limit=limit, dataset_ids=dataset_ids)
+        async with repo_session(storage_url) as repo:
+            report = await execute_suite(
+                raw, repo, limit=limit, dataset_ids=dataset_ids,
+                concurrency=concurrency, max_cost_usd=max_cost_usd,
+                report_formats=report_formats,
+                progress=None if quiet else RichProgressReporter())
             _print_report_summary(report)
             return report.exit_code
-        finally:
-            await repo.close()
 
     raise SystemExit(asyncio.run(_run()))
 
@@ -238,9 +214,7 @@ def report_show(
     setup_logging("WARNING", quiet=True)
 
     async def _go() -> None:
-        repo = build_repository(_db_url(db=db))
-        await repo.init()
-        try:
+        async with repo_session(_db_url(db=db)) as repo:
             report = await rebuild_report(repo, run_id)
             if report is None:
                 err_console.print(f"[red]run not found:[/red] {run_id}")
@@ -251,8 +225,6 @@ def report_show(
             for fmt in [f.strip() for f in formats.split(",") if f.strip()]:
                 path = resolve_renderer(fmt)().render(report, out_dir)
                 console.print(f"[green]wrote[/green] {path}")
-        finally:
-            await repo.close()
 
     asyncio.run(_go())
 
@@ -270,9 +242,7 @@ def case_list(
     setup_logging("WARNING", quiet=True)
 
     async def _go() -> None:
-        repo = build_repository(_db_url(db=db))
-        await repo.init()
-        try:
+        async with repo_session(_db_url(db=db)) as repo:
             found = await repo.get_suite_by_name(suite)
             if not found:
                 err_console.print(f"[red]suite not found:[/red] {suite}")
@@ -285,8 +255,6 @@ def case_list(
                 table.add_row(c["external_key"], c["variant"], c["dataset"] or "",
                               str(c["input"])[:120])
             console.print(table)
-        finally:
-            await repo.close()
 
     asyncio.run(_go())
 
@@ -406,21 +374,17 @@ def bench_import(
     from aite.datasets.compat.bench_import import import_results
 
     async def _go() -> None:
-        repo = build_repository(_db_url(db=db))
-        await repo.init()
-        try:
+        async with repo_session(_db_url(db=db)) as repo:
             run_id = await import_results(repo, results, fmt=format, run_name=run_name)
             console.print(f"[green]imported[/green] run_id={run_id}")
-        finally:
-            await repo.close()
 
     asyncio.run(_go())
 
 
 @app.command()
 def serve(
-    host: str = typer.Option("127.0.0.1"),
-    port: int = typer.Option(8300),
+    host: str = typer.Option(aite_config.WEB_HOST),
+    port: int = typer.Option(aite_config.WEB_PORT),
     db: str | None = typer.Option(None, "--db", help="storage url override"),
     token: str | None = typer.Option(
         None, envvar="AITE_WEB_TOKEN", help="bearer token guard (empty = open)"),

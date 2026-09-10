@@ -11,6 +11,8 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from aite import __version__ as aite_version
+from aite import config
 from aite.storage.db import Database
 from aite.storage.repositories import SqlAlchemyRepository
 from aite.utils.logging import get_logger
@@ -56,7 +58,7 @@ class AppState:
         await self.repo.close()
 
 
-def create_app(storage_url: str = "sqlite+aiosqlite:///./aite.db",
+def create_app(storage_url: str = config.DEFAULT_DB_URL,
                token: str | None = None) -> FastAPI:
     state = AppState(storage_url, token)
 
@@ -67,7 +69,7 @@ def create_app(storage_url: str = "sqlite+aiosqlite:///./aite.db",
         await state.shutdown()
 
     app = FastAPI(
-        title="aite", version="0.1.0",
+        title="aite", version=aite_version,
         description="AI Test & Evaluation Framework",
         lifespan=lifespan,
         dependencies=[Depends(auth_guard)],
