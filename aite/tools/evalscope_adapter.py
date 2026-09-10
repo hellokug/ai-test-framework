@@ -22,6 +22,7 @@ from aite.tools.base import (
     register_tool,
     run_sync_in_thread,
 )
+from aite.tools.subproc import glob_report_files
 
 # metric_thresholds: auto 时的推荐阈值（选择题类 = 随机基线；开放题不设默认）。
 # 只列有客观随机基线的选择题基准，避免给开放生成题一个会误导的门槛。
@@ -137,7 +138,8 @@ class EvalscopeAdapter(ToolAdapter):
             summary = perf.get("summary") if isinstance(perf, dict) else None
             if summary:
                 out.perf[ds_name] = summary
-        for pattern in ("**/reports/**/*.json", "**/reports/**/*.html"):
-            for p in sorted(req.work_dir.glob(pattern)):
-                out.report_files.setdefault(p.name, str(p))
+        files = glob_report_files(req.work_dir,
+                                  ("**/reports/**/*.json", "**/reports/**/*.html"))
+        for name, path in files.items():
+            out.report_files.setdefault(name, path)
         return out

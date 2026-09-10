@@ -9,11 +9,13 @@ import pytest
 
 from aite.tools.base import ToolRunRequest
 from aite.tools.perf_adapter import (
-    _DURATION_DRIVEN_NUMBER_CAP,
     PerfAdapter,
-    _expand_ramp,
-    _export_prompts,
     _sla_params_json,
+)
+from aite.tools.perf_common import (
+    DURATION_DRIVEN_NUMBER_CAP,
+    expand_ramp,
+    export_prompts,
 )
 
 
@@ -98,9 +100,9 @@ class TestModes:
         assert len(args) == j + 2 or args[j + 2].startswith("--")   # number 单值
 
     def test_ramp_expands_with_to_included(self):
-        assert _expand_ramp({"from": 1, "to": 16, "step": 4}) == [1, 5, 9, 13, 16]
-        assert _expand_ramp({"from": 1, "to": 8, "step": 4}) == [1, 5, 8]
-        assert _expand_ramp({"from": 2, "to": 2, "step": 3}) == [2]
+        assert expand_ramp({"from": 1, "to": 16, "step": 4}) == [1, 5, 9, 13, 16]
+        assert expand_ramp({"from": 1, "to": 8, "step": 4}) == [1, 5, 8]
+        assert expand_ramp({"from": 2, "to": 2, "step": 3}) == [2]
         cfg = PerfAdapter().build_config(make_request(perf={
             "prompt": "p", "mode": "ramp",
             "ramp": {"from": 1, "to": 9, "step": 4}, "duration": 30, "number": 5}))
@@ -133,7 +135,7 @@ class TestModes:
         args = cfg["args"]
         assert args[args.index("--parallel") + 1] == "8"
         assert args[args.index("--duration") + 1] == "3600"   # 单档：总时长即每档
-        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
+        assert args[args.index("--number") + 1] == str(DURATION_DRIVEN_NUMBER_CAP)
 
     def test_mode_conflicts_and_errors(self):
         with pytest.raises(ValueError, match="不要直接配"):
@@ -172,7 +174,7 @@ class TestDuration:
             "duration": 300}))
         args = cfg["args"]
         assert args[args.index("--duration") + 1] == "300"   # 单档直传
-        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
+        assert args[args.index("--number") + 1] == str(DURATION_DRIVEN_NUMBER_CAP)
 
     def test_ramp_duration_split_evenly(self):
         cfg = PerfAdapter().build_config(make_request(perf={
@@ -183,7 +185,7 @@ class TestDuration:
         levels = args[i + 1:i + 6]
         assert len(levels) == 5                              # 1/5/9/13/16 共 5 档
         assert args[args.index("--duration") + 1] == "18"    # 总 90s 均分 5 档（整数秒）
-        assert args[args.index("--number") + 1] == str(_DURATION_DRIVEN_NUMBER_CAP)
+        assert args[args.index("--number") + 1] == str(DURATION_DRIVEN_NUMBER_CAP)
 
     def test_ramp_level_duration_passthrough(self):
         cfg = PerfAdapter().build_config(make_request(perf={
@@ -205,7 +207,7 @@ class TestDuration:
         assert cfg["timeout"] == 600                          # 看门狗即总时长预算
         assert cfg["duration_watchdog"] == 600
         assert cfg["args"][cfg["args"].index("--number") + 1] == str(
-            _DURATION_DRIVEN_NUMBER_CAP)
+            DURATION_DRIVEN_NUMBER_CAP)
 
     def test_probe_level_duration_per_round(self):
         """probe + level_duration = 每轮墙钟上限（deepcopy 继承，先到为准）。"""
@@ -289,7 +291,7 @@ class TestDatasetLoad:
             json.dumps({"id": 3, "input": "第三个问题"}),
         ]) + "\n", encoding="utf-8")
         dest = tmp_path / "load" / "prompts.txt"
-        assert _export_prompts(str(src), dest) == 3
+        assert export_prompts(str(src), dest) == 3
         assert dest.read_text(encoding="utf-8").splitlines() == \
             ["第一个问题", "第二个问题", "第三个问题"]
 
@@ -297,16 +299,16 @@ class TestDatasetLoad:
         src = tmp_path / "ds.csv"
         src.write_text("id,prompt\n1,甲\n2,乙\n", encoding="utf-8")
         dest = tmp_path / "load" / "prompts.txt"
-        assert _export_prompts(str(src), dest) == 2
+        assert export_prompts(str(src), dest) == 2
 
     def test_export_errors(self, tmp_path):
         with pytest.raises(ValueError, match="不存在"):
-            _export_prompts(str(tmp_path / "nope.jsonl"), tmp_path / "d.txt")
+            export_prompts(str(tmp_path / "nope.jsonl"), tmp_path / "d.txt")
         bad = tmp_path / "bad.jsonl"
         bad.write_text(json.dumps({"id": 1, "answer": "无输入字段"}) + "\n",
                        encoding="utf-8")
         with pytest.raises(ValueError, match="无输入字段"):
-            _export_prompts(str(bad), tmp_path / "d.txt")
+            export_prompts(str(bad), tmp_path / "d.txt")
 
     def test_build_config_dataset_args(self):
         cfg = PerfAdapter().build_config(make_request(work_dir=Path("w"), perf={

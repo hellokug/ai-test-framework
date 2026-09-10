@@ -265,95 +265,99 @@ class ExecutionEngine:
 
     async def _evaluate(self, config: SuiteConfig, executed: list[dict], ctx,
                         report: RunReport) -> list[CaseMetricRecord]:
-        metrics: list[tuple[str, Any]] = []
-        for m in config.metrics:
-            metrics.append((m.name, resolve_metric(m.name)(threshold=m.threshold, **m.params)))
-        judges: list[tuple[str, Any]] = []
-        for jc in config.judges:
-            judges.append((jc.type, self._build_judge(jc)))
-
+        """阶段 B：指标计算 + judge 评估（并发，带成本熔断）。"""
+        infos = self._metric_infos(config)
+        metrics = [(name, m) for name, (m, _j, _t) in infos.items() if m is not None]
+        # judge 以 suite 配置的 type 名入库（历史口径），与 judge.name 可能不同
+        judges = [(jc.type, self._build_judge(jc)) for jc in config.judges]
         groups = self._variant_groups(executed)
         base_entries = [e for e in executed if e["case"].variant == "base"]
+        group_by_map = {dc.label: dc.group_by for dc in config.datasets}
         total_work = len(base_entries) * (len(metrics) + len(judges))
         done = 0
-        cost_tripped = False
+        # cost_tripped 跨任务单向标志：事件循环内同步赋值，无竞态
+        state = {"cost_tripped": False}
+        records: list[CaseMetricRecord] = []
         self.progress and self.progress.start(total_work, "computing metrics")
         self._emit("phase", phase="evaluate", total=total_work)
 
-        records: list[CaseMetricRecord] = []
-        group_by_map = {dc.label: dc.group_by for dc in config.datasets}
+        sem = asyncio.Semaphore(max(config.concurrency or 8, 1))
 
         async def eval_one(entry: dict) -> None:
-            nonlocal done, cost_tripped
-            case: TestCase = entry["case"]
-            response: TargetResponse = entry["response"]
-            variants = groups.get(case.id, [])
-            dataset = case.dataset
-            group_key = group_by_map.get(dataset)
-            group = str(case.metadata.get(group_key)) if group_key and group_key in case.metadata else None
-            results: list[MetricResult] = []
-
-            for name, metric in metrics:
-                try:
-                    if metric.wants_variants:
-                        res = await metric.compute(case=case, response=response,
-                                                   responses=variants, ctx=ctx)
-                    else:
-                        res = await metric.compute(case=case, response=response, ctx=ctx)
-                    if res.metric != name:
-                        res.metric = name  # keep requested name stable
-                except Exception as exc:  # noqa: BLE001
-                    res = MetricResult(metric=name, value=0.0,
-                                       error=f"metric error: {type(exc).__name__}: {exc}")
-                results.append(res)
-            await self.repo.save_metric_results(report.run_id, entry["result_row"],
-                                                results, source="metric")
-            for res in results:
-                records.append(CaseMetricRecord(
-                    case_id=case.id, metric=res.metric, value=res.value,
-                    passed=res.passed, raw=res.raw, error=res.error,
-                    dataset=dataset, group=group))
-
-            if judges and not cost_tripped:
-                jresults: list[MetricResult] = []
-                for jtype, judge in judges:
-                    if cost_tripped:
-                        break
-                    try:
-                        res = await judge.judge(case=case, response=response, ctx=ctx)
-                    except CostLimitExceeded as exc:
-                        cost_tripped = True
-                        report.details["cost_breaker"] = str(exc)
-                        res = MetricResult(metric=judge.name, value=0.0, passed=False,
-                                           error=f"cost breaker: {exc}")
-                    except Exception as exc:  # noqa: BLE001
-                        res = MetricResult(metric=judge.name, value=0.0,
-                                           error=f"judge error: {type(exc).__name__}: {exc}")
-                    if res.metric != jtype:
-                        res.metric = jtype
-                    jresults.append(res)
-                await self.repo.save_metric_results(report.run_id, entry["result_row"],
-                                                    jresults, source="judge")
-                for res in jresults:
-                    records.append(CaseMetricRecord(
-                        case_id=case.id, metric=res.metric, value=res.value,
-                        passed=res.passed, raw=res.raw, error=res.error,
-                        dataset=dataset, group=group))
-
+            nonlocal done
+            async with sem:
+                await self._eval_entry(entry, metrics, judges, groups, group_by_map,
+                                       ctx, report, records, state)
             done += len(metrics) + len(judges)
             self.progress and self.progress.update(len(metrics) + len(judges))
             if done % 10 == 0 or done >= total_work:
                 self._emit("progress", phase="evaluate", done=done, total=total_work)
 
-        sem = asyncio.Semaphore(max(config.concurrency or 8, 1))
-        eval_coros = []
-        for entry in base_entries:
-            async def bounded(e=entry):
-                async with sem:
-                    await eval_one(e)
-            eval_coros.append(bounded())
-        await asyncio.gather(*eval_coros)
+        await asyncio.gather(*(eval_one(e) for e in base_entries))
         return records
+
+    async def _eval_entry(self, entry: dict, metrics, judges, groups, group_by_map,
+                          ctx, report: RunReport, records: list,
+                          state: dict) -> None:
+        """单用例求值：指标计算 → 持久化 → judge（成本熔断）→ 持久化。"""
+        case: TestCase = entry["case"]
+        response: TargetResponse = entry["response"]
+        variants = groups.get(case.id, [])
+        dataset = case.dataset
+        group_key = group_by_map.get(dataset)
+        group = str(case.metadata.get(group_key)) if group_key and group_key in case.metadata else None
+
+        results: list[MetricResult] = []
+        for name, metric in metrics:
+            try:
+                if metric.wants_variants:
+                    res = await metric.compute(case=case, response=response,
+                                               responses=variants, ctx=ctx)
+                else:
+                    res = await metric.compute(case=case, response=response, ctx=ctx)
+                if res.metric != name:
+                    res.metric = name  # keep requested name stable
+            except Exception as exc:  # noqa: BLE001
+                res = MetricResult(metric=name, value=0.0,
+                                   error=f"metric error: {type(exc).__name__}: {exc}")
+            results.append(res)
+        await self.repo.save_metric_results(report.run_id, entry["result_row"],
+                                            results, source="metric")
+        records.extend(CaseMetricRecord(
+            case_id=case.id, metric=res.metric, value=res.value,
+            passed=res.passed, raw=res.raw, error=res.error,
+            dataset=dataset, group=group) for res in results)
+
+        if judges and not state["cost_tripped"]:
+            jresults = await self._run_judges(judges, case, response, ctx, report, state)
+            await self.repo.save_metric_results(report.run_id, entry["result_row"],
+                                                jresults, source="judge")
+            records.extend(CaseMetricRecord(
+                case_id=case.id, metric=res.metric, value=res.value,
+                passed=res.passed, raw=res.raw, error=res.error,
+                dataset=dataset, group=group) for res in jresults)
+
+    async def _run_judges(self, judges, case: TestCase, response: TargetResponse,
+                          ctx, report: RunReport, state: dict) -> list[MetricResult]:
+        """judge 评估；CostLimitExceeded 触发全局熔断（后续用例跳过 judge）。"""
+        jresults: list[MetricResult] = []
+        for jtype, judge in judges:
+            if state["cost_tripped"]:
+                break
+            try:
+                res = await judge.judge(case=case, response=response, ctx=ctx)
+            except CostLimitExceeded as exc:
+                state["cost_tripped"] = True
+                report.details["cost_breaker"] = str(exc)
+                res = MetricResult(metric=judge.name, value=0.0, passed=False,
+                                   error=f"cost breaker: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                res = MetricResult(metric=judge.name, value=0.0,
+                                   error=f"judge error: {type(exc).__name__}: {exc}")
+            if res.metric != jtype:
+                res.metric = jtype
+            jresults.append(res)
+        return jresults
 
     @staticmethod
     def _variant_groups(executed: list[dict]) -> dict[str, list[tuple[TestCase, TargetResponse]]]:

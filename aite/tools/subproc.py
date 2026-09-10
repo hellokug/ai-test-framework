@@ -1,0 +1,64 @@
+"""外部工具子进程执行的公共层（pytest / evalscope-perf / locust 三适配器收口）。
+
+统一三件重复事（CLAUDE.md 原则 3）：env 合并（Windows 缺 SystemRoot 会崩）、
+PYTHONIOENCODING、TimeoutExpired 与日志落盘。失败文案含调用方上下文
+（档位号/超时秒数），故非零/超时**不在此抛错**，返回 outcome 由调用方定语义。
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+
+def which_or_fail(name: str, hint: str) -> str:
+    """定位外部 CLI；缺失时抛带安装指引的 RuntimeError。"""
+    binary = shutil.which(name)
+    if binary is None:
+        raise RuntimeError(hint)
+    return binary
+
+
+def run_tool_subprocess(args: list[str], *, log_path: Path, timeout: int,
+                        env_extra: dict[str, str] | None = None,
+                        append_log: bool = False,
+                        log_prefix: str = "") -> tuple[int | None, str, str]:
+    """执行子进程并落盘日志，返回 (rc, out, err)。
+
+    rc=None 表示超时（日志已写）；其余语义（如 pytest 的 rc=1=有失败用例属
+    正常完成）由调用方裁定并组织错误文案。log_prefix 写在日志条目头部
+    （多档执行时标注档位）。所有输出 errors=replace 解码。
+    """
+    env = os.environ | {"PYTHONIOENCODING": "utf-8"} | (env_extra or {})
+    try:
+        proc = subprocess.run(args, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or b"").decode("utf-8", errors="replace")
+        err = (exc.stderr or b"").decode("utf-8", errors="replace")
+        _write(log_path, f"{log_prefix}SUBPROCESS TIMEOUT after {timeout}s\n{out}{err}",
+               append_log)
+        return None, out, err
+    out = (proc.stdout or b"").decode("utf-8", errors="replace")
+    err = (proc.stderr or b"").decode("utf-8", errors="replace")
+    _write(log_path, log_prefix + out + err, append_log)
+    return proc.returncode, out, err
+
+
+def _write(log_path: Path, text: str, append: bool) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if append and log_path.is_file():
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write("\n" + text)
+    else:
+        log_path.write_text(text, encoding="utf-8")
+
+
+def glob_report_files(base: Path, patterns: tuple[str, ...]) -> dict[str, str]:
+    """按 patterns 收集工具产出报告文件（文件名 → 绝对路径）。"""
+    files: dict[str, str] = {}
+    for pattern in patterns:
+        for p in sorted(base.glob(pattern)):
+            files[p.name] = str(p)
+    return files

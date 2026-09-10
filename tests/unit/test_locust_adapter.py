@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from aite.tools.base import ToolRunRequest
-from aite.tools.locust_adapter import LocustAdapter, _expand_ramp
+from aite.tools.locust_adapter import LocustAdapter
+from aite.tools.perf_common import expand_ramp
 
 
 def make_request(**kw):
@@ -48,7 +49,7 @@ class TestBuildConfig:
         cfg = LocustAdapter().build_config(make_request(perf={
             "prompt": "p", "mode": "ramp",
             "ramp": {"from": 1, "to": 9, "step": 4}, "duration": 90}))
-        assert _expand_ramp({"from": 1, "to": 9, "step": 4}) == [1, 5, 9]
+        assert expand_ramp({"from": 1, "to": 9, "step": 4}) == [1, 5, 9]
         assert [(r["users"], r["seconds"]) for r in cfg["runs"]] == \
             [(1, 30.0), (5, 30.0), (9, 30.0)]               # 总时长均分 3 档
 

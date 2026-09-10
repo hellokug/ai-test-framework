@@ -29,9 +29,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import shutil
-import subprocess
 from pathlib import Path
 
 from aite.tools.base import (
@@ -43,18 +40,83 @@ from aite.tools.base import (
     register_tool,
     run_sync_in_thread,
 )
-from aite.tools.perf_adapter import _export_prompts, generate_synthetic_prompts
+from aite.tools.perf_common import (
+    export_prompts,
+    generate_synthetic_prompts,
+    resolve_durations,
+    resolve_load,
+    resolve_mode_parallel,
+)
+from aite.tools.subproc import glob_report_files, run_tool_subprocess, which_or_fail
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_TIMEOUT = 3600      # 整场压测总超时（秒），req.extra.timeout 可覆盖
 _LEVEL_GRACE = 120          # 每档子进程超时 = 档时长 + 宽限（locust -t 自退出）
-
-_MODES = {"baseline", "ramp", "soak"}
-# 越低越好（阈值方向 <=）；qps 越高越好（与 perf_adapter 口径一致）
+# 越低越好（阈值方向 <=）；qps 越高越好（与 evalscope-perf 口径一致）
 _LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
                     "error_rate"}
+
+def _num(row: dict, key: str) -> float | None:
+    try:
+        return float(row[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _history_series(output_dir: Path) -> list[dict]:
+    """各档 _stats_history.csv → 时序 series（--csv-full-history，原生 1s 打点）。"""
+    series = []
+    for history_path in sorted(output_dir.glob("*_stats_history.csv")):
+        users = history_path.name[len("locust_u"):-len("_stats_history.csv")]
+        by_ts: dict[float, dict] = {}
+        for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
+            rtype = hrow.get("Type")
+            if rtype not in ("POST", "TTFT"):
+                continue
+            ts = _num(hrow, "Timestamp")
+            if ts is None:
+                continue
+            b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
+                                      "errors": 0.0})
+            if rtype == "POST":
+                b["rps"] += _num(hrow, "Requests/s") or 0.0
+                b["errors"] += _num(hrow, "Failures/s") or 0.0
+                for col in ("50%", "95%"):
+                    if _num(hrow, col) is not None:
+                        b["latency"].append(_num(hrow, col))
+            else:
+                for col in ("50%", "95%"):
+                    if _num(hrow, col) is not None:
+                        b["ttft"].append(_num(hrow, col))
+        if not by_ts:
+            continue
+        t0 = min(by_ts)
+        points = [_point(ts, by_ts[ts], t0) for ts in sorted(by_ts)]
+        series.append({"users": int(users), "run": 0,
+                       "label": f"locust:u{users}", "points": points})
+    return series
+
+
+def _point(ts: float, b: dict, t0: float) -> dict:
+    """秒级时序点：POST 行的 rps/延迟分位 + TTFT 行分位（locust 无 token 口径）。"""
+    return {
+        "t": round(ts - t0, 3),
+        "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
+        "ttft_p95": round(max(b["ttft"]), 1) if b["ttft"] else None,
+        "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
+        "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
+        "rps": round(b["rps"], 3),
+        "tok_s": None,   # locust 无 token 口径
+        "errors": int(b["errors"]),
+    }
+
+
+def _errors_summary(failures: list[dict]) -> list[dict]:
+    return [{"key": f["detail"].rsplit(" ×", 1)[0],
+             "count": int(f["detail"].rsplit(" ×", 1)[1] or 0)}
+            for f in failures]
+
 
 _LOCUSTFILE_TEMPLATE = '''# 由 aite locust 适配器生成（勿手改；regenerate per run）
 import json
@@ -121,109 +183,30 @@ class ChatUser(HttpUser):
 '''
 
 
-def _expand_ramp(ramp: dict) -> list[int]:
-    """from/to/step → 并发梯度（与 perf_adapter 同规则：to 必含）。"""
-    try:
-        start, stop, step = int(ramp["from"]), int(ramp["to"]), int(ramp["step"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("perf.ramp 需要 from / to / step 整数") from exc
-    if start < 1 or stop < start or step < 1:
-        raise ValueError("perf.ramp 需要 1 ≤ from ≤ to 且 step ≥ 1")
-    levels = list(range(start, stop + 1, step))
-    if levels[-1] != stop:
-        levels.append(stop)
-    return levels
-
-
-def _resolve_levels(cfg: dict, parallel: list[int]) -> list[float]:
-    """duration / level_duration → 每档秒数（与 perf_adapter 同语义）。"""
-    total = cfg.get("duration")
-    per = cfg.get("level_duration")
-    if total is not None and per is not None:
-        raise ValueError("perf.duration 与 perf.level_duration 二选一"
-                         "（整场总时长 / 每档秒数）")
-    if total is not None:
-        total = float(total)
-        if total <= 0:
-            raise ValueError("perf.duration 须为正数（秒）")
-        return [total] if len(parallel) == 1 else [total / len(parallel)] * len(parallel)
-    if per is not None:
-        per = float(per)
-        if per <= 0:
-            raise ValueError("perf.level_duration 须为正数（秒）")
-        return [per] * len(parallel)
-    raise ValueError("locust 压测需要时长驱动：配 perf.duration（整场总时长）或"
-                     " perf.level_duration（每档秒数）——locust 无请求数上限语义")
-
-
 @register_tool("locust")
 class LocustAdapter(ToolAdapter):
     name = "locust"
 
     def build_config(self, req: ToolRunRequest) -> dict:
-        """perf yaml 段 → 每档 locust CLI 参数（纯函数可单测）。"""
+        """perf yaml 段 → 每档 locust CLI 参数（纯函数可单测）。
+
+        负载/模式/时长解析共用 perf_common（probe 拒绝、时长必配）。
+        """
         cfg = req.perf
         model = str(req.target.get("model") or "").strip()
         if not model:
             raise ValueError("locust 需要 target.model")
         url, api_key = api_endpoint(req.target)
-
-        dataset = str(cfg.get("dataset") or "").strip()
-        prompt = str(cfg.get("prompt") or "").strip()
-        synthetic = cfg.get("synthetic")
-        chosen = [k for k, v in (("dataset", dataset), ("prompt", prompt),
-                                 ("synthetic", synthetic)) if v]
-        if len(chosen) > 1:
-            raise ValueError("perf.dataset / perf.prompt / perf.synthetic 三选一")
-        if not chosen:
-            raise ValueError("locust 需要 perf.dataset（数据集文件）/ perf.prompt（固定提示词）"
-                             " / perf.synthetic（合成负载）三选一")
-        if synthetic:
-            if (not isinstance(synthetic, dict)
-                    or not isinstance(synthetic.get("count"), int)
-                    or isinstance(synthetic.get("count"), bool) or synthetic["count"] < 1
-                    or not isinstance(synthetic.get("prompt_length"), int)
-                    or isinstance(synthetic.get("prompt_length"), bool)
-                    or synthetic["prompt_length"] < 1):
-                raise ValueError("perf.synthetic 须为 {count: ≥1, prompt_length: ≥1}"
-                                 "（条数 / 每条目标字符数）")
-            synthetic = {"count": synthetic["count"],
-                         "prompt_length": synthetic["prompt_length"]}
-
-        mode = cfg.get("mode")
-        if mode == "probe":
-            raise ValueError("locust 不支持 probe 模式（SLA 二分搜索是 evalscope perf"
-                             " 专有）——如需摸高请用 engine: evalscope-perf")
-        if mode is None:
-            parallel = cfg.get("parallel") or [1]   # v1 兼容：直配梯度
-        elif mode == "baseline":
-            b = cfg.get("baseline") or {}
-            if not isinstance(b.get("parallel"), int) or isinstance(b.get("parallel"), bool):
-                raise ValueError("perf.baseline 需要 parallel（整数）")
-            parallel = [b["parallel"]]
-        elif mode == "ramp":
-            parallel = _expand_ramp(cfg.get("ramp") or {})
-        elif mode == "soak":
-            s = cfg.get("soak") or {}
-            if not isinstance(s.get("parallel"), int) or isinstance(s.get("parallel"), bool):
-                raise ValueError("perf.soak 需要 parallel（整数）")
-            parallel = [s["parallel"]]
-        else:
-            raise ValueError(f"perf.mode 须 ∈ {sorted(_MODES)} 或省略（直配 parallel）")
-        if mode is not None and cfg.get("parallel"):
-            raise ValueError(f"perf.mode={mode} 模式下不要直接配 perf.parallel")
-        if not (isinstance(parallel, list) and parallel
-                and all(isinstance(v, int) and not isinstance(v, bool) and v >= 1
-                        for v in parallel)):
-            raise ValueError("perf.parallel 须为 ≥1 的整数数组")
+        dataset, prompt, synthetic = resolve_load(cfg)
+        mode, parallel, _probe = resolve_mode_parallel(cfg, allow_probe=False)
         if cfg.get("number") is not None:
             logger.info("locust 忽略 perf.number（locust 按时长/用户数驱动）")
+        plan = resolve_durations(cfg, mode=mode, n_levels=len(parallel), require=True)
 
-        seconds = _resolve_levels(cfg, parallel)
         spawn_rate = cfg.get("spawn_rate")
         output_dir = req.work_dir / "locust_raw"
         runs = []
-        for users, secs in zip(parallel, seconds, strict=True):
+        for users, secs in zip(parallel, self._level_seconds(plan, parallel), strict=True):
             prefix = output_dir / f"locust_u{users}"
             rate = int(spawn_rate) if spawn_rate else users   # 缺省瞬时拉满
             runs.append({"users": users, "spawn_rate": rate, "seconds": float(secs),
@@ -237,9 +220,15 @@ class LocustAdapter(ToolAdapter):
             "locustfile": str(req.work_dir / "locustfile.py"),
             "prompts_file": str(req.work_dir / "load" / "prompts.txt"),
             "runs": runs,
-            "timeout": int(req.extra.get("timeout", DEFAULT_TIMEOUT)),
+            "timeout": int(req.extra.get("timeout", 3600)),
             "output_dir": str(output_dir),
         }
+
+    @staticmethod
+    def _level_seconds(plan, parallel: list[int]) -> list[float]:
+        """每档秒数：level_duration 直传；duration 单档直传/多档均分。"""
+        per = plan.per_level
+        return [per] * len(parallel) if per is not None else [0.0] * len(parallel)
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         cfg = self.build_config(req)
@@ -253,7 +242,7 @@ class LocustAdapter(ToolAdapter):
         Path(cfg["locustfile"]).write_text(_LOCUSTFILE_TEMPLATE, encoding="utf-8")
         dest = Path(cfg["prompts_file"])
         if cfg["dataset"]:
-            n = _export_prompts(cfg["dataset"], dest)
+            n = export_prompts(cfg["dataset"], dest)
             logger.info("locust 数据集负载导出 %d 条 prompt", n)
         elif cfg["synthetic"]:
             prompts = generate_synthetic_prompts(**cfg["synthetic"])
@@ -265,17 +254,13 @@ class LocustAdapter(ToolAdapter):
             dest.write_text(cfg["prompt"] + "\n", encoding="utf-8")
 
     def _exec(self, cfg: dict) -> None:
-        """逐档 subprocess 执行 locust；任一档失败即抛错（后续档不跑）。"""
-        binary = shutil.which("locust")
-        if binary is None:
-            raise RuntimeError("未找到 locust CLI——请 pip install 'aite[locust]'"
-                               "（或 pip install locust）")
+        """逐档 subprocess 执行 locust；任一档超时/失败即抛错（后续档不跑）。"""
+        binary = which_or_fail("locust", "未找到 locust CLI——请 pip install"
+                               " 'aite[locust]'（或 pip install locust）")
         out_dir = Path(cfg["output_dir"])
         out_dir.mkdir(parents=True, exist_ok=True)
         log_path = out_dir.parent / "logs" / "locust.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        env = os.environ | {
-            "PYTHONIOENCODING": "utf-8",
+        env_extra = {
             "PYTHONUTF8": "1",
             "AITE_LOCUST_URL": cfg["url"],
             "AITE_LOCUST_MODEL": cfg["model"],
@@ -284,10 +269,9 @@ class LocustAdapter(ToolAdapter):
             "AITE_LOCUST_PROMPTS_FILE": cfg["prompts_file"],
         }
         if cfg["max_tokens"]:
-            env["AITE_LOCUST_MAX_TOKENS"] = str(int(cfg["max_tokens"]))
+            env_extra["AITE_LOCUST_MAX_TOKENS"] = str(int(cfg["max_tokens"]))
         host = cfg["url"].rsplit("/chat/completions", 1)[0]
-        lines = []
-        for run in cfg["runs"]:
+        for i, run in enumerate(cfg["runs"]):
             args = [
                 binary, "-f", cfg["locustfile"], "--headless", "--only-summary",
                 "--csv", run["csv"], "--csv-full-history",   # 秒级时序（大屏曲线）
@@ -295,25 +279,20 @@ class LocustAdapter(ToolAdapter):
                 "-u", str(run["users"]), "-r", str(run["spawn_rate"]),
                 "-t", f"{int(run['seconds'])}s", "--host", host,
             ]
-            lines.append(f"=== u{run['users']} × {run['seconds']}s ===")
-            try:
-                proc = subprocess.run(args, capture_output=True, env=env,
-                                      timeout=int(run["seconds"]) + _LEVEL_GRACE)
-            except subprocess.TimeoutExpired as exc:
-                lines.append(f"LEVEL TIMEOUT u{run['users']}: {exc}")
+            outcome, out, err = run_tool_subprocess(
+                args, log_path=log_path, timeout=int(run["seconds"]) + _LEVEL_GRACE,
+                env_extra=env_extra, append_log=i > 0,
+                log_prefix=f"=== u{run['users']} × {run['seconds']}s ===\n")
+            if outcome == "timeout":
                 raise RuntimeError(
                     f"locust 档位超时（u{run['users']}，"
-                    f"{int(run['seconds']) + _LEVEL_GRACE}s）") from exc
-            lines.append((proc.stdout or b"").decode("utf-8", errors="replace"))
-            lines.append((proc.stderr or b"").decode("utf-8", errors="replace"))
-            if proc.returncode != 0:
-                log_path.write_text("\n".join(lines), encoding="utf-8")
-                raise RuntimeError(f"locust 执行失败（u{run['users']}，"
-                                   f"exit={proc.returncode}），日志: {log_path}")
-        log_path.write_text("\n".join(lines), encoding="utf-8")
+                    f"{int(run['seconds']) + _LEVEL_GRACE}s）")
+            if outcome == "fail":
+                raise RuntimeError(f"locust 执行失败（u{run['users']}），"
+                                   f"日志: {log_path}\n{out[-2000:]}")
 
     def collect(self, req: ToolRunRequest) -> ToolRunResult:
-        """解析各档 locust_uN_stats/_failures CSV → 指标行 + 失败明细。"""
+        """解析各档 locust_uN_stats/_failures/history CSV → 指标行 + 时序 + 失败明细。"""
         cfg = self.build_config(req)   # 纯函数，重复调用拿 output_dir
         out = ToolRunResult()
         stats_files = sorted(Path(cfg["output_dir"]).glob("locust_u*_stats.csv"))
@@ -323,118 +302,72 @@ class LocustAdapter(ToolAdapter):
         for stats_path in stats_files:
             users = stats_path.name[len("locust_u"):-len("_stats.csv")]
             label = f"locust:u{users}"
-            rows = list(csv.DictReader(stats_path.open(encoding="utf-8")))
-            # 口径：取 Type=POST 行（POST+TTFT 双事件会把 Aggregated 的 qps/延迟
-            # 抬高约一倍）；无 POST 行兜底 Aggregated
-            agg = (next((r for r in rows if r.get("Type") == "POST"), None)
-                   or next((r for r in rows if r.get("Type") == "Aggregated"), None))
-            if agg is None:
-                logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s", stats_path)
-                continue
-            ttft = next((r for r in rows if r.get("Type") == "TTFT"), None)
+            self._collect_level(req, out, stats_path, label)
+            self._collect_level_failures(out, stats_path, label)
 
-            def num(row: dict, key: str) -> float | None:
-                try:
-                    return float(row[key])
-                except (KeyError, TypeError, ValueError):
-                    return None
-
-            total = num(agg, "Request Count") or 0
-            failed = num(agg, "Failure Count") or 0
-            metrics = {
-                "latency_avg_ms": num(agg, "Average Response Time"),
-                "latency_p95_ms": num(agg, "95%"),
-                "qps": num(agg, "Requests/s"),
-                "error_rate": (failed / total) if total else None,
-            }
-            if ttft is not None:   # 非流式无 TTFT 行 → 跳过（口径同 perf：None 不入库）
-                metrics["ttft_ms"] = num(ttft, "Average Response Time")
-                metrics["ttft_p95_ms"] = num(ttft, "95%")
-            for name, value in metrics.items():
-                if value is None:
-                    continue
-                thr = req.metric_thresholds.get(name)
-                higher = name not in _LOWER_IS_BETTER
-                out.rows.append(ToolMetricRow(
-                    dataset=label, metric=name, value=float(value), count=int(total),
-                    threshold=thr, higher_is_better=higher,
-                    passed=((float(value) >= thr) if higher
-                            else (float(value) <= thr)) if thr is not None else None,
-                ))
-            if metrics.get("qps") is not None:
-                out.raw_score[label] = metrics["qps"]
-            failures_path = stats_path.with_name(
-                stats_path.name.replace("_stats.csv", "_failures.csv"))
-            if failures_path.is_file():
-                for frow in csv.DictReader(failures_path.open(encoding="utf-8")):
-                    out.failures.append({
-                        "dataset": label, "case": frow.get("Method", ""),
-                        "detail": f"{frow.get('Error', '')}"
-                                  f" ×{frow.get('Occurrences', '')}",
-                    })
-
-        # ---- 秒级时序（--csv-full-history 产出，原生 1s 打点）→ timeseries.json ----
-        timeseries: dict = {"engine": self.name, "bucket_seconds": 1.0,
-                            "series": [], "errors": []}
-        for history_path in sorted(Path(cfg["output_dir"]).glob("*_stats_history.csv")):
-            users = history_path.name[len("locust_u"):-len("_stats_history.csv")]
-            by_ts: dict[float, dict] = {}
-            for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
-                rtype = hrow.get("Type")
-                if rtype not in ("POST", "TTFT"):
-                    continue
-                ts = num(hrow, "Timestamp")
-                if ts is None:
-                    continue
-                b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
-                                          "errors": 0.0})
-                if rtype == "POST":
-                    b["rps"] += num(hrow, "Requests/s") or 0.0
-                    b["errors"] += num(hrow, "Failures/s") or 0.0
-                    if num(hrow, "50%") is not None:
-                        b["latency"].append(num(hrow, "50%"))
-                    if num(hrow, "95%") is not None:
-                        b["latency"].append(num(hrow, "95%"))
-                else:
-                    if num(hrow, "50%") is not None:
-                        b["ttft"].append(num(hrow, "50%"))
-                    if num(hrow, "95%") is not None:
-                        b["ttft"].append(num(hrow, "95%"))
-            if not by_ts:
-                continue
-            t0 = min(by_ts)
-            points = []
-            for ts in sorted(by_ts):
-                b = by_ts[ts]
-                points.append({
-                    "t": round(ts - t0, 3),
-                    "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
-                    "ttft_p95": round(max(b["ttft"]), 1) if b["ttft"] else None,
-                    "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
-                    "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
-                    "rps": round(b["rps"], 3),
-                    "tok_s": None,   # locust 无 token 口径
-                    "errors": int(b["errors"]),
-                })
-            timeseries["series"].append({"users": int(users), "run": 0,
-                                         "label": f"locust:u{users}", "points": points})
-        if out.failures:
-            timeseries["errors"] = [
-                {"key": f["detail"].rsplit(" ×", 1)[0], "count": int(
-                    f["detail"].rsplit(" ×", 1)[1] or 0)}
-                for f in out.failures]
+        timeseries = {"engine": self.name, "bucket_seconds": 1.0,
+                      "series": _history_series(Path(cfg["output_dir"])),
+                      "errors": _errors_summary(out.failures)}
         if timeseries["series"]:
             ts_path = Path(cfg["output_dir"]).parent / "timeseries.json"
             ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
                                encoding="utf-8")
             out.report_files["timeseries.json"] = str(ts_path)
-        base = Path(cfg["output_dir"]).parent
-        for pattern in ("locust_raw/**/*.html", "locust_raw/**/*_stats.csv",
-                        "locust_raw/**/*_stats_history.csv",
-                        "logs/locust.log"):
-            for p in sorted(base.glob(pattern)):
-                out.report_files[p.name] = str(p)
+        out.report_files.update(glob_report_files(Path(cfg["output_dir"]).parent, (
+            "locust_raw/**/*.html",
+            "locust_raw/**/*_stats.csv",
+            "locust_raw/**/*_stats_history.csv",
+            "logs/locust.log",
+        )))
         return out
+
+    def _collect_level(self, req: ToolRunRequest, out: ToolRunResult,
+                       stats_path: Path, label: str) -> None:
+        """单档 stats CSV → 指标行（口径：POST 行，Aggregated 被双事件污染）。"""
+        rows = list(csv.DictReader(stats_path.open(encoding="utf-8")))
+        agg = (next((r for r in rows if r.get("Type") == "POST"), None)
+               or next((r for r in rows if r.get("Type") == "Aggregated"), None))
+        if agg is None:
+            logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s", stats_path)
+            return
+        ttft = next((r for r in rows if r.get("Type") == "TTFT"), None)
+        total = _num(agg, "Request Count") or 0
+        failed = _num(agg, "Failure Count") or 0
+        metrics = {
+            "latency_avg_ms": _num(agg, "Average Response Time"),
+            "latency_p95_ms": _num(agg, "95%"),
+            "qps": _num(agg, "Requests/s"),
+            "error_rate": (failed / total) if total else None,
+        }
+        if ttft is not None:   # 非流式无 TTFT 行 → 跳过（口径同 perf：None 不入库）
+            metrics["ttft_ms"] = _num(ttft, "Average Response Time")
+            metrics["ttft_p95_ms"] = _num(ttft, "95%")
+        for name, value in metrics.items():
+            if value is None:
+                continue
+            thr = req.metric_thresholds.get(name)
+            higher = name not in _LOWER_IS_BETTER
+            out.rows.append(ToolMetricRow(
+                dataset=label, metric=name, value=float(value), count=int(total),
+                threshold=thr, higher_is_better=higher,
+                passed=((float(value) >= thr) if higher
+                        else (float(value) <= thr)) if thr is not None else None,
+            ))
+        if metrics.get("qps") is not None:
+            out.raw_score[label] = metrics["qps"]
+
+    @staticmethod
+    def _collect_level_failures(out: ToolRunResult, stats_path: Path, label: str) -> None:
+        """单档 _failures.csv → 失败明细（错误文本 × 次数）。"""
+        failures_path = stats_path.with_name(
+            stats_path.name.replace("_stats.csv", "_failures.csv"))
+        if failures_path.is_file():
+            for frow in csv.DictReader(failures_path.open(encoding="utf-8")):
+                out.failures.append({
+                    "dataset": label, "case": frow.get("Method", ""),
+                    "detail": f"{frow.get('Error', '')}"
+                              f" ×{frow.get('Occurrences', '')}",
+                })
 
     def list_tasks(self) -> list[dict]:
         """locust 无任务目录概念，返回单一 chat 压测伪任务（指标清单）。"""

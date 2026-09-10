@@ -22,8 +22,6 @@ suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一�
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -38,6 +36,7 @@ from aite.tools.base import (
     register_tool,
     run_sync_in_thread,
 )
+from aite.tools.subproc import run_tool_subprocess
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -146,21 +145,15 @@ class PytestAdapter(ToolAdapter):
         """单场景 subprocess 执行；stdout/stderr 落日志，异常退出码抛错。"""
         for key in ("junit_xml", "log"):
             Path(sc[key]).parent.mkdir(parents=True, exist_ok=True)
-        env = os.environ | cfg["env"]   # 必须合并：Windows 缺 SystemRoot 会崩
-        try:
-            proc = subprocess.run(cfg["argv"][sc["name"]], capture_output=True,
-                                  env=env, timeout=cfg["timeout"])
-        except subprocess.TimeoutExpired as exc:
-            Path(sc["log"]).write_text(
-                f"TIMEOUT after {cfg['timeout']}s\n{exc}", encoding="utf-8")
-            raise RuntimeError(f"功能场景 {sc['name']} 超时（{cfg['timeout']}s）") from exc
-        out = (proc.stdout or b"").decode("utf-8", errors="replace")
-        err = (proc.stderr or b"").decode("utf-8", errors="replace")
-        Path(sc["log"]).write_text(out + err, encoding="utf-8", errors="replace")
-        if proc.returncode not in (0, 1):   # 0=全过 1=有失败；2+ = 执行异常
+        rc, out, err = run_tool_subprocess(
+            cfg["argv"][sc["name"]], log_path=Path(sc["log"]), timeout=cfg["timeout"],
+            env_extra=cfg["env"])
+        if rc is None:
+            raise RuntimeError(f"功能场景 {sc['name']} 超时（{cfg['timeout']}s）")
+        if rc not in (0, 1):   # 0=全过 1=有失败；2+ = 执行异常
             raise RuntimeError(
-                f"功能场景 {sc['name']} 执行异常（exit={proc.returncode}），"
-                f"日志: {sc['log']}\n{out[-2000:]}")
+                f"功能场景 {sc['name']} 执行异常（exit={rc}），"
+                f"日志: {sc['log']}\\n{out[-2000:]}")
 
     def collect(self, req: ToolRunRequest) -> ToolRunResult:
         """解析各场景 junit-xml → 场景级 pass_rate 行。"""
