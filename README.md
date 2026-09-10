@@ -293,6 +293,33 @@ pip install 'aite[locust]'
 aite run -c examples/locust.yaml
 ```
 
+## 可靠性 chaos 框架（模块 I 骨架）
+
+故障注入 + 业务评测交织的可靠性测试。**调研结论**：网络层集成
+[Toxiproxy](https://github.com/Shopify/toxiproxy)（用户态 TCP 代理，跨平台
+无 root，REST 控制），进程/资源层集成 [ChaosBlade](https://github.com/chaosblade-io/chaosblade)
+（Linux 执行机，二期注入器）；Chaos Mesh / Litmus 强依赖 K8s 不采用。
+自研部分 = aite 语义层的故障编排：**注入 → 生效确认 → 业务执行 → 兜底恢复**
+（恢复失败显式告警防故障泄漏），事件时间线写入 run details。
+
+```python
+from aite.chaos import run_with_chaos
+
+faults = [{
+    "injector": "toxiproxy", "kind": "latency",
+    "target": {"downstream": "localhost:11434", "listen_port": 18434},
+    "params": {"latency_ms": 2000},
+}]
+result, events = await run_with_chaos(faults, business_coro)
+# 被测 suite 的 target.base_url 指向代理端口 18434；events 进 details.chaos_events
+```
+
+- 内置注入器：`toxiproxy`（latency/timeout/bandwidth）、`process`
+  （kill/suspend，psutil 懒加载，高危按 pid 精确定位）
+- REST：`POST /runs` 请求体加 `chaos: [fault...]` 段即包裹本次执行
+  （本地执行）；agent 派发任务 suite_raw 带 chaos 段时在执行机侧注入
+- 与压测组合 = 错误率/TTFT 曲线叠加故障窗口（MTTR 观测）
+
 ## 执行机纳管（模块 G 一期）
 
 压测多机打流：**拉取式 agent**（执行机只做出站 HTTP，零入站端口/零凭据，

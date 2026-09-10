@@ -92,18 +92,37 @@ class AgentClient:
                                     "error": f"agent 不支持引擎 {engine!r}"}})
             return
         work_dir = self.work_root / task["run_name"] / self._stamp()
+        raw = dict(task["suite_raw"])
+        chaos_raw = raw.pop("chaos", None)   # 故障注入在 agent 侧（贴近被测系统）
         try:
-            result, _snapshot, _req = asyncio.run(
-                execute_tool(task["suite_raw"], work_dir=work_dir))
-            from aite.service.agent_service import serialize_result
-
-            payload = serialize_result(result, work_dir)
+            payload = asyncio.run(self._execute_and_serialize(raw, work_dir,
+                                                              chaos_raw))
         except Exception as exc:  # noqa: BLE001 - 执行失败回传 error
             logger.exception("任务 %s 执行失败", task_id)
             payload = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         resp = self._post(f"/agent-tasks/{task_id}/result", {"payload": payload})
         logger.info("任务 %s 回传完成: run_id=%s status=%s",
                     task_id, resp.get("run_id"), resp.get("status"))
+
+    @staticmethod
+    async def _execute_and_serialize(raw: dict, work_dir: Path,
+                                     chaos_raw: list[dict] | None) -> dict:
+        if chaos_raw:
+            from aite.chaos import run_with_chaos
+
+            async def _business():
+                return await execute_tool(raw, work_dir=work_dir)
+
+            (result, _snap, _req), events = await run_with_chaos(chaos_raw,
+                                                                 _business)
+        else:
+            result, _snap, _req = await execute_tool(raw, work_dir=work_dir)
+        from aite.service.agent_service import serialize_result
+
+        payload = serialize_result(result, work_dir)
+        if chaos_raw:
+            payload["chaos_events"] = events
+        return payload
 
     # ------------------------------------------------------------------ http
 

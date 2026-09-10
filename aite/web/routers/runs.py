@@ -24,6 +24,7 @@ class LaunchRequest(BaseModel):
     config: dict[str, Any] | None = None
     suite_name: str | None = None
     limit: int | None = None
+    chaos: list[dict[str, Any]] | None = None   # 故障注入声明（模块 I，包裹本次执行）
 
 
 @router.get("/health")
@@ -60,13 +61,16 @@ async def launch_run(body: LaunchRequest, state: Any = Depends(get_state)):
         raise HTTPException(422, f"invalid suite config: {exc}") from exc
 
     bg_id = await state.repo.create_bg_task(
-        "run_suite", {"run_name": sreq.run_name, "limit": body.limit})
-    task = asyncio.create_task(_execute_run(state, bg_id, sreq, body.limit))
+        "run_suite", {"run_name": sreq.run_name, "limit": body.limit,
+                      "chaos": bool(body.chaos)})
+    task = asyncio.create_task(
+        _execute_run(state, bg_id, sreq, body.limit, chaos_raw=body.chaos))
     state.tasks[bg_id] = task
     return {"task_id": bg_id, "run_name": sreq.run_name, "status": "started"}
 
 
-async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None) -> None:
+async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None,
+                       chaos_raw: list[dict] | None = None) -> None:
     """后台执行（四域统一走 service 的 execute_suite）。"""
 
     def on_event(event: dict) -> None:
@@ -75,7 +79,7 @@ async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None) -> 
     await state.repo.update_bg_task(bg_id, status="running")
     try:
         report = await execute_suite(sreq.raw, state.repo, limit=limit,
-                                     event_cb=on_event)
+                                     event_cb=on_event, chaos_raw=chaos_raw)
         await state.repo.update_bg_task(
             bg_id, status="done", run_id=report.run_id,
             result={"status": report.status, "summaries": len(report.summaries),

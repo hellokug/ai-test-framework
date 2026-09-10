@@ -117,7 +117,10 @@ aite tool benchmarks pytest            # 场景清单
   （用户策略：前端最后统一对接）
 - 模块 G 执行机纳管：**一期完成**（拉取式 agent + HTTP 回传 + 压测域白名单；
   agent 通道 REST 见 README；剩 G2 二期：标签调度/locust 原生分布式/重试）
-- 模块 H 归档 / 模块 I 可靠性 chaos：立项未实施
+- 模块 H 归档：立项未实施
+- 模块 I 可靠性 chaos：**骨架完成**（aite/chaos/——toxiproxy+process 注入器、
+  run_with_chaos 编排、REST chaos 段；剩 I6 二期：ChaosBlade 注入器/编排
+  DSL/分布式注入/MTTR 报告）
 - 运行环境：conda env `evalscope`（Python 3.10，aite+evalscope 同装）；
   本地 Ollama（qwen2.5:3b / deepseek-r1:8b）；locust 未装（单测离线，
   真实压测需 `pip install 'aite[locust]'`）

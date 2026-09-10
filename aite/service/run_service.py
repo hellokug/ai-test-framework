@@ -64,14 +64,32 @@ async def execute_suite(
     concurrency: int | None = None,
     max_cost_usd: float | None = None,
     report_formats: str | None = None,
+    chaos_raw: list[dict] | None = None,
 ) -> RunReport:
-    """统一执行入口：engine 路由 → 工具适配层 / 自研引擎。"""
+    """统一执行入口：engine 路由 → 工具适配层 / 自研引擎。
+
+    chaos_raw 非空时（工具域）故障注入包裹业务执行，注入事件写入
+    run details.chaos_events（I5 业务观测时间线）。
+    """
     sreq = resolve_suite(raw)
     if sreq.is_tool:
         apply_tool_limit(raw, limit)
         from aite.tools import run_tool_suite
 
-        return await run_tool_suite(raw, repo)
+        if not chaos_raw:
+            return await run_tool_suite(raw, repo)
+
+        from aite.chaos import run_with_chaos
+        from aite.tools import execute_tool, persist_tool_result
+
+        async def _business():
+            result, _snap, req = await execute_tool(raw)
+            return result, req
+
+        (result, req), events = await run_with_chaos(chaos_raw, _business)
+        return await persist_tool_result(
+            raw, repo, result, req.work_dir,
+            extra_details={"chaos_events": events})
 
     suite = sreq.config
     if concurrency:

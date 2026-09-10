@@ -163,7 +163,8 @@ def build_tool_report(raw: dict, repo: Any, result: ToolRunResult,
 
 
 async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
-                              work_dir: Path, run_id: str | None = None) -> RunReport:
+                              work_dir: Path, run_id: str | None = None,
+                              extra_details: dict | None = None) -> RunReport:
     """纯入库（异步）：指标汇总落库 → 终态与 details 回写。
 
     master 回传场景与本地执行共用（agent 场景 work_dir 为 master 侧重建目录）；
@@ -204,6 +205,8 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
         report.details["failures"] = result.failures[:50]
     if result.perf:
         report.details["perf"] = result.perf
+    if extra_details:
+        report.details.update(extra_details)
     report.finished_at = utcnow()
 
     for s in summaries:

@@ -270,20 +270,26 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
       （benchmark_summary/percentile/明细）压缩归档与索引、按 run/时间/模型
       检索恢复；存储清理策略（backlog 既有项并入）
 
-### 模块 I：可靠性 chaos 框架（2026-09-09 立项，需求已对齐未实施）
+### 模块 I：可靠性 chaos 框架（骨架 2026-09-11 完成）
 
-先调研开源 chaos 工具可集成性（chaosblade / chaos-mesh / Litmus / Pumba），
-评估维度：故障类型覆盖（进程/网络/资源/IO）、K8s 依赖、Python API 或 CLI、
-许可证。不可行则自研。自研需覆盖五能力：
+**调研结论（2026-09-11）**：网络层集成 Toxiproxy（用户态跨平台无 root，
+Shopify 生产验证）；进程/资源层集成 ChaosBlade（CNCF Sandbox，v1.8.0 活跃，
+单机 CLI 无需 K8s，Linux 执行机）；Chaos Mesh / Litmus 强依赖 K8s 排除；
+Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源工具均不提供）。
 
-- [ ] I1 故障对象感知：探测被测系统拓扑（进程/容器/节点/网络路径），故障注入
-      点发现与展示
-- [ ] I2 故障注入：故障类型库（kill/挂起/CPU 打满/内存压力/网络延迟丢包断连/
-      磁盘满）+ 编排（单发/组合/时序）
-- [ ] I3 检测：被测系统健康探测 + 故障生效确认（注入失败与故障无效应区分）
-- [ ] I4 恢复：故障自动回收/兜底清理（防故障泄漏），run 结束必恢复校验
-- [ ] I5 业务观测：故障期间业务指标采集（错误率/延迟毛刺/恢复时长 MTTR），
-      与模块 F 大屏复用时序链路；与 reliability.yaml 既有可靠性评测打通
+- [x] I1 骨架：FaultSpec 故障声明（injector/kind/target/params）+ 注入器
+      注册表（register_injector，开闭点：新故障类型 = 新注入器文件）
+- [x] I2 注入（一期两类）：toxiproxy（latency/timeout/bandwidth）、
+      process（kill/suspend，psutil 懒加载）；ChaosBlade 包装二期
+- [x] I3 检测：Injector.verify 生效确认契约（注入失败与无效应区分，
+      verify 失败回滚已注入并抛 ChaosVerifyError）
+- [x] I4 恢复：controller finally 兜底逆序恢复（幂等），恢复失败显式
+      recover_failed 事件告警（防泄漏需人工跟进）
+- [x] I5 观测：FaultEvent 时间线（注入/生效/恢复时间戳）进 run
+      details.chaos_events，与 timeseries 曲线叠加（大屏 F1 画故障窗口）
+- [ ] I6 二期：ChaosBlade 注入器（进程 kill/CPU/内存/磁盘，Linux 执行机）、
+      故障编排 DSL（时序/组合/按阶段注入）、agent 分布式注入（贴近被测系统）、
+      拓扑感知（注入点发现与展示）、MTTR 自动计算报告
 
 ## 基线（已完成）
 
@@ -368,3 +374,4 @@ TTFT / TPOT / 吞吐量 / 响应时间 / 响应码等关键指标实时曲线；
  转义会被吃掉（三次断行 SyntaxError），多行 Python 代码修改改用 Edit 工具。337 全绿 + ruff 干净 + 函数长度审计达标。
 - 2026-09-10 P2 架构整改完成：①契约补齐——collect 以默认实现进 ToolAdapter ABC（编排方只调 run，collect 是 run 收尾步骤故不做 @abstractmethod），delete_suite 进 Repository 接口，unregister_tool 替代测试 pop 私有 dict；②路由瘦身——web_service.py 落地，四个路由的解析/筛选/聚合/文件 IO 下沉，_to_cases 转公开；③build_gateway 反感知——Metric 契约加 needs_llm 类属性，LLMMetricMixin 用 __init_subclass__ 混入即标记（踩坑：显式 ClassVar 在 MRO 中被前置的 Metric 基类 False 遮蔽，6 个 LLM 指标漏标，__init_subclass__ 直接写子类解决），删除 core 硬编码名单；④Case.check 按断言域拆三方法——评审后判断该链是可叠加断言（非类型分派），dict 注册属过度设计，按域分组保序即可。337 全绿 + ruff 干净 + 函数审计达标。架构整改全部完成。
 - 2026-09-11 模块 G 一期完成（执行机纳管）：拉取式 agent（aite agent serve，心跳后台线程 + 执行主循环防长任务误判 stale）+ master 心跳即派发 + HTTP 回传统一入库（persist_tool_result 复用，master 侧重建 reports/agent/<run> 目录使大屏时序端点照常）；aite run --agent 派发入口；deploy/agent.Dockerfile 分层镜像；+10 测试（347 全绿）。二期（G2）：标签调度/locust 原生分布式/重试策略。
+- 2026-09-11 模块 I 骨架完成：chaos 工具调研（Toxiproxy+ChaosBlade 可集成，Mesh/Litmus K8s 排除）+ aite/chaos 骨架——FaultSpec/FaultHandle/FaultEvent 契约、注入器注册表（toxiproxy 网络 latency/timeout/bandwidth + process kill/suspend）、run_with_chaos 编排（注入→生效确认→业务→finally 兜底逆序恢复，verify 失败回滚、恢复失败显式告警防泄漏）；REST 集成 POST /runs chaos 段包裹本地执行，agent 派发 suite_raw.chaos 在执行机侧注入；+13 测试（编排生命周期/回滚/兜底/mock toxiproxy）。二期 I6：ChaosBlade 注入器/编排 DSL/分布式注入/MTTR 报告。
