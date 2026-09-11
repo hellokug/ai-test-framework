@@ -15,6 +15,8 @@ perf:
   # prompt: "..."                  # 简单场景用固定提示词（与 dataset 二选一）
 
   # ---- 模式四选一：baseline / ramp / probe / soak（省略 = parallel/number 直配）----
+  # rate: [10, 20, 40]             # QPS 模式（开环，与 parallel/mode 互斥）：按到达率
+  #                                #   发射、并发无界，过载真实显现；标签 perf:q<rate>
   mode: ramp                       # 爬坡：起止步长展开为并发梯度，to 必含
   ramp: {from: 1, to: 4, step: 3}  # → 档位 [1, 4]
   # baseline: {parallel: 4}        # 基准：固定并发

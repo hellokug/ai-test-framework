@@ -97,6 +97,48 @@ class TestBuildConfig:
         assert "tpot_ms" not in tasks[0]["metrics"]          # locust 无来源
 
 
+class TestQPSMode:
+    """QPS 模式（perf.qps，闭环封顶）：wait_time 换 constant_pacing。"""
+
+    def test_qps_mapping(self, tmp_path):
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [8], "duration": 60, "qps": 50}))
+        assert cfg["qps"] == 50.0
+        LocustAdapter()._write_load(cfg)
+        text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        assert "constant_pacing(1.0 / float(QPS)" in text
+        assert "constant_total_pacing=True" in text
+
+    def test_no_qps_defaults_to_concurrency_mode(self, tmp_path):
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [4], "duration": 60}))
+        assert cfg["qps"] is None
+        LocustAdapter()._write_load(cfg)
+        text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        assert "wait_time = constant(0)" in text
+
+    def test_qps_validation(self):
+        with pytest.raises(ValueError, match="qps"):
+            LocustAdapter().build_config(make_request(
+                perf={"prompt": "p", "parallel": [4], "duration": 60, "qps": 0}))
+        with pytest.raises(ValueError, match="qps"):
+            LocustAdapter().build_config(make_request(
+                perf={"prompt": "p", "parallel": [4], "duration": 60,
+                      "qps": "fast"}))
+
+    def test_qps_env_injected(self, tmp_path):
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [8], "duration": 60, "qps": 50}))
+        LocustAdapter()._write_load(cfg)
+        assert cfg["qps"] == 50.0
+        # env 注入在 _exec 侧构造——此处验证 locustfile 读取该变量即可
+        text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        assert 'os.environ.get("AITE_LOCUST_QPS")' in text
+
+
 class TestWriteLoad:
     def test_prompt_mode(self, tmp_path):
         cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path,

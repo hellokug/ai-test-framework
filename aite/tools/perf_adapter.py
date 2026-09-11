@@ -184,6 +184,29 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
     return series
 
 
+def _resolve_rate(cfg: dict) -> list[float] | None:
+    """QPS 模式（perf.rate，开环）→ rate 梯度；与 parallel/mode 互斥。
+
+    开环语义（evalscope --open-loop --rate）：按 Poisson 到达率发射请求、并发
+    无界——服务端拖慢时排队/过载真实显现（与闭环限速的 locust qps 相对）。
+    rate 列表即梯度（替代 parallel sweep）。
+    """
+    rate = cfg.get("rate")
+    if rate is None:
+        return None
+    if cfg.get("parallel"):
+        raise ValueError("perf.rate（QPS 模式）与 perf.parallel 互斥——"
+                         "并发梯度请用 perf.parallel")
+    if cfg.get("mode"):
+        raise ValueError("perf.rate（QPS 模式）与 perf.mode 互斥——rate 列表本身"
+                         "即梯度（等价 ramp 的 QPS 版）")
+    values = [rate] if isinstance(rate, (int, float)) and         not isinstance(rate, bool) else list(rate)
+    if not values or not all(isinstance(v, (int, float))
+                             and not isinstance(v, bool) and v > 0 for v in values):
+        raise ValueError("perf.rate 须为 >0 的数字（标量或梯度数组，req/s）")
+    return [float(v) for v in values]
+
+
 def _probe_args(mode: str | None, probe_cfg: dict) -> list[str]:
     """probe 模式 → --sla-* 参数（SLA 校验见 _sla_params_json）。"""
     if mode != "probe":
@@ -203,11 +226,17 @@ def _probe_args(mode: str | None, probe_cfg: dict) -> list[str]:
     return args
 
 
-def _resolve_number(cfg: dict, plan, n_levels: int) -> list[int]:
-    """number 采样：显式配 → 先到为准；时长驱动且未配 → 放大安全上限。"""
+def _resolve_number(cfg: dict, plan, n_levels: int,
+                    open_loop: bool = False) -> list[int]:
+    """number 采样：显式配 → 先到为准；时长/数量驱动且未配 → 放大安全上限。
+
+    开环 QPS 模式也放大（缺省 8 条会让 rate 压测瞬间结束——QPS 模式的终止
+    条件是时长或数量，两者都不设即数量驱动到安全上限）。
+    """
     number = cfg.get("number")
     if number is None:
-        number = DURATION_DRIVEN_NUMBER_CAP if plan.duration_driven else 8
+        number = (DURATION_DRIVEN_NUMBER_CAP
+                  if (plan.duration_driven or open_loop) else 8)
     if isinstance(number, int) and not isinstance(number, bool) and number >= 1:
         number = [number] * n_levels   # 标量自动对齐梯度长度
     if not positive_ints(number) or len(number) != n_levels:
@@ -219,18 +248,23 @@ def _resolve_number(cfg: dict, plan, n_levels: int) -> list[int]:
 def _assemble_args(cfg: dict, *, url: str, model: str, api_key: str,
                    parallel: list[int], number: list[int], plan,
                    dataset: str, prompt: str, synthetic: dict | None,
-                   output_dir: Path, probe_args: list[str]) -> list[str]:
-    """解析结果 → evalscope perf CLI 参数。"""
+                   output_dir: Path, probe_args: list[str],
+                   rates: list[float] | None = None) -> list[str]:
+    """解析结果 → evalscope perf CLI 参数（rates 非空 = 开环 QPS 模式）。"""
     args = [
         "perf",
         "--url", url, "--model", model, "--api", "openai",
         "--api-key", api_key,
-        "--parallel", *[str(p) for p in parallel],
-        "--number", *[str(n) for n in number],
-        "--no-timestamp",
-        "--outputs-dir", str(output_dir),
-        "--stream" if cfg.get("stream", True) else "--no-stream",
     ]
+    if rates is not None:
+        # 开环：--rate sweep 替代 --parallel；number 与 rate 等长（evalscope 校验）
+        args += ["--open-loop", "--rate", *[str(r) for r in rates]]
+    else:
+        args += ["--parallel", *[str(p) for p in parallel]]
+    args += ["--number", *[str(n) for n in number],
+             "--no-timestamp",
+             "--outputs-dir", str(output_dir),
+             "--stream" if cfg.get("stream", True) else "--no-stream"]
     if plan.per_level is not None:
         # 整数秒发整数（CLI 可读性：30 而非 30.0）
         dur = plan.per_level
@@ -272,7 +306,7 @@ def _group_summaries(output_dir: Path) -> dict[int, list[tuple[dict, dict, Path]
     if not summaries:
         raise RuntimeError(f"未找到压测产出（{output_dir}/**/benchmark_summary.json），"
                            "查看 logs/perf.log")
-    grouped: dict[int, list[tuple[dict, dict, Path]]] = {}
+    grouped: dict[str, list[tuple[dict, dict, Path, int]]] = {}
     for summary_path in summaries:
         try:
             data = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -288,7 +322,12 @@ def _group_summaries(output_dir: Path) -> dict[int, list[tuple[dict, dict, Path]
                 rows = []
             p95 = next((r for r in rows if r.get("Percentiles") == "95%"), {})
         concurrency = int(data.get("Concurrency") or 0)
-        grouped.setdefault(concurrency, []).append((data, p95, summary_path))
+        # 开环 QPS 档（Concurrency=-1/INF）按 rate 值区分档位
+        if concurrency < 0:
+            label = f"perf:q{float(data.get('Request Rate (req/s)') or 0):g}"
+        else:
+            label = f"perf:c{concurrency}"
+        grouped.setdefault(label, []).append((data, p95, summary_path, concurrency))
     return grouped
 
 
@@ -307,7 +346,7 @@ def _level_metrics(items: list[tuple[dict, dict, Path]]) -> tuple[dict, int]:
     """同并发多 run 均值聚合 → (指标名→值, 总请求数)。"""
     def mean(display_key: str, source: str = "summary") -> float | None:
         vals = []
-        for data, p95, _path in items:
+        for data, p95, _path, _users in items:
             v = data.get(display_key) if source == "summary" else p95.get(display_key)
             if v is not None:
                 vals.append(float(v))
@@ -321,8 +360,10 @@ def _level_metrics(items: list[tuple[dict, dict, Path]]) -> tuple[dict, int]:
     for name, (key, scale) in _PERCENTILE_METRICS.items():
         v = mean(key, source="p95")
         metrics[name] = v * scale if v is not None else None
-    total = sum(int(d.get("Total Requests") or 0) for d, _p, _path in items)
-    failed = sum(int(d.get("Failed Requests") or 0) for d, _p, _path in items)
+    total = sum(int(d.get("Total Requests") or 0)
+                for d, _p, _path, _users in items)
+    failed = sum(int(d.get("Failed Requests") or 0)
+                 for d, _p, _path, _users in items)
     if total:
         metrics["error_rate"] = failed / total
     return metrics, total
@@ -343,14 +384,18 @@ class PerfAdapter(ToolAdapter):
             raise ValueError("evalscope-perf 需要 target.model")
         url, api_key = api_endpoint(req.target)
         dataset, prompt, synthetic = resolve_load(cfg)
+        rates = _resolve_rate(cfg)   # QPS 模式（开环）：与 parallel/mode 互斥
+        open_loop = rates is not None
         mode, parallel, probe_cfg = resolve_mode_parallel(cfg, allow_probe=True)
+        if open_loop:
+            parallel = rates   # rate 列表即梯度（档数载体：number 对齐/时长均分）
         plan = resolve_durations(cfg, mode=mode, n_levels=len(parallel))
-        number = _resolve_number(cfg, plan, len(parallel))
+        number = _resolve_number(cfg, plan, len(parallel), open_loop=open_loop)
         args = _assemble_args(
             cfg, url=url, model=model, api_key=api_key, parallel=parallel,
             number=number, plan=plan, dataset=dataset, prompt=prompt,
             synthetic=synthetic, output_dir=req.work_dir / "perf_raw",
-            probe_args=_probe_args(mode, probe_cfg))
+            probe_args=_probe_args(mode, probe_cfg), rates=rates)
         # 看门狗即总时长预算：覆盖 extra.timeout（用户显式给的整场预算优先于兜底超时）
         timeout = (int(plan.watchdog) if plan.watchdog is not None
                    else int(req.extra.get("timeout", DEFAULT_TIMEOUT)))
@@ -362,6 +407,7 @@ class PerfAdapter(ToolAdapter):
             "output_dir": str(req.work_dir / "perf_raw"),
             "dataset": dataset,   # run 阶段导出 prompt 文件用
             "synthetic": synthetic,   # run 阶段生成 prompt 文件用
+            "open_loop": open_loop,   # collect 档位标签用（perf:q<rate>）
         }
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
@@ -418,23 +464,27 @@ class PerfAdapter(ToolAdapter):
         timeseries: dict = {"engine": self.name, "bucket_seconds": bucket,
                             "series": [], "errors": []}
 
-        for concurrency, items in sorted(grouped.items()):
-            label = f"perf:c{concurrency}"
+        def _label_key(item):
+            label = item[0]
+            return (0, int(label.rsplit("c", 1)[1])) if ":c" in label                 else (1, float(label.rsplit("q", 1)[1]))
+
+        for label, items in sorted(grouped.items(), key=_label_key):
             metrics, total = _level_metrics(items)
             self._append_metric_rows(req, out, label, metrics, total)
             tps = metrics.get("output_tps")
             if tps is not None:
                 out.raw_score[label] = float(tps)
-            for run_idx, (_d, _p, summary_path) in enumerate(items):
+            for run_idx, (_d, _p, summary_path, users) in enumerate(items):
                 points = _aggregate_level_db(
                     summary_path.parent / "benchmark_data.db", bucket)
                 if points:
                     timeseries["series"].append({
-                        "users": concurrency, "run": run_idx, "label": label,
+                        "users": users, "run": run_idx, "label": label,
                         "points": points})
 
         total_failed = sum(int(d.get("Failed Requests") or 0)
-                           for items in grouped.values() for d, _p, _path in items)
+                           for items in grouped.values()
+                           for d, _p, _path, _users in items)
         if total_failed:
             # evalscope 错误文本在 pickle 响应里，只给计数（文本级错误分布见 locust）
             timeseries["errors"] = [{"key": "failed", "count": total_failed}]

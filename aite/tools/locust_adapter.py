@@ -13,6 +13,9 @@ evalscope-perf 的分工：后者 LLM 原生指标（TPOT/ITL/吞吐分档）更
 - 时长：``duration``（整场总时长，多档均分）/ ``level_duration``（每档秒数）
   二选一——locust 每档是独立 ``-t`` 进程，到点自退出，无看门狗
 - ``spawn_rate``：每档用户拉起速率（用户/秒），缺省 = 档位并发（瞬时拉满）
+- ``qps``：目标总 QPS（闭环封顶——服务端拖慢则实际 QPS 下降；user 数退化为
+  最大并发上限）。与开环语义相对：精确开环 QPS 用 evalscope-perf 的
+  ``perf.rate``（并发无界，过载真实显现）
 - ``number`` 对 locust 无语义（locust 按时长/用户数驱动，无请求数上限），
   配了忽略——同 ``limit_per_subset`` 对 pytest 无语义的先例
 
@@ -123,7 +126,7 @@ import json
 import os
 import time
 
-from locust import HttpUser, constant, events, task
+from locust import HttpUser, constant, constant_pacing, events, task
 
 URL = os.environ["AITE_LOCUST_URL"]
 MODEL = os.environ["AITE_LOCUST_MODEL"]
@@ -131,15 +134,26 @@ API_KEY = os.environ.get("AITE_LOCUST_API_KEY", "none")
 STREAM = os.environ.get("AITE_LOCUST_STREAM", "1") == "1"
 MAX_TOKENS = os.environ.get("AITE_LOCUST_MAX_TOKENS")
 PROMPTS_FILE = os.environ["AITE_LOCUST_PROMPTS_FILE"]
+# QPS 限速（可选）：闭环封顶语义——服务端拖慢时实际 QPS 随之下降；
+# user 数退化为最大并发上限。未设置 = 并发模式（无间隔连发）。
+QPS = os.environ.get("AITE_LOCUST_QPS")
 
 with open(PROMPTS_FILE, encoding="utf-8") as fh:
     PROMPTS = [line for line in (l.strip() for l in fh) if line]
 
 
-class ChatUser(HttpUser):
-    """闭环用户：无间隔连发（= evalscope --parallel 语义）。"""
+if QPS:
+    class ChatUser(HttpUser):
+        """QPS 限速用户：总速率封顶（constant_total_pacing，闭环语义）。"""
 
-    wait_time = constant(0)
+        wait_time = constant_pacing(1.0 / float(QPS), constant_total_pacing=True)
+        host = os.environ.get("AITE_LOCUST_HOST")
+else:
+    class ChatUser(HttpUser):
+        """并发用户：无间隔连发（= evalscope --parallel 语义）。"""
+
+        wait_time = constant(0)
+        host = os.environ.get("AITE_LOCUST_HOST")
     host = os.environ.get("AITE_LOCUST_HOST")
 
     def on_start(self):
@@ -203,6 +217,11 @@ class LocustAdapter(ToolAdapter):
             logger.info("locust 忽略 perf.number（locust 按时长/用户数驱动）")
         plan = resolve_durations(cfg, mode=mode, n_levels=len(parallel), require=True)
 
+        qps = cfg.get("qps")
+        if qps is not None and (not isinstance(qps, (int, float))
+                                or isinstance(qps, bool) or qps <= 0):
+            raise ValueError("perf.qps 须为 >0 的数字（目标总 QPS，闭环封顶）")
+
         spawn_rate = cfg.get("spawn_rate")
         output_dir = req.work_dir / "locust_raw"
         runs = []
@@ -216,6 +235,7 @@ class LocustAdapter(ToolAdapter):
             "url": url, "model": model, "api_key": api_key,
             "dataset": dataset, "prompt": prompt, "synthetic": synthetic,
             "stream": bool(cfg.get("stream", True)),
+            "qps": float(qps) if qps is not None else None,
             "max_tokens": cfg.get("max_tokens"),
             "locustfile": str(req.work_dir / "locustfile.py"),
             "prompts_file": str(req.work_dir / "load" / "prompts.txt"),
@@ -270,6 +290,8 @@ class LocustAdapter(ToolAdapter):
         }
         if cfg["max_tokens"]:
             env_extra["AITE_LOCUST_MAX_TOKENS"] = str(int(cfg["max_tokens"]))
+        if cfg.get("qps"):
+            env_extra["AITE_LOCUST_QPS"] = str(cfg["qps"])
         host = cfg["url"].rsplit("/chat/completions", 1)[0]
         for i, run in enumerate(cfg["runs"]):
             args = [

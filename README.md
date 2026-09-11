@@ -233,6 +233,11 @@ instruction/prompt/query/user 取首个命中），适配器导出为逐行 prom
 | `probe` 摸高 | `probe: {max_parallel: 32, sla: {avg_ttft: 3000}}` | SLA 约束下二分搜索最大可持续并发（sla 指标：avg/p99 × latency·ttft·tpot、rps、tps；单位 latency 秒、ttft/tpot 毫秒） |
 | `soak` 长稳 | `soak: {parallel: 8}` + `duration: 3600` | 时间驱动持续压测 |
 
+**QPS 模式**（`perf.rate`，evalscope-perf 专属）：开环固定到达率——按 rate
+梯度（标量或数组，req/s）发射请求、并发无界，服务端拖慢时排队/过载真实显现。
+`rate` 与 `parallel`/`mode` 互斥；开环下 `number` 语义为每档请求总数上限
+（未配时自动放大，配 duration 则时长驱动）。档位标签 `perf:q<rate>`。
+
 **时长**（`duration` 与 `level_duration` 二选一，全模式可用）：
 
 | 键 | 语义 |
@@ -281,8 +286,10 @@ perf_report.html、执行日志）。
   baseline/ramp/soak + 直配（**probe 不支持**，配置即报错——SLA 二分搜索是
   evalscope perf 专有）、时长 duration/level_duration 同语义（locust 每档
   独立 `-t` 进程到点自退出，无看门狗）
-- **locust 特有**：`spawn_rate`（每秒拉起用户数，缺省 = 档位并发）；`number`
-  无语义（locust 按时长/用户数驱动），配了忽略；**必配一个时长键**
+- **locust 特有**：`spawn_rate`（每秒拉起用户数，缺省 = 档位并发）；`qps`
+  （闭环封顶目标 QPS——`constant_pacing(constant_total_pacing=True)`，服务端
+  拖慢则实际 QPS 下降；user 数退化为最大并发上限。精确开环 QPS 请用
+  evalscope-perf 的 `perf.rate`）；`number` 无语义，配了忽略；**必配一个时长键**
 - 指标对齐 evalscope-perf 命名（`dataset="locust:u<用户数>"`）：ttft_ms（流式
   首包计时，自定义 TTFT 事件）/ latency_avg_ms / latency_p95_ms / qps /
   error_rate + **错误明细**（`_failures.csv` → 错误文本×次数，CLI 汇总打印）；

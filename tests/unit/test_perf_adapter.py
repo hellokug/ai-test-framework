@@ -279,6 +279,64 @@ class TestDuration:
         assert {r.dataset for r in result.rows} == {"perf:c4"}
 
 
+class TestRateQPS:
+    """QPS 模式（perf.rate，开环）：与并发模式互斥，rate 列表即梯度。"""
+
+    def test_rate_scalar_open_loop(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "rate": 10, "duration": 60}))
+        args = cfg["args"]
+        assert "--open-loop" in args
+        i = args.index("--rate")
+        assert args[i + 1] == "10.0"
+        j = args.index("--number")
+        assert args[j + 1] == str(DURATION_DRIVEN_NUMBER_CAP)  # duration 驱动放大
+        assert "--parallel" not in args
+        assert cfg["open_loop"] is True
+
+    def test_rate_gradient_number_required(self):
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "rate": [5, 10, 20], "number": [20, 20, 20]}))
+        args = cfg["args"]
+        i = args.index("--rate")
+        assert args[i + 1:i + 4] == ["5.0", "10.0", "20.0"]
+        j = args.index("--number")
+        assert args[j + 1:j + 4] == ["20", "20", "20"]   # 显式 number 等长
+        # 无 duration 且无 number → 数量驱动（自动放大安全上限，先到为准）
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "rate": [5, 10]}))
+        j = cfg["args"].index("--number")
+        assert cfg["args"][j + 1:j + 3] == [str(DURATION_DRIVEN_NUMBER_CAP)] * 2
+
+    def test_rate_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="parallel"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "rate": 10, "parallel": [4], "number": 8}))
+        with pytest.raises(ValueError, match="mode"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "rate": 10, "mode": "baseline",
+                "baseline": {"parallel": 4}, "number": 8}))
+        with pytest.raises(ValueError, match=">0"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "rate": 0, "duration": 60}))
+
+    def test_collect_open_loop_labels(self, tmp_path):
+        """开环档位（Concurrency=-1）按 Request Rate 标签且不互相合并。"""
+        summary_q10 = dict(SUMMARY, Concurrency=-1, **{"Request Rate (req/s)": 10})
+        summary_q20 = dict(SUMMARY, Concurrency=-1, **{"Request Rate (req/s)": 20})
+        d1 = tmp_path / "perf_raw" / "m" / "parallel_-1_number_8"
+        d1.mkdir(parents=True)
+        (d1 / "benchmark_summary.json").write_text(json.dumps(summary_q10),
+                                                   encoding="utf-8")
+        d2 = tmp_path / "perf_raw" / "m2"
+        d2.mkdir(parents=True)
+        (d2 / "benchmark_summary.json").write_text(json.dumps(summary_q20),
+                                                   encoding="utf-8")
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path))
+        labels = {r.dataset for r in result.rows}
+        assert labels == {"perf:q10", "perf:q20"}
+
+
 class TestDatasetLoad:
     """负载层：数据集导出 + max_tokens 区间。"""
 
