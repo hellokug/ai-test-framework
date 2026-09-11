@@ -56,8 +56,9 @@ from aite.utils.logging import get_logger
 logger = get_logger(__name__)
 
 _LEVEL_GRACE = 120          # 每档子进程超时 = 档时长 + 宽限（locust -t 自退出）
-# 越低越好（阈值方向 <=）；qps 越高越好（与 evalscope-perf 口径一致）
+# 越低越好（阈值方向 <=）；qps/output_tps 越高越好（与 evalscope-perf 口径一致）
 _LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
+                    "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms",
                     "error_rate"}
 
 def _num(row: dict, key: str) -> float | None:
@@ -142,18 +143,16 @@ with open(PROMPTS_FILE, encoding="utf-8") as fh:
     PROMPTS = [line for line in (l.strip() for l in fh) if line]
 
 
-if QPS:
-    class ChatUser(HttpUser):
-        """QPS 限速用户：总速率封顶（constant_total_pacing，闭环语义）。"""
+def _wait_time():
+    if QPS:
+        return constant_pacing(1.0 / float(QPS), constant_total_pacing=True)
+    return constant(0)
 
-        wait_time = constant_pacing(1.0 / float(QPS), constant_total_pacing=True)
-        host = os.environ.get("AITE_LOCUST_HOST")
-else:
-    class ChatUser(HttpUser):
-        """并发用户：无间隔连发（= evalscope --parallel 语义）。"""
 
-        wait_time = constant(0)
-        host = os.environ.get("AITE_LOCUST_HOST")
+class ChatUser(HttpUser):
+    """闭环压测用户：并发模式（连发）或 QPS 限速模式（封顶）。"""
+
+    wait_time = _wait_time()
     host = os.environ.get("AITE_LOCUST_HOST")
 
     def on_start(self):
@@ -167,34 +166,82 @@ else:
         self._i = (self._i + 1) % len(PROMPTS)
         return PROMPTS[self._i]
 
+    def _fire(self, rtype: str, ms: float):
+        # TTFT/ITL/TPOT/TPS 独立事件：不混入延迟统计，collect 按行名取数
+        events.request.fire(request_type=rtype, name="POST /chat/completions",
+                            response_time=ms, response_length=0,
+                            exception=None, context={})
+
     @task
     def chat(self):
         payload = {"model": MODEL, "stream": STREAM,
                    "messages": [{"role": "user", "content": self._next_prompt()}]}
         if MAX_TOKENS:
             payload["max_tokens"] = int(MAX_TOKENS)
-        name = "POST /chat/completions"
         t0 = time.perf_counter()
-        with self.client.post(URL, json=payload, name=name,
+        with self.client.post(URL, json=payload, name="POST /chat/completions",
                               catch_response=True, timeout=300) as resp:
             if resp.status_code != 200:
                 resp.failure(f"HTTP {resp.status_code}: {resp.text[:200]}")
                 return
             if STREAM:
-                ttft = None
-                for line in resp.iter_lines():
-                    if not line.startswith(b"data: "):
-                        continue
-                    if ttft is None:
-                        ttft = (time.perf_counter() - t0) * 1000.0
-                    if line[6:].strip() == b"[DONE]":
-                        break
-                if ttft is not None:   # TTFT 独立事件：不混入延迟统计
-                    events.request.fire(request_type="TTFT", name=name,
-                                        response_time=ttft, response_length=0,
-                                        exception=None, context={})
+                self._stream_metrics(resp, t0)
+            else:
+                self._json_metrics(resp, t0)
             resp.success()
+
+    def _stream_metrics(self, resp, t0: float):
+        """流式逐块采集：TTFT / ITL（块间隔）/ TPOT / TPS（请求级 tok/s）。
+
+        token 数取 usage.completion_tokens（端点回传 usage 时精确），否则以
+        chunk 数近似（主流推理服务 1 chunk ≈ 1 token）。
+        """
+        ttft_ms = None
+        prev_ms = None
+        chunk_count = 0
+        completion_tokens = None
+        for raw in resp.iter_lines():
+            if not raw.startswith(b"data: "):
+                continue
+            now_ms = (time.perf_counter() - t0) * 1000.0
+            if ttft_ms is None:
+                ttft_ms = now_ms
+            elif prev_ms is not None:
+                self._fire("ITL", now_ms - prev_ms)
+            prev_ms = now_ms
+            chunk_count += 1
+            data = raw[6:].strip()
+            if data == b"[DONE]":
+                break
+            if b'"usage"' in data:
+                try:
+                    usage = json.loads(data).get("usage") or {}
+                    if usage.get("completion_tokens"):
+                        completion_tokens = int(usage["completion_tokens"])
+                except ValueError:
+                    pass
+        if ttft_ms is None or prev_ms is None:
+            return
+        self._fire("TTFT", ttft_ms)
+        tokens = completion_tokens if completion_tokens else max(chunk_count - 1, 1)
+        gen_ms = prev_ms - ttft_ms            # 生成段时长（首 token 之后）
+        if gen_ms > 0 and tokens > 0:
+            self._fire("TPOT", gen_ms / tokens)                    # ms / token
+            self._fire("TOKPS", tokens / (gen_ms / 1000.0))        # tok/s（请求级）
+
+    def _json_metrics(self, resp, t0: float):
+        """非流式：整段均摊口径的 TPOT / TPS（无 TTFT/ITL，与 evalscope 一致）。"""
+        total_ms = (time.perf_counter() - t0) * 1000.0
+        try:
+            data = resp.json()
+        except ValueError:
+            return
+        tokens = int((data.get("usage") or {}).get("completion_tokens") or 0)
+        if tokens > 0 and total_ms > 0:
+            self._fire("TPOT", total_ms / tokens)
+            self._fire("TOKPS", tokens / (total_ms / 1000.0))
 '''
+
 
 
 @register_tool("locust")
@@ -352,7 +399,11 @@ class LocustAdapter(ToolAdapter):
         if agg is None:
             logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s", stats_path)
             return
-        ttft = next((r for r in rows if r.get("Type") == "TTFT"), None)
+        by_type: dict[str, dict] = {}
+        for r in rows:
+            rtype = r.get("Type")
+            if rtype in ("TTFT", "ITL", "TPOT", "TOKPS") and rtype not in by_type:
+                by_type[rtype] = r
         total = _num(agg, "Request Count") or 0
         failed = _num(agg, "Failure Count") or 0
         metrics = {
@@ -361,9 +412,21 @@ class LocustAdapter(ToolAdapter):
             "qps": _num(agg, "Requests/s"),
             "error_rate": (failed / total) if total else None,
         }
+        ttft = by_type.get("TTFT")
         if ttft is not None:   # 非流式无 TTFT 行 → 跳过（口径同 perf：None 不入库）
             metrics["ttft_ms"] = _num(ttft, "Average Response Time")
             metrics["ttft_p95_ms"] = _num(ttft, "95%")
+        itl = by_type.get("ITL")
+        if itl is not None:
+            metrics["itl_ms"] = _num(itl, "Average Response Time")
+            metrics["itl_p95_ms"] = _num(itl, "95%")
+        tpot = by_type.get("TPOT")
+        if tpot is not None:
+            metrics["tpot_ms"] = _num(tpot, "Average Response Time")
+            metrics["tpot_p95_ms"] = _num(tpot, "95%")
+        tokps = by_type.get("TOKPS")
+        if tokps is not None:   # 请求级 tok/s 均值（趋势与 evalscope output_tps 可比）
+            metrics["output_tps"] = _num(tokps, "Average Response Time")
         for name, value in metrics.items():
             if value is None:
                 continue
@@ -397,7 +460,8 @@ class LocustAdapter(ToolAdapter):
             "name": "chat",
             "pretty_name": "Chat 压测（通用 HTTP / locust）",
             "metrics": ["ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
-                        "qps", "error_rate"],
+                        "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms",
+                        "qps", "output_tps", "error_rate"],
             "tags": ["perf", "locust"],
             "few_shot_num": None,
         }]

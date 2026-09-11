@@ -94,7 +94,36 @@ class TestBuildConfig:
         tasks = LocustAdapter().list_tasks()
         assert tasks[0]["name"] == "chat"
         assert "ttft_ms" in tasks[0]["metrics"]
-        assert "tpot_ms" not in tasks[0]["metrics"]          # locust 无来源
+        # 流式统计增强后与 evalscope-perf 指标对齐（tpot/itl/output_tps 均可产出）
+        assert {"tpot_ms", "itl_ms", "output_tps"} <= set(tasks[0]["metrics"])
+
+
+class TestLocustfileIntegrity:
+    def test_template_structure_chat_in_class(self, tmp_path):
+        """ChatUser 单一类定义且 on_start/chat 在类体内（防类体断裂回归：
+        QPS 分支复制类曾把方法留在类外，locust 实跑 0 请求）。"""
+        import ast
+
+        cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
+        LocustAdapter()._write_load(cfg)
+        text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        tree = ast.parse(text)                            # 语法合法
+        classes = [n for n in tree.body
+                   if isinstance(n, ast.ClassDef) and n.name == "ChatUser"]
+        assert len(classes) == 1
+        methods = {n.name for n in classes[0].body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        assert {"on_start", "chat", "_fire",
+                "_stream_metrics", "_json_metrics"} <= methods
+        # wait_time 经 _wait_time() 选择（并发/QPS 双模式分支共存）
+        assert any("constant_pacing" in ast.dump(n) for n in tree.body)
+
+    def test_stream_metrics_present(self, tmp_path):
+        cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
+        LocustAdapter()._write_load(cfg)
+        text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        for marker in ('"ITL"', '"TPOT"', '"TOKPS"', '"usage"', "_stream_metrics"):
+            assert marker in text
 
 
 class TestQPSMode:
@@ -117,7 +146,8 @@ class TestQPSMode:
         assert cfg["qps"] is None
         LocustAdapter()._write_load(cfg)
         text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
-        assert "wait_time = constant(0)" in text
+        assert "return constant(0)" in text                  # 并发模式：无间隔连发
+        assert "constant_total_pacing" in text               # 分支共存（QPS 可选）
 
     def test_qps_validation(self):
         with pytest.raises(ValueError, match="qps"):
@@ -171,7 +201,8 @@ class TestWriteLoad:
 
 
 def _write_stats(directory: Path, users: int, agg: dict, ttft: dict | None,
-                 post: dict | None = None) -> None:
+                 post: dict | None = None,
+                 extra_rows: list[dict] | None = None) -> None:
     directory.mkdir(parents=True)
     cols = ["Type", "Name", "Request Count", "Failure Count", "Median Response Time",
             "Average Response Time", "Min Response Time", "Max Response Time",
@@ -189,6 +220,10 @@ def _write_stats(directory: Path, users: int, agg: dict, ttft: dict | None,
         rows.append({"Type": "TTFT", "Name": "POST /chat/completions",
                      "Request Count": agg["Request Count"], "Failure Count": "0",
                      "Average Response Time": ttft[0], "95%": ttft[1]})
+    for extra in (extra_rows or []):
+        rows.append({"Type": extra["Type"], "Name": "POST /chat/completions",
+                     "Request Count": agg["Request Count"], "Failure Count": "0",
+                     "Average Response Time": extra["avg"], "95%": extra["p95"]})
     rows.append(agg)
     import csv as _csv
     with (directory / f"locust_u{users}_stats.csv").open("w", newline="",
@@ -204,7 +239,12 @@ class TestCollect:
         agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "100",
                "Failure Count": "3", "Average Response Time": "9100",
                "Requests/s": "0.55", "95%": "14550"}
-        _write_stats(tmp_path / "locust_raw", 4, agg, ("560", "1100"))
+        _write_stats(tmp_path / "locust_raw", 4, agg, ("560", "1100"),
+                     extra_rows=[
+                         {"Type": "ITL", "avg": "80.5", "p95": "150.0"},
+                         {"Type": "TPOT", "avg": "95.0", "p95": "180.0"},
+                         {"Type": "TOKPS", "avg": "10.5", "p95": "6.0"},
+                     ])
         (tmp_path / "locust_raw" / "locust_u4_failures.csv").write_text(
             "Method,Name,Error,Occurrences\n"
             "POST,POST /chat/completions,\"HTTPError('HTTP 429')\",3\n",
@@ -218,6 +258,11 @@ class TestCollect:
         assert by_metric["latency_p95_ms"].value == pytest.approx(14550)
         assert by_metric["ttft_ms"].value == pytest.approx(560)
         assert by_metric["ttft_p95_ms"].value == pytest.approx(1100)
+        assert by_metric["itl_ms"].value == pytest.approx(80.5)
+        assert by_metric["itl_p95_ms"].value == pytest.approx(150.0)
+        assert by_metric["tpot_ms"].value == pytest.approx(95.0)
+        assert by_metric["tpot_p95_ms"].value == pytest.approx(180.0)
+        assert by_metric["output_tps"].value == pytest.approx(10.5)   # 请求级 tok/s
         assert by_metric["qps"].value == pytest.approx(0.55)
         assert by_metric["error_rate"].value == pytest.approx(0.03)
         assert by_metric["error_rate"].passed is False        # 0.03 > 0.01（越低越好）

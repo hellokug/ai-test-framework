@@ -290,10 +290,13 @@ perf_report.html、执行日志）。
   （闭环封顶目标 QPS——`constant_pacing(constant_total_pacing=True)`，服务端
   拖慢则实际 QPS 下降；user 数退化为最大并发上限。精确开环 QPS 请用
   evalscope-perf 的 `perf.rate`）；`number` 无语义，配了忽略；**必配一个时长键**
-- 指标对齐 evalscope-perf 命名（`dataset="locust:u<用户数>"`）：ttft_ms（流式
-  首包计时，自定义 TTFT 事件）/ latency_avg_ms / latency_p95_ms / qps /
-  error_rate + **错误明细**（`_failures.csv` → 错误文本×次数，CLI 汇总打印）；
-  tpot/itl/output_tps locust 无来源不产出
+- 指标与 evalscope-perf 全集对齐（`dataset="locust:u<用户数>"`）：
+  ttft_ms / latency_avg_ms / latency_p95_ms / **itl_ms** / **tpot_ms** /
+  **output_tps** / qps / error_rate + 错误明细（`_failures.csv` → 错误文本×次数）。
+  LLM 指标由生成 locustfile 的流式采集提供：TTFT 首包计时、ITL 逐块间隔事件、
+  TPOT（生成段毫秒/token）与 output_tps（请求级 tok/s，token 数取
+  usage.completion_tokens，端点不回传时以 chunk 数近似）。口径标注：output_tps
+  为请求级均值（evalscope 为全局 tok/s），趋势对比可用
 
 ```bash
 pip install 'aite[locust]'
