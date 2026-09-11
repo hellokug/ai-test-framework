@@ -90,6 +90,13 @@ class TestBuildConfig:
             LocustAdapter().build_config(make_request(
                 target={"type": "openai_compatible", "base_url": "http://x/v1"}))
 
+    def test_plaintext_api_key_rejected(self):
+        """明文密钥禁入配置（原则 5）：api_endpoint 层 fail-fast 指引 api_key_env。"""
+        with pytest.raises(ValueError, match="api_key_env"):
+            LocustAdapter().build_config(make_request(
+                target={"type": "openai_compatible", "base_url": "http://x/v1",
+                        "model": "m", "api_key": "sk-plaintext"}))
+
     def test_list_tasks_shape(self):
         tasks = LocustAdapter().list_tasks()
         assert tasks[0]["name"] == "chat"

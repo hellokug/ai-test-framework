@@ -112,6 +112,11 @@ def api_endpoint(target: dict, *, suffix: str = "/chat/completions") -> tuple[st
     """
     if target.get("type", "openai_compatible") != "openai_compatible":
         raise ValueError("tool adapter 目前仅支持 openai_compatible target")
+    if target.get("api_key"):
+        # 显式优于隐式（CLAUDE.md 原则 5）：明文密钥禁入配置，静默忽略会让
+        # 用户误以为已配好——联调时以 401 的形式才暴露，白烧一轮
+        raise ValueError("target.api_key 不受支持（禁止明文密钥入配置/git）；"
+                         "请删除该字段并改用 api_key_env: <环境变量名>")
     base = str(target.get("base_url", "")).rstrip("/")
     url = base if base.endswith(suffix) else base + suffix
     key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
