@@ -271,6 +271,12 @@ tools:
 （每档 summary/percentile json、sla_summary、performance_summary.txt、
 perf_report.html、执行日志）。
 
+**阶梯曲线**（timeseries `combined` 字段）：多档 sweep 的时间演进全景——各档
+按执行序拼接为一条绝对时间轴曲线（`{t, users, rps, tok_s, ttft_p95,
+latency_p95, errors}`，users 随档位阶梯变化），一张图看完整个爬坡过程；各档
+明细 series 保留供下钻。locust 按各档进程 epoch 时间戳精确对齐；
+evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似。
+
 口径说明：判定为**可选阈值 + 记录**（性能绝对阈值换环境即失效；基线回归对比
 后置）；本地单卡并发梯度预期平坦（GPU 吞吐瓶颈，历史实测），梯度压测的发力场景
 是云端 API 容量评估与模型/部署配置对比；**中途熔断**（跑到一半按错误率/延迟
