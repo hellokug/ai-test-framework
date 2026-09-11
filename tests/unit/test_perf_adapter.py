@@ -433,6 +433,9 @@ class TestDatasetLoad:
         line = ts["series"][0]
         assert line["users"] == 4 and line["label"] == "perf:c4"
         b0, b1 = line["points"]
+        # combined 阶梯曲线：单档时偏移 0，users 恒定
+        assert ts["combined"][0]["users"] == 4
+        assert ts["combined"][0]["t"] == line["points"][0]["t"]
         assert b0["t"] == 0 and b0["rps"] == pytest.approx(0.6)   # 3 条 / 5s
         assert b0["ttft_avg"] == pytest.approx(200.0)             # (100+300)/2
         assert b0["errors"] == 1
@@ -461,7 +464,50 @@ SUMMARY = {
 PERCENTILE = [
     {"Percentiles": "50%", "Latency (s)": 10.92, "TTFT (ms)": 7405.51},
     {"Percentiles": "95%", "Latency (s)": 14.55, "TTFT (ms)": 11042.56},
-]
+]  # noqa: E501
+
+
+class _SteppedFixtureBase:
+    """两档阶梯 fixture 的宿主（供 TestCollect 复用）。"""
+
+    def test_combined_stepped_across_levels(self, tmp_path):
+        """多档 combined：档序偏移累加（档时长+5s 间隔），users 阶梯。"""
+        import sqlite3
+
+        def _mk_level(dirname: str, concurrency: int, rows):
+            d = tmp_path / "perf_raw" / "m" / dirname
+            d.mkdir(parents=True)
+            (d / "benchmark_summary.json").write_text(json.dumps(dict(
+                SUMMARY, Concurrency=concurrency, **{"Test Duration (s)": 10})),
+                encoding="utf-8")
+            conn = sqlite3.connect(d / "benchmark_data.db")
+            conn.execute("CREATE TABLE result (start_time REAL, completed_time REAL,"
+                         " latency REAL, first_chunk_latency REAL, success INT,"
+                         " completion_tokens INT)")
+            conn.executemany("INSERT INTO result VALUES (?,?,?,?,?,?)", rows)
+            conn.commit()
+            conn.close()
+
+        _mk_level("parallel_1_number_4", 1,
+                  [(0.0, 4.0, 1.0, 0.1, 1, 40), (1.0, 4.5, 1.2, 0.2, 1, 40)])
+        _mk_level("parallel_4_number_4", 4,
+                  [(0.0, 3.0, 0.8, 0.05, 1, 30), (1.0, 5.5, 1.4, 0.3, 1, 30)])
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path))
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        combined = ts["combined"]
+        assert len(combined) == 4
+        # 档 1：t 0~4.5（users=1）；档 2 偏移 = 档时长 10 + 档间 5 = 15 起（users=4）
+        assert [p["users"] for p in combined] == [1, 1, 1, 4]
+        t_l1 = [p["t"] for p in combined[:2]]
+        t_l2 = [p["t"] for p in combined[2:]]
+        assert t_l1 == sorted(t_l1) and t_l2 == sorted(t_l2)
+        assert t_l2[0] >= 15.0                                # 偏移 = 10 + 5
+        assert all(p["t"] < p2["t"] for p, p2 in
+                   zip(combined, combined[1:], strict=False))               # 全程单调
+
+        # 各档明细 series 仍保留（下钻用）
+        assert {s["users"] for s in ts["series"]} == {1, 4}
+        _ = result
 
 
 class TestCollect:

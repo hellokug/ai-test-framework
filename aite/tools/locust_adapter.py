@@ -102,6 +102,30 @@ def _history_series(output_dir: Path) -> list[dict]:
     return series
 
 
+def _combined_series(output_dir: Path) -> list[dict]:
+    """绝对时间轴（stats_history 的 Timestamp 为 epoch 秒，各档进程同源时钟）
+    合并全部档位 → 一条完整阶梯曲线（users 随档位阶梯、指标连续）。"""
+    points = []
+    for history_path in sorted(output_dir.glob("*_stats_history.csv")):
+        users = int(history_path.name[len("locust_u"):-len("_stats_history.csv")])
+        for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
+            if hrow.get("Type") != "POST":
+                continue
+            ts = _num(hrow, "Timestamp")
+            if ts is None:
+                continue
+            points.append((ts, users, _num(hrow, "Requests/s") or 0.0,
+                           _num(hrow, "Failures/s") or 0.0,
+                           _num(hrow, "95%")))
+    if not points:
+        return []
+    points.sort(key=lambda r: r[0])
+    t0 = points[0][0]
+    return [{"t": round(ts - t0, 3), "users": users, "rps": round(rps, 3),
+             "errors": int(fails), "latency_p95": round(p95, 1) if p95 else None}
+            for ts, users, rps, fails, p95 in points]
+
+
 def _point(ts: float, b: dict, t0: float) -> dict:
     """秒级时序点：POST 行的 rps/延迟分位 + TTFT 行分位（locust 无 token 口径）。"""
     return {
@@ -376,6 +400,7 @@ class LocustAdapter(ToolAdapter):
 
         timeseries = {"engine": self.name, "bucket_seconds": 1.0,
                       "series": _history_series(Path(cfg["output_dir"])),
+                      "combined": _combined_series(Path(cfg["output_dir"])),
                       "errors": _errors_summary(out.failures)}
         if timeseries["series"]:
             ts_path = Path(cfg["output_dir"]).parent / "timeseries.json"

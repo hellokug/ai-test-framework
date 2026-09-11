@@ -75,6 +75,7 @@ from aite.utils.logging import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_BUCKET_SECONDS = 5.0   # 时序聚合桶间隔（秒），perf.bucket_seconds 可覆盖
+SLEEP_INTERVAL_BETWEEN_LEVELS = 5.0   # evalscope 多档 sweep 档间默认间隔（秒）
 
 # evalscope SLA 可断言指标（sla_run.get_metric_values 键）；
 # 单位：latency 秒、ttft/tpot 毫秒、rps/tps 原生单位
@@ -462,25 +463,32 @@ class PerfAdapter(ToolAdapter):
         grouped = _group_summaries(Path(cfg["output_dir"]))
         bucket = _resolve_bucket(cfg)
         timeseries: dict = {"engine": self.name, "bucket_seconds": bucket,
-                            "series": [], "errors": []}
+                            "series": [], "combined": [], "errors": []}
 
         def _label_key(item):
             label = item[0]
             return (0, int(label.rsplit("c", 1)[1])) if ":c" in label                 else (1, float(label.rsplit("q", 1)[1]))
 
+        offset = 0.0   # combined 绝对偏移：档实际时长累加 + 档间间隔（阶梯近似）
         for label, items in sorted(grouped.items(), key=_label_key):
             metrics, total = _level_metrics(items)
             self._append_metric_rows(req, out, label, metrics, total)
             tps = metrics.get("output_tps")
             if tps is not None:
                 out.raw_score[label] = float(tps)
-            for run_idx, (_d, _p, summary_path, users) in enumerate(items):
+            for run_idx, (data, _p, summary_path, users) in enumerate(items):
                 points = _aggregate_level_db(
                     summary_path.parent / "benchmark_data.db", bucket)
                 if points:
                     timeseries["series"].append({
                         "users": users, "run": run_idx, "label": label,
                         "points": points})
+                    for pt in points:
+                        timeseries["combined"].append({
+                            **pt, "t": round(pt["t"] + offset, 3),
+                            "users": users})
+                    offset += (float(data.get("Test Duration (s)") or 0)
+                               + SLEEP_INTERVAL_BETWEEN_LEVELS)
 
         total_failed = sum(int(d.get("Failed Requests") or 0)
                            for items in grouped.values()
