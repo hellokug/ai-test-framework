@@ -105,6 +105,24 @@ class TestBuildConfig:
         assert {"tpot_ms", "itl_ms", "output_tps"} <= set(tasks[0]["metrics"])
 
 
+class TestLocustfileSignatures:
+    def test_record_tokens_signature_matches_calls(self, tmp_path):
+        """_record_tokens 定义参数数与全部调用点一致（真实联调 P0：签名漂移
+        导致 244 次任务级异常——模板被多处编辑后调用/定义不同步）。"""
+        import ast
+
+        cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
+        LocustAdapter()._write_load(cfg)
+        tpl = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
+        t_ast = ast.parse(tpl)
+        defs = [n for n in ast.walk(t_ast)
+                if isinstance(n, ast.FunctionDef) and n.name == "_record_tokens"]
+        calls = [n for n in ast.walk(t_ast) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "_record_tokens"]
+        assert defs and calls
+        n_params = len(defs[0].args.args) - (1 if defs[0].args.kwonlyargs else 0)
+        assert all(len(c.args) == n_params for c in calls)
+
 class TestLocustfileIntegrity:
     def test_template_structure_chat_in_class(self, tmp_path):
         """ChatUser 单一类定义且 on_start/chat 在类体内（防类体断裂回归：

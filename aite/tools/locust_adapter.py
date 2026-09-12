@@ -202,13 +202,15 @@ TOKENS_FILE = os.environ.get("AITE_LOCUST_TOKENS_FILE")
 QPS = os.environ.get("AITE_LOCUST_QPS")
 
 
-def _record_tokens(tokens: int, gen_ms: float):
-    """请求级 token 产出记录（output_tps / tok_s 的数据源；单位独立于 ms 统计表）。"""
+def _record_tokens(tokens: int, gen_ms: float, prompt_tokens=None):
+    """请求级 token 产出记录（output_tps / tok_s / 长度均值的数据源）。"""
     if not TOKENS_FILE or tokens <= 0:
         return
+    rec = {"t": time.time(), "tokens": tokens, "gen_ms": round(gen_ms, 1)}
+    if prompt_tokens:
+        rec["prompt_tokens"] = int(prompt_tokens)
     with open(TOKENS_FILE, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"t": time.time(), "tokens": tokens,
-                             "gen_ms": round(gen_ms, 1)}) + "\\n")
+        fh.write(json.dumps(rec) + "\\n")
 
 with open(PROMPTS_FILE, encoding="utf-8") as fh:
     PROMPTS = [line for line in (l.strip() for l in fh) if line]
