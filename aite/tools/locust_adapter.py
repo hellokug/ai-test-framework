@@ -69,10 +69,14 @@ def _num(row: dict, key: str) -> float | None:
 
 
 def _history_series(output_dir: Path) -> list[dict]:
-    """各档 _stats_history.csv → 时序 series（--csv-full-history，原生 1s 打点）。"""
+    """各档 _stats_history.csv → 时序 series（--csv-full-history，原生 1s 打点）。
+
+    tok_s 来自各档 locust_uN_tokens.jsonl（请求完成时刻 epoch → 秒桶求和）。
+    """
     series = []
     for history_path in sorted(output_dir.glob("*_stats_history.csv")):
         users = history_path.name[len("locust_u"):-len("_stats_history.csv")]
+        tokens_by_sec = _tokens_by_sec(output_dir / f"locust_u{users}_tokens.jsonl")
         by_ts: dict[float, dict] = {}
         for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
             rtype = hrow.get("Type")
@@ -82,7 +86,7 @@ def _history_series(output_dir: Path) -> list[dict]:
             if ts is None:
                 continue
             b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
-                                      "errors": 0.0})
+                                      "errors": 0.0, "tok_s": 0.0})
             if rtype == "POST":
                 b["rps"] += _num(hrow, "Requests/s") or 0.0
                 b["errors"] += _num(hrow, "Failures/s") or 0.0
@@ -93,6 +97,10 @@ def _history_series(output_dir: Path) -> list[dict]:
                 for col in ("50%", "95%"):
                     if _num(hrow, col) is not None:
                         b["ttft"].append(_num(hrow, col))
+        for sec, tokens in tokens_by_sec.items():   # token 吞吐并入秒桶
+            b = by_ts.setdefault(sec, {"ttft": [], "latency": [], "rps": 0.0,
+                                       "errors": 0.0, "tok_s": 0.0})
+            b["tok_s"] += tokens
         if not by_ts:
             continue
         t0 = min(by_ts)
@@ -100,6 +108,24 @@ def _history_series(output_dir: Path) -> list[dict]:
         series.append({"users": int(users), "run": 0,
                        "label": f"locust:u{users}", "points": points})
     return series
+
+
+def _tokens_by_sec(path: Path) -> dict[int, float]:
+    """locust_uN_tokens.jsonl → {完成时刻秒: tokens 和}（无文件返回空）。"""
+    out: dict[int, float] = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        sec = int(rec.get("t") or 0)
+        out[sec] = out.get(sec, 0.0) + float(rec.get("tokens") or 0)
+    return out
 
 
 def _combined_series(output_dir: Path) -> list[dict]:
@@ -121,13 +147,24 @@ def _combined_series(output_dir: Path) -> list[dict]:
         return []
     points.sort(key=lambda r: r[0])
     t0 = points[0][0]
+    tok_by_sec = _tokens_by_sec_all(output_dir)
     return [{"t": round(ts - t0, 3), "users": users, "rps": round(rps, 3),
-             "errors": int(fails), "latency_p95": round(p95, 1) if p95 else None}
+             "errors": int(fails), "latency_p95": round(p95, 1) if p95 else None,
+             "tok_s": round(tok_by_sec.get(ts, 0.0), 1) or None}
             for ts, users, rps, fails, p95 in points]
 
 
+def _tokens_by_sec_all(output_dir: Path) -> dict[int, float]:
+    """全档 tokens 记录合并 → {epoch 秒: tokens 和}。"""
+    out: dict[int, float] = {}
+    for path in output_dir.glob("*_tokens.jsonl"):
+        for sec, tokens in _tokens_by_sec(path).items():
+            out[sec] = out.get(sec, 0.0) + tokens
+    return out
+
+
 def _point(ts: float, b: dict, t0: float) -> dict:
-    """秒级时序点：POST 行的 rps/延迟分位 + TTFT 行分位（locust 无 token 口径）。"""
+    """秒级时序点：POST 行的 rps/延迟分位 + TTFT 行分位 + token 吞吐（tok_s）。"""
     return {
         "t": round(ts - t0, 3),
         "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
@@ -135,7 +172,7 @@ def _point(ts: float, b: dict, t0: float) -> dict:
         "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
         "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
         "rps": round(b["rps"], 3),
-        "tok_s": None,   # locust 无 token 口径
+        "tok_s": round(b["tok_s"], 1) if b.get("tok_s") else None,
         "errors": int(b["errors"]),
     }
 
@@ -159,9 +196,19 @@ API_KEY = os.environ.get("AITE_LOCUST_API_KEY", "none")
 STREAM = os.environ.get("AITE_LOCUST_STREAM", "1") == "1"
 MAX_TOKENS = os.environ.get("AITE_LOCUST_MAX_TOKENS")
 PROMPTS_FILE = os.environ["AITE_LOCUST_PROMPTS_FILE"]
+TOKENS_FILE = os.environ.get("AITE_LOCUST_TOKENS_FILE")
 # QPS 限速（可选）：闭环封顶语义——服务端拖慢时实际 QPS 随之下降；
 # user 数退化为最大并发上限。未设置 = 并发模式（无间隔连发）。
 QPS = os.environ.get("AITE_LOCUST_QPS")
+
+
+def _record_tokens(tokens: int, gen_ms: float):
+    """请求级 token 产出记录（output_tps / tok_s 的数据源；单位独立于 ms 统计表）。"""
+    if not TOKENS_FILE or tokens <= 0:
+        return
+    with open(TOKENS_FILE, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"t": time.time(), "tokens": tokens,
+                             "gen_ms": round(gen_ms, 1)}) + "\\n")
 
 with open(PROMPTS_FILE, encoding="utf-8") as fh:
     PROMPTS = [line for line in (l.strip() for l in fh) if line]
@@ -251,10 +298,10 @@ class ChatUser(HttpUser):
         gen_ms = prev_ms - ttft_ms            # 生成段时长（首 token 之后）
         if gen_ms > 0 and tokens > 0:
             self._fire("TPOT", gen_ms / tokens)                    # ms / token
-            self._fire("TOKPS", tokens / (gen_ms / 1000.0))        # tok/s（请求级）
+            _record_tokens(tokens, gen_ms)                         # 全局吞吐数据源
 
     def _json_metrics(self, resp, t0: float):
-        """非流式：整段均摊口径的 TPOT / TPS（无 TTFT/ITL，与 evalscope 一致）。"""
+        """非流式：整段均摊口径的 TPOT（无 TTFT/ITL，与 evalscope 一致）。"""
         total_ms = (time.perf_counter() - t0) * 1000.0
         try:
             data = resp.json()
@@ -263,7 +310,7 @@ class ChatUser(HttpUser):
         tokens = int((data.get("usage") or {}).get("completion_tokens") or 0)
         if tokens > 0 and total_ms > 0:
             self._fire("TPOT", total_ms / tokens)
-            self._fire("TOKPS", tokens / (total_ms / 1000.0))
+            _record_tokens(tokens, total_ms)
 '''
 
 
@@ -300,7 +347,8 @@ class LocustAdapter(ToolAdapter):
             prefix = output_dir / f"locust_u{users}"
             rate = int(spawn_rate) if spawn_rate else users   # 缺省瞬时拉满
             runs.append({"users": users, "spawn_rate": rate, "seconds": float(secs),
-                         "csv": str(prefix), "html": f"{prefix}_report.html"})
+                         "csv": str(prefix), "html": f"{prefix}_report.html",
+                         "tokens_file": str(output_dir / f"locust_u{users}_tokens.jsonl")})
 
         return {
             "url": url, "model": model, "api_key": api_key,
@@ -313,6 +361,7 @@ class LocustAdapter(ToolAdapter):
             "runs": runs,
             "timeout": int(req.extra.get("timeout", 3600)),
             "output_dir": str(output_dir),
+            "tokens_files": sorted({r["tokens_file"] for r in runs}),
         }
 
     @staticmethod
@@ -365,6 +414,7 @@ class LocustAdapter(ToolAdapter):
             env_extra["AITE_LOCUST_QPS"] = str(cfg["qps"])
         host = cfg["url"].rsplit("/chat/completions", 1)[0]
         for i, run in enumerate(cfg["runs"]):
+            env_extra = dict(env_extra, AITE_LOCUST_TOKENS_FILE=run["tokens_file"])
             args = [
                 binary, "-f", cfg["locustfile"], "--headless", "--only-summary",
                 "--csv", run["csv"], "--csv-full-history",   # 秒级时序（大屏曲线）
@@ -397,6 +447,27 @@ class LocustAdapter(ToolAdapter):
             label = f"locust:u{users}"
             self._collect_level(req, out, stats_path, label)
             self._collect_level_failures(out, stats_path, label)
+
+        # output_tps（全局口径，与 evalscope 对齐）：Σtokens / Σ生成秒
+        tokens_total = gen_seconds = 0.0
+        for tf in Path(cfg["output_dir"]).glob("*_tokens.jsonl"):
+            for line in tf.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                tokens_total += float(rec.get("tokens") or 0)
+                gen_seconds += float(rec.get("gen_ms") or 0) / 1000.0
+        if gen_seconds > 0 and tokens_total > 0:
+            global_tps = round(tokens_total / gen_seconds, 2)
+            thr = req.metric_thresholds.get("output_tps")
+            out.rows.append(ToolMetricRow(
+                dataset="locust:total", metric="output_tps", value=global_tps,
+                count=int(tokens_total), threshold=thr, higher_is_better=True,
+                passed=(global_tps >= thr) if thr is not None else None))
 
         timeseries = {"engine": self.name, "bucket_seconds": 1.0,
                       "series": _history_series(Path(cfg["output_dir"])),
@@ -449,9 +520,7 @@ class LocustAdapter(ToolAdapter):
         if tpot is not None:
             metrics["tpot_ms"] = _num(tpot, "Average Response Time")
             metrics["tpot_p95_ms"] = _num(tpot, "95%")
-        tokps = by_type.get("TOKPS")
-        if tokps is not None:   # 请求级 tok/s 均值（趋势与 evalscope output_tps 可比）
-            metrics["output_tps"] = _num(tokps, "Average Response Time")
+        # output_tps（全局口径）由 run_tool_suite 后置注入（tokens 文件聚合）
         for name, value in metrics.items():
             if value is None:
                 continue

@@ -129,7 +129,8 @@ class TestLocustfileIntegrity:
         cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
         LocustAdapter()._write_load(cfg)
         text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
-        for marker in ('"ITL"', '"TPOT"', '"TOKPS"', '"usage"', "_stream_metrics"):
+        for marker in ('"ITL"', '"TPOT"', '"usage"', "_stream_metrics",
+                       '_record_tokens', 'TOKENS_FILE'):
             assert marker in text
 
 
@@ -250,7 +251,6 @@ class TestCollect:
                      extra_rows=[
                          {"Type": "ITL", "avg": "80.5", "p95": "150.0"},
                          {"Type": "TPOT", "avg": "95.0", "p95": "180.0"},
-                         {"Type": "TOKPS", "avg": "10.5", "p95": "6.0"},
                      ])
         (tmp_path / "locust_raw" / "locust_u4_failures.csv").write_text(
             "Method,Name,Error,Occurrences\n"
@@ -269,7 +269,6 @@ class TestCollect:
         assert by_metric["itl_p95_ms"].value == pytest.approx(150.0)
         assert by_metric["tpot_ms"].value == pytest.approx(95.0)
         assert by_metric["tpot_p95_ms"].value == pytest.approx(180.0)
-        assert by_metric["output_tps"].value == pytest.approx(10.5)   # 请求级 tok/s
         assert by_metric["qps"].value == pytest.approx(0.55)
         assert by_metric["error_rate"].value == pytest.approx(0.03)
         assert by_metric["error_rate"].passed is False        # 0.03 > 0.01（越低越好）
@@ -280,6 +279,23 @@ class TestCollect:
         assert result.failures == [{"dataset": "locust:u4",
                                     "case": "POST",
                                     "detail": "HTTPError('HTTP 429') ×3"}]
+
+    def test_output_tps_global_from_tokens_file(self, tmp_path):
+        """output_tps（全局口径）= Σtokens / Σ生成秒，来自 tokens.jsonl 记录。"""
+        agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "10",
+               "Failure Count": "0", "Average Response Time": "900",
+               "Requests/s": "1.0", "95%": "1200"}
+        raw = tmp_path / "locust_raw"
+        _write_stats(raw, 4, agg, ("560", "1100"))
+        (raw / "locust_u4_tokens.jsonl").write_text(
+            json.dumps({"t": 1.0, "tokens": 100, "gen_ms": 1000}) + "\n"
+            + json.dumps({"t": 2.0, "tokens": 300, "gen_ms": 3000}) + "\n",
+            encoding="utf-8")
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        row = next(r for r in result.rows if r.metric == "output_tps")
+        assert row.dataset == "locust:total"
+        assert row.value == pytest.approx(100.0)     # 400 tokens / 4 s
+        assert row.higher_is_better is True
 
     def test_post_row_preferred_over_polluted_aggregated(self, tmp_path):
         """口径修复：Aggregated 被 POST+TTFT 双事件污染，终局指标取 POST 行。"""
