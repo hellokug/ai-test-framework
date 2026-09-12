@@ -518,7 +518,16 @@ class LocustAdapter(ToolAdapter):
         agg = (next((r for r in rows if r.get("Type") == "POST"), None)
                or next((r for r in rows if r.get("Type") == "Aggregated"), None))
         if agg is None:
-            logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s", stats_path)
+            if any(r.get("Type") in ("TTFT", "ITL", "TPOT") for r in rows):
+                # 自定义事件在、请求行不在 = 任务内抛异常（未标记 success/failure
+                # 时 locust 不计入请求统计），典型根因见 logs/locust.log 的 Traceback
+                logger.warning(
+                    "locust %s: 有自定义指标事件但无请求统计——locust 任务内抛异常"
+                    "（如签名不匹配/字段缺失），Traceback 见 logs/locust.log",
+                    stats_path.name)
+            else:
+                logger.warning("locust 产出缺少 POST/Aggregated 行，跳过 %s",
+                               stats_path)
             return
         by_type: dict[str, dict] = {}
         for r in rows:
