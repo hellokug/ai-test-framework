@@ -300,9 +300,10 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似。
   ttft_ms / latency_avg_ms / latency_p95_ms / **itl_ms** / **tpot_ms** /
   **output_tps** / qps / error_rate + 错误明细（`_failures.csv` → 错误文本×次数）。
   LLM 指标由生成 locustfile 的流式采集提供：TTFT 首包计时、ITL 逐块间隔事件、
-  TPOT（生成段毫秒/token）与 output_tps（请求级 tok/s，token 数取
-  usage.completion_tokens，端点不回传时以 chunk 数近似）。口径标注：output_tps
-  为请求级均值（evalscope 为全局 tok/s），趋势对比可用
+  TPOT（生成段毫秒/token）；token 数取 usage.completion_tokens（端点不回传时
+  以 chunk 数近似）。output_tps 与 avg_input_tokens / avg_output_tokens
+  （平均输入/输出长度）为全局口径行（`dataset="locust:total"`：Σtokens÷Σ生成秒
+  / 逐请求均值），与 evalscope 同口径直接可比
 
 ```bash
 pip install 'aite[locust]'

@@ -271,6 +271,7 @@ class ChatUser(HttpUser):
         prev_ms = None
         chunk_count = 0
         completion_tokens = None
+        prompt_tokens = None
         for raw in resp.iter_lines():
             if not raw.startswith(b"data: "):
                 continue
@@ -289,6 +290,8 @@ class ChatUser(HttpUser):
                     usage = json.loads(data).get("usage") or {}
                     if usage.get("completion_tokens"):
                         completion_tokens = int(usage["completion_tokens"])
+                    if usage.get("prompt_tokens"):
+                        prompt_tokens = int(usage["prompt_tokens"])
                 except ValueError:
                     pass
         if ttft_ms is None or prev_ms is None:
@@ -298,7 +301,7 @@ class ChatUser(HttpUser):
         gen_ms = prev_ms - ttft_ms            # 生成段时长（首 token 之后）
         if gen_ms > 0 and tokens > 0:
             self._fire("TPOT", gen_ms / tokens)                    # ms / token
-            _record_tokens(tokens, gen_ms)                         # 全局吞吐数据源
+            _record_tokens(tokens, gen_ms, prompt_tokens)          # 吞吐+长度数据源
 
     def _json_metrics(self, resp, t0: float):
         """非流式：整段均摊口径的 TPOT（无 TTFT/ITL，与 evalscope 一致）。"""
@@ -307,10 +310,11 @@ class ChatUser(HttpUser):
             data = resp.json()
         except ValueError:
             return
-        tokens = int((data.get("usage") or {}).get("completion_tokens") or 0)
+        usage = data.get("usage") or {}
+        tokens = int(usage.get("completion_tokens") or 0)
         if tokens > 0 and total_ms > 0:
             self._fire("TPOT", total_ms / tokens)
-            _record_tokens(tokens, total_ms)
+            _record_tokens(tokens, total_ms, usage.get("prompt_tokens"))
 '''
 
 
@@ -448,8 +452,10 @@ class LocustAdapter(ToolAdapter):
             self._collect_level(req, out, stats_path, label)
             self._collect_level_failures(out, stats_path, label)
 
-        # output_tps（全局口径，与 evalscope 对齐）：Σtokens / Σ生成秒
+        # output_tps（全局口径）/ 平均输入输出长度：tokens 记录聚合
         tokens_total = gen_seconds = 0.0
+        prompt_lens: list[float] = []
+        completion_lens: list[float] = []
         for tf in Path(cfg["output_dir"]).glob("*_tokens.jsonl"):
             for line in tf.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
@@ -461,6 +467,12 @@ class LocustAdapter(ToolAdapter):
                     continue
                 tokens_total += float(rec.get("tokens") or 0)
                 gen_seconds += float(rec.get("gen_ms") or 0) / 1000.0
+                if rec.get("prompt_tokens"):
+                    prompt_lens.append(float(rec["prompt_tokens"]))
+                # tokens 为 completion 的别名（记录主键）
+                completion = rec.get("completion_tokens") or rec.get("tokens")
+                if completion:
+                    completion_lens.append(float(completion))
         if gen_seconds > 0 and tokens_total > 0:
             global_tps = round(tokens_total / gen_seconds, 2)
             thr = req.metric_thresholds.get("output_tps")
@@ -468,6 +480,17 @@ class LocustAdapter(ToolAdapter):
                 dataset="locust:total", metric="output_tps", value=global_tps,
                 count=int(tokens_total), threshold=thr, higher_is_better=True,
                 passed=(global_tps >= thr) if thr is not None else None))
+        length_rows = {
+            "avg_input_tokens": (prompt_lens, len(prompt_lens)),
+            "avg_output_tokens": (completion_lens, len(completion_lens)),
+        }
+        for metric, (lens, count) in length_rows.items():
+            if lens:
+                out.rows.append(ToolMetricRow(
+                    dataset="locust:total", metric=metric,
+                    value=round(sum(lens) / len(lens), 1), count=count,
+                    threshold=req.metric_thresholds.get(metric),
+                    higher_is_better=True))
 
         timeseries = {"engine": self.name, "bucket_seconds": 1.0,
                       "series": _history_series(Path(cfg["output_dir"])),
@@ -555,7 +578,8 @@ class LocustAdapter(ToolAdapter):
             "pretty_name": "Chat 压测（通用 HTTP / locust）",
             "metrics": ["ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
                         "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms",
-                        "qps", "output_tps", "error_rate"],
+                        "qps", "output_tps", "avg_input_tokens", "avg_output_tokens",
+                        "error_rate"],
             "tags": ["perf", "locust"],
             "few_shot_num": None,
         }]

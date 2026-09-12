@@ -90,6 +90,8 @@ _SUMMARY_METRICS = {
     "itl_ms": "ITL (ms)",
     "qps": "Req Throughput (req/s)",
     "output_tps": "Output Throughput (tok/s)",
+    "avg_input_tokens": "Avg Input Tokens",
+    "avg_output_tokens": "Avg Output Tokens",
 }
 _PERCENTILE_METRICS = {   # benchmark_percentile.json（取 95% 行，秒→毫秒）
     "ttft_p95_ms": ("TTFT (ms)", 1.0),
@@ -536,7 +538,8 @@ class PerfAdapter(ToolAdapter):
             "name": "chat",
             "pretty_name": "Chat 压测（OpenAI 兼容端点）",
             "metrics": ["ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
-                        "tpot_ms", "itl_ms", "qps", "output_tps", "error_rate"],
+                        "tpot_ms", "itl_ms", "qps", "output_tps",
+                        "avg_input_tokens", "avg_output_tokens", "error_rate"],
             "tags": ["perf"],
             "few_shot_num": None,
         }]

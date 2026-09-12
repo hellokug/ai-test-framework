@@ -288,14 +288,21 @@ class TestCollect:
         raw = tmp_path / "locust_raw"
         _write_stats(raw, 4, agg, ("560", "1100"))
         (raw / "locust_u4_tokens.jsonl").write_text(
-            json.dumps({"t": 1.0, "tokens": 100, "gen_ms": 1000}) + "\n"
-            + json.dumps({"t": 2.0, "tokens": 300, "gen_ms": 3000}) + "\n",
+            json.dumps({"t": 1.0, "tokens": 100, "gen_ms": 1000,
+                        "prompt_tokens": 20}) + "\n"
+            + json.dumps({"t": 2.0, "tokens": 300, "gen_ms": 3000,
+                          "prompt_tokens": 40}) + "\n",
             encoding="utf-8")
         result = LocustAdapter().collect(make_request(work_dir=tmp_path))
         row = next(r for r in result.rows if r.metric == "output_tps")
         assert row.dataset == "locust:total"
         assert row.value == pytest.approx(100.0)     # 400 tokens / 4 s
         assert row.higher_is_better is True
+        # 平均输入/输出长度（locust:total，usage 可用时精确）
+        lens = {r.metric: r.value for r in result.rows
+                if r.dataset == "locust:total"}
+        assert lens["avg_input_tokens"] == pytest.approx(30.0)     # (20+40)/2
+        assert lens["avg_output_tokens"] == pytest.approx(200.0)   # (100+300)/2
 
     def test_post_row_preferred_over_polluted_aggregated(self, tmp_path):
         """口径修复：Aggregated 被 POST+TTFT 双事件污染，终局指标取 POST 行。"""

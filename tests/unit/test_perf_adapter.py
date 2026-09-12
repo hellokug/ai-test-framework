@@ -460,6 +460,7 @@ SUMMARY = {
     "Success Requests": 8, "Failed Requests": 0, "Req Throughput (req/s)": 0.55,
     "Avg Latency (s)": 9.10, "Output Throughput (tok/s)": 8.8,
     "TTFT (ms)": 5591.59, "TPOT (ms)": 113.3, "ITL (ms)": 109.76,
+    "Avg Input Tokens": 43.0, "Avg Output Tokens": 54.0,
 }
 PERCENTILE = [
     {"Percentiles": "50%", "Latency (s)": 10.92, "TTFT (ms)": 7405.51},
@@ -535,6 +536,8 @@ class TestCollect:
         assert by_metric["ttft_p95_ms"].value == pytest.approx(11042.56)
         assert by_metric["qps"].value == pytest.approx(0.55)
         assert by_metric["output_tps"].value == pytest.approx(8.8)
+        assert by_metric["avg_input_tokens"].value == pytest.approx(43.0)
+        assert by_metric["avg_output_tokens"].value == pytest.approx(54.0)
         assert by_metric["error_rate"].value == 0.0
         assert by_metric["tpot_ms"].passed is None        # 未配阈值无判定
         assert result.raw_score == {"perf:c4": 8.8}
