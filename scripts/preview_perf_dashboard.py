@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from datetime import datetime
 from pathlib import Path
 
 OUT_DEFAULT = "perf_dashboard_preview.html"
@@ -24,10 +25,24 @@ ERROR_KEYS_SKIP = ("engine", "bucket_seconds", "series", "combined", "errors")
 
 # ---------------------------------------------------------------- data loading
 
-def latest_timeseries() -> Path | None:
-    hits = sorted(Path("reports").glob("**/timeseries.json")
-                  , key=lambda p: p.stat().st_mtime, reverse=True)
-    return hits[0] if hits else None
+def find_all_timeseries() -> list[Path]:
+    """全部压测时序产物，按生成时间倒序（最新在前）。"""
+    return sorted(Path("reports").glob("**/timeseries.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def describe(path: Path) -> str:
+    """一行摘要：时间 / engine / run_name / 档数·点数。"""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        n_pts = sum(len(s.get("points", [])) for s in d.get("series", []))
+        stamp = datetime.fromtimestamp(path.stat().st_mtime).strftime("%m-%d %H:%M")
+        # run_name：新数据在 JSON 里；旧文件从路径 reports/tool/<engine>/<run>/<stamp> 解析
+        run_name = d.get("run_name") or (path.parts[-3] if len(path.parts) >= 3 else "?")
+        return (f"{stamp}  {d.get('engine', '?'):<16} "
+                f"{run_name:<20} {n_pts:>4} 点")
+    except (ValueError, OSError):
+        return f"{path}（不可读）"
 
 
 def load_from_file(path: Path) -> dict:
@@ -243,23 +258,43 @@ def render(data: dict) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="压测大屏预览（F1 同源 ECharts）")
-    ap.add_argument("--data", help="timeseries.json 路径（缺省自动找最新）")
+    ap.add_argument("--data", help="timeseries.json 路径（直接指定）")
     ap.add_argument("--run-id", help="从 aite 库读取指定 run（summaries 全量）")
     ap.add_argument("--demo", action="store_true", help="合成演示数据（四档阶梯+故障窗口）")
+    ap.add_argument("--list", action="store_true", help="仅列出可用数据源")
+    ap.add_argument("--pick", type=int, help="选择清单序号（1=最新，配合无 --data 使用）")
     ap.add_argument("--db", default="sqlite+aiosqlite:///./aite.db", help="storage url")
-    ap.add_argument("--out", default=OUT_DEFAULT, help="输出 HTML 路径")
+    ap.add_argument("--out", help="输出 HTML 路径（缺省 perf_dashboard_<run名>.html）")
     args = ap.parse_args()
 
     if args.demo:
         data = make_demo_data()
+        out = args.out or "perf_dashboard_demo.html"
     elif args.run_id:
         data = load_from_db(args.run_id, args.db)
+        out = args.out or f"perf_dashboard_{data.get('run_name', 'run')}.html"
+    elif args.data:
+        data = load_from_file(Path(args.data))
+        out = args.out or f"perf_dashboard_{data.get('run_name', 'run')}.html"
     else:
-        path = Path(args.data) if args.data else latest_timeseries()
-        if path is None or not path.is_file():
-            raise SystemExit("未找到 timeseries.json——先跑一次压测，或用 --data/--demo")
+        hits = find_all_timeseries()
+        if not hits:
+            raise SystemExit("未找到任何 timeseries.json——先跑一次压测，或用 --demo")
+        print("可用的压测数据（最新在前）：")
+        for i, p in enumerate(hits, 1):
+            print(f"  [{i}] {describe(p)}")
+        if args.list:
+            return
+        if args.pick:
+            idx = args.pick
+        else:
+            raw = input(f"选择序号 [1-{len(hits)}，回车=1]: ").strip()
+            idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(hits) else 1
+        path = hits[idx - 1]
         data = load_from_file(path)
-    out = Path(args.out)
+        out = args.out or f"perf_dashboard_{data.get('run_name', 'run')}.html"
+
+    out = Path(args.out or out)
     out.write_text(render(data), encoding="utf-8")
     print(f"已生成: {out}（浏览器打开查看）")
 

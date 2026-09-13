@@ -522,7 +522,8 @@ class LocustAdapter(ToolAdapter):
                     threshold=req.metric_thresholds.get(metric),
                     higher_is_better=True))
 
-        timeseries = {"engine": self.name, "bucket_seconds": 1.0,
+        timeseries = {"engine": self.name, "run_name": req.run_name,
+                      "bucket_seconds": 1.0,
                       "series": _history_series(Path(cfg["output_dir"])),
                       "combined": _combined_series(Path(cfg["output_dir"])),
                       "errors": _errors_summary(out.failures)}

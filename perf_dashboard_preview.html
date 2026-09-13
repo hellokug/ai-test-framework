@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
-<title>压测大屏预览 — perf-qwen</title>
+<title>压测大屏预览 — agent-perf</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
 body{font-family:system-ui,sans-serif;background:#f0f2f5;margin:16px}
@@ -21,7 +21,7 @@ td,th{border:1px solid #e8eaee;padding:4px 8px}
  <div class="card"><h3>错误统计</h3><div id="err" class="chart" style="height:200px"></div></div>
  <div class="card"><h3>档级汇总</h3><div id="tbl"></div></div>
 </div>
-<script>window.__D__ = {"engine": "evalscope-perf", "bucket_seconds": 5.0, "series": [{"users": 70, "run": 0, "label": "perf:c70", "points": [{"t": 0.0, "ttft_avg": 1505.3, "ttft_p95": 2590.4, "latency_avg": 4478.2, "latency_p95": 6319.9, "tpot_avg": 38.1, "tpot_p95": 38.1, "itl_avg": 37.9, "rps": 0.4, "tok_s": 31.6, "errors": 0}, {"t": 5.0, "ttft_avg": 7779.7, "ttft_p95": 8660.1, "latency_avg": 9523.7, "latency_p95": 10469.4, "tpot_avg": 38.8, "tpot_p95": 38.7, "itl_avg": 38.8, "rps": 0.4, "tok_s": 18.4, "errors": 0}]}], "combined": [{"t": 0.0, "ttft_avg": 1505.3, "ttft_p95": 2590.4, "latency_avg": 4478.2, "latency_p95": 6319.9, "tpot_avg": 38.1, "tpot_p95": 38.1, "itl_avg": 37.9, "rps": 0.4, "tok_s": 31.6, "errors": 0, "users": 70}, {"t": 5.0, "ttft_avg": 7779.7, "ttft_p95": 8660.1, "latency_avg": 9523.7, "latency_p95": 10469.4, "tpot_avg": 38.8, "tpot_p95": 38.7, "itl_avg": 38.8, "rps": 0.4, "tok_s": 18.4, "errors": 0, "users": 70}], "errors": [], "run_name": "perf-qwen", "run_id": "", "status": "passed", "chaos_events": [], "summaries": []};</script>
+<script>window.__D__ = {"engine": "evalscope-perf", "bucket_seconds": 5.0, "series": [{"users": 2, "run": 0, "label": "fake:c2", "points": [{"t": 0, "ttft_avg": 100.0, "ttft_p95": 200.0, "latency_avg": 900.0, "latency_p95": 1100.0, "rps": 2.0, "tok_s": 40.0, "errors": 0, "ts": 1789308111.234}]}], "errors": [], "run_name": "agent-perf", "run_id": "", "status": "passed", "chaos_events": [], "summaries": []};</script>
 <script>
 const D = window.__D__;
 const pts = D.combined && D.combined.length ? D.combined
@@ -29,7 +29,9 @@ const pts = D.combined && D.combined.length ? D.combined
 document.getElementById("meta").innerHTML =
   `<span class="badge" style="background:${D.status === "passed" ? "#16a34a" : "#d97706"}">${D.status}</span>` +
   ` <b>${D.run_name}</b> <span style="color:#8a919f">${D.engine} · ${D.series.length} 档 · ${pts.length} 点</span>`;
-const x = pts.map(p => p.t);
+// x 轴：优先墙钟时间戳（ts epoch 秒 → ms），无 ts 的旧数据回落相对秒
+const USE_WALL = pts.length && pts[0].ts !== undefined;
+const x = pts.map(p => USE_WALL ? p.ts * 1000 : p.t);
 const chaosWindows = [];
 if (D.chaos_events && D.chaos_events.length) {
   let start = null;
@@ -43,17 +45,23 @@ if (D.chaos_events && D.chaos_events.length) {
   }
 }
 const mk = (id, opt) => echarts.init(document.getElementById(id)).setOption(opt);
+// 时间轴：墙钟模式 type=time（HH:MM，1/5min 自动刻度）；旧数据相对秒
+const xaxis = USE_WALL
+  ? {type: "time",
+     axisLabel: {formatter: "{HH}:{mm}"},
+     splitLine: {show: true}}
+  : {type: "value", name: "s"};
 const axis = (name) => ({type: "value", name});
 function lineChart(id, title, seriesDef, markChaos) {
   const opt = {tooltip: {trigger: "axis"}, legend: {top: 0},
     grid: {left: 50, right: 20, top: 30, bottom: 25},
-    xAxis: {type: "value", name: "s"}, series: seriesDef};
+    xAxis: xaxis, series: seriesDef};
   if (chaosWindows.length) {
     opt.series = opt.series.map(s => ({...s, markArea: {silent: true, data: chaosWindows}}));
   }
   mk(id, {tooltip: {trigger: "axis"}, legend: {top: 0},
           grid: {left: 50, right: 20, top: 30, bottom: 25},
-          xAxis: {...axis("s"), type: "value"}, yAxis: seriesDef.length > 1 && seriesDef[1].yAxisIndex ? [axis(title), axis(seriesDef[1].name)] : axis(title),
+          xAxis: xaxis, yAxis: seriesDef.length > 1 && seriesDef[1].yAxisIndex ? [axis(title), axis(seriesDef[1].name)] : axis(title),
           series: seriesDef});
 }
 lineChart("ttft", "ms", [
@@ -65,9 +73,9 @@ lineChart("tpot", "ms", [
   {name: "TPOT p95", type: "line", showSymbol: false, lineStyle: {type: "dashed"},
    data: x.map((t, i) => [t, pts[i].tpot_p95])},
   {name: "ITL avg", type: "line", showSymbol: false, data: x.map((t, i) => [t, pts[i].itl_avg])}], true);
-mk("lat", {tooltip: {trigger: "axis"}, legend: {top: 0},
+mk("lat", {tooltip: {trigger: "axis", formatter: USE_WALL ? (ps => new Date(ps[0].value).toTimeString().slice(0, 5) + " " + ps[0].value[1]) : undefined}, legend: {top: 0},
   grid: {left: 50, right: 55, top: 30, bottom: 25},
-  xAxis: {type: "value", name: "s"},
+  xAxis: xaxis,
   yAxis: [axis("ms"), axis("rps")],
   series: [
     {name: "Latency p95", type: "line", showSymbol: false,
@@ -76,7 +84,7 @@ mk("lat", {tooltip: {trigger: "axis"}, legend: {top: 0},
      data: x.map((t, i) => [t, pts[i].rps])}]});
 mk("tps", {tooltip: {trigger: "axis"}, legend: {top: 0},
   grid: {left: 55, right: 55, top: 30, bottom: 25},
-  xAxis: {type: "value", name: "s"},
+  xAxis: xaxis,
   yAxis: [axis("tok/s"), axis("users")],
   series: [
     {name: "tok/s", type: "line", showSymbol: false,

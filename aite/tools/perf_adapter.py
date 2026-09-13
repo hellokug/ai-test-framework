@@ -499,7 +499,8 @@ class PerfAdapter(ToolAdapter):
         out = ToolRunResult()
         grouped = _group_summaries(Path(cfg["output_dir"]))
         bucket = _resolve_bucket(cfg)
-        timeseries: dict = {"engine": self.name, "bucket_seconds": bucket,
+        timeseries: dict = {"engine": self.name, "run_name": req.run_name,
+                            "bucket_seconds": bucket,
                             "series": [], "combined": [], "errors": []}
 
         def _label_key(item):
