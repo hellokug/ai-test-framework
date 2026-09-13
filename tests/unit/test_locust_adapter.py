@@ -128,6 +128,14 @@ class TestWriteLoad:
             encoding="utf-8").splitlines()
         assert len(lines) == 3
 
+    def test_write_load_creates_missing_workdir(self, tmp_path):
+        """回归：work_dir 多级不存在时写入不炸（真实 run 首次创建目录）。"""
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path / "deep" / "nested" / "run-dir"))
+        LocustAdapter()._write_load(cfg)
+        assert (tmp_path / "deep" / "nested" / "run-dir" / "locustfile.py").is_file()
+        assert (tmp_path / "deep" / "nested" / "run-dir" / "load" / "prompts.txt").is_file()
+
     def test_locustfile_reads_env(self, tmp_path):
         cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
         LocustAdapter()._write_load(cfg)

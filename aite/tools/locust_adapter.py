@@ -266,6 +266,7 @@ class LocustAdapter(ToolAdapter):
 
     def _write_load(self, cfg: dict) -> None:
         """负载落盘：locustfile + 逐行 prompt 文件（dataset/prompt/synthetic 统一）。"""
+        Path(cfg["locustfile"]).parent.mkdir(parents=True, exist_ok=True)
         Path(cfg["locustfile"]).write_text(_LOCUSTFILE_TEMPLATE, encoding="utf-8")
         dest = Path(cfg["prompts_file"])
         if cfg["dataset"]:
