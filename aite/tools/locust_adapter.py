@@ -567,6 +567,15 @@ class LocustAdapter(ToolAdapter):
             metrics["tpot_ms"] = _num(tpot, "Average Response Time")
             metrics["tpot_p95_ms"] = _num(tpot, "95%")
         # output_tps（全局口径）由 run_tool_suite 后置注入（tokens 文件聚合）
+        # ITL/TPOT 失真门槛（宁缺毋错）：高并发下客户端读缓冲批量到达 SSE 行，
+        # 块间隔被压缩到微秒级（avg < 1ms）——此时 ITL/TPOT 不可信，不入库
+        degraded = [name for name in ("itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms")
+                    if metrics.get(name) is not None and metrics[name] < 1.0]
+        for name in degraded:
+            metrics.pop(name)
+        if degraded:
+            logger.warning("locust %s: ITL/TPOT 均值 < 1ms（高并发下读缓冲批量到达"
+                           "SSE 行，客户端观测失真），本轮不入库", label)
         for name, value in metrics.items():
             if value is None:
                 continue

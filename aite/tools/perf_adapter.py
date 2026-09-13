@@ -117,6 +117,16 @@ def _sla_params_json(sla: dict) -> str:
     return json.dumps([{k: f"< {v}" for k, v in sla.items()}])
 
 
+_TOKEN_TIMING_FLOOR_MS = 1.0   # ITL/TPOT 失真门槛：avg < 1ms = 读缓冲批量到达
+
+
+def _gated(value: float | None) -> float | None:
+    """token 时延失真门槛（宁缺毋错）：正常 LLM ITL/TPOT ≥ 数 ms。"""
+    if value is None:
+        return None
+    return None if value < _TOKEN_TIMING_FLOOR_MS else value
+
+
 def _quantile(sorted_vals: list[float], q: float) -> float | None:
     """线性插值分位数（与 numpy 默认插值一致）。"""
     if not sorted_vals:
@@ -193,10 +203,11 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
             "ttft_p95": _ms(b["ttft"], avg=False),
             "latency_avg": _ms(b["latency"], avg=True),
             "latency_p95": _ms(b["latency"], avg=False),
-            "tpot_avg": _ms(b["tpot"], avg=True),
-            "tpot_p95": _ms(b["tpot"], avg=False),
-            "itl_avg": (round(b["itl_sum"] / b["itl_n"], 1)
-                        if b["itl_n"] else None),
+            # tpot/itl 失真门槛：<1ms 为读缓冲批量到达（观测失真），置 None
+            "tpot_avg": _gated(_ms(b["tpot"], avg=True)),
+            "tpot_p95": _gated(_ms(b["tpot"], avg=False)),
+            "itl_avg": _gated(round(b["itl_sum"] / b["itl_n"], 1)
+                              if b["itl_n"] else None),
             "rps": round(b["n"] / bucket, 3),
             "tok_s": round(b["tokens"] / bucket, 1),
             "errors": b["errors"],
@@ -386,6 +397,10 @@ def _level_metrics(items: list[tuple[dict, dict, Path]]) -> tuple[dict, int]:
                  for d, _p, _path, _users in items)
     if total:
         metrics["error_rate"] = failed / total
+    # ITL/TPOT 失真门槛：高并发读缓冲批量到达时 ≈0（宁缺毋错）
+    for name in ("itl_ms", "tpot_ms"):
+        if metrics.get(name) is not None and metrics[name] < _TOKEN_TIMING_FLOOR_MS:
+            metrics[name] = None
     return metrics, total
 
 
