@@ -96,6 +96,8 @@ _SUMMARY_METRICS = {
 _PERCENTILE_METRICS = {   # benchmark_percentile.json（取 95% 行，秒→毫秒）
     "ttft_p95_ms": ("TTFT (ms)", 1.0),
     "latency_p95_ms": ("Latency (s)", 1000.0),
+    "tpot_p95_ms": ("TPOT (ms)", 1.0),
+    "itl_p95_ms": ("ITL (ms)", 1.0),
 }
 # 越低越好（阈值方向 <=）：延迟/首 token/错误率；qps/output_tps 越高越好
 _LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "tpot_ms", "itl_ms",
@@ -143,7 +145,8 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
     try:
         rows = conn.execute(
             "SELECT completed_time, latency, first_chunk_latency, success,"
-            " completion_tokens FROM result ORDER BY completed_time").fetchall()
+            " completion_tokens, time_per_output_token, inter_token_latencies"
+            " FROM result ORDER BY completed_time").fetchall()
     except sqlite3.Error:
         return None
     finally:
@@ -152,10 +155,11 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
         return None
     t0 = rows[0][0]
     buckets: dict[int, dict] = {}
-    for completed, latency, ttft, ok, tokens in rows:
+    for completed, latency, ttft, ok, tokens, tpot, itl_json in rows:
         idx = int(max((completed or 0) - t0, 0.0) // bucket)
         b = buckets.setdefault(idx, {"n": 0, "errors": 0, "tokens": 0.0,
-                                     "ttft": [], "latency": []})
+                                     "ttft": [], "latency": [], "tpot": [],
+                                     "itl_sum": 0.0, "itl_n": 0})
         b["n"] += 1
         b["tokens"] += float(tokens or 0)
         if ok:
@@ -163,6 +167,15 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
                 b["ttft"].append(float(ttft) * 1000.0)   # 秒 → 毫秒
             if latency is not None:
                 b["latency"].append(float(latency) * 1000.0)
+            if tpot is not None:
+                b["tpot"].append(float(tpot) * 1000.0)
+            if itl_json:
+                try:
+                    for iv in json.loads(itl_json):
+                        b["itl_sum"] += float(iv) * 1000.0
+                        b["itl_n"] += 1
+                except ValueError:
+                    pass
         else:
             b["errors"] += 1
 
@@ -180,6 +193,10 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
             "ttft_p95": _ms(b["ttft"], avg=False),
             "latency_avg": _ms(b["latency"], avg=True),
             "latency_p95": _ms(b["latency"], avg=False),
+            "tpot_avg": _ms(b["tpot"], avg=True),
+            "tpot_p95": _ms(b["tpot"], avg=False),
+            "itl_avg": (round(b["itl_sum"] / b["itl_n"], 1)
+                        if b["itl_n"] else None),
             "rps": round(b["n"] / bucket, 3),
             "tok_s": round(b["tokens"] / bucket, 1),
             "errors": b["errors"],

@@ -80,23 +80,31 @@ def _history_series(output_dir: Path) -> list[dict]:
         by_ts: dict[float, dict] = {}
         for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
             rtype = hrow.get("Type")
-            if rtype not in ("POST", "TTFT"):
+            if rtype not in ("POST", "TTFT", "TPOT", "ITL"):
                 continue
             ts = _num(hrow, "Timestamp")
             if ts is None:
                 continue
             b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
-                                      "errors": 0.0, "tok_s": 0.0})
+                                      "errors": 0.0, "tok_s": 0.0,
+                                      "tpot_avg": [], "tpot_p95": [],
+                                      "itl_avg": [], "itl_p95": []})
             if rtype == "POST":
                 b["rps"] += _num(hrow, "Requests/s") or 0.0
                 b["errors"] += _num(hrow, "Failures/s") or 0.0
                 for col in ("50%", "95%"):
                     if _num(hrow, col) is not None:
                         b["latency"].append(_num(hrow, col))
-            else:
+            elif rtype == "TTFT":
                 for col in ("50%", "95%"):
                     if _num(hrow, col) is not None:
                         b["ttft"].append(_num(hrow, col))
+            else:                      # TPOT / ITL：50% 列 → avg，95% 列 → p95
+                key = rtype.lower()
+                if _num(hrow, "50%") is not None:
+                    b[f"{key}_avg"].append(_num(hrow, "50%"))
+                if _num(hrow, "95%") is not None:
+                    b[f"{key}_p95"].append(_num(hrow, "95%"))
         for sec, tokens in tokens_by_sec.items():   # token 吞吐并入秒桶
             b = by_ts.setdefault(sec, {"ttft": [], "latency": [], "rps": 0.0,
                                        "errors": 0.0, "tok_s": 0.0})
@@ -164,13 +172,17 @@ def _tokens_by_sec_all(output_dir: Path) -> dict[int, float]:
 
 
 def _point(ts: float, b: dict, t0: float) -> dict:
-    """秒级时序点：POST 行的 rps/延迟分位 + TTFT 行分位 + token 吞吐（tok_s）。"""
+    """秒级时序点：POST 行 rps/延迟分位 + TTFT/TPOT/ITL 行分位 + token 吞吐。"""
     return {
         "t": round(ts - t0, 3),
         "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
         "ttft_p95": round(max(b["ttft"]), 1) if b["ttft"] else None,
         "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
         "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
+        "tpot_avg": round(sum(b["tpot_avg"]) / len(b["tpot_avg"]), 1) if b["tpot_avg"] else None,
+        "tpot_p95": round(max(b["tpot_p95"]), 1) if b["tpot_p95"] else None,
+        "itl_avg": round(sum(b["itl_avg"]) / len(b["itl_avg"]), 1) if b["itl_avg"] else None,
+        "itl_p95": round(max(b["itl_p95"]), 1) if b["itl_p95"] else None,
         "rps": round(b["rps"], 3),
         "tok_s": round(b["tok_s"], 1) if b.get("tok_s") else None,
         "errors": int(b["errors"]),

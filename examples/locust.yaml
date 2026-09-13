@@ -14,13 +14,13 @@ target:
 
 perf:                              # 复用 evalscope-perf 的 perf 配置段（同键同语义）
   dataset: ./examples/data/business_qa.jsonl   # 或 prompt: 固定提示词（二选一）
-  max_tokens: 128                  # 标量定长（locust 侧无区间采样）
+  max_tokens: 1024                  # 标量定长（locust 侧无区间采样）
 
   mode: baseline                   # baseline / ramp / soak（probe 不支持——SLA 二分
-  baseline: {parallel: 8}          #   搜索是 evalscope perf 专有，配置即报错）
+  baseline: {parallel: 512}          #   搜索是 evalscope perf 专有，配置即报错）
 #  ramp: {from: 1, to: 20, step: 2}
 
-  duration: 120                    # 整场总时长（秒）；多档均分每档。
+  duration: 20                    # 整场总时长（秒）；多档均分每档。
                                    #   与 level_duration 二选一；locust 必配其一
                                    #   （无请求数上限语义，number 配了忽略）
 #  level_duration: 60            # 每档固定秒数

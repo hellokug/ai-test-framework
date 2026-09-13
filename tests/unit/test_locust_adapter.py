@@ -355,6 +355,12 @@ class TestCollect:
             {"Timestamp": "100", "User Count": "4", "Type": "TTFT",
              "Name": "POST /chat/completions", "Requests/s": "2.0",
              "Failures/s": "0.0", "50%": "500", "95%": "1000"},
+            {"Timestamp": "100", "User Count": "4", "Type": "TPOT",
+             "Name": "POST /chat/completions", "Requests/s": "2.0",
+             "Failures/s": "0.0", "50%": "90", "95%": "180"},
+            {"Timestamp": "100", "User Count": "4", "Type": "ITL",
+             "Name": "POST /chat/completions", "Requests/s": "2.0",
+             "Failures/s": "0.0", "50%": "70", "95%": "140"},
             {"Timestamp": "101", "User Count": "4", "Type": "POST",
              "Name": "POST /chat/completions", "Requests/s": "3.0",
              "Failures/s": "0.0", "50%": "9000", "95%": "15000"},
@@ -378,6 +384,10 @@ class TestCollect:
         assert p0["errors"] == 1
         assert p0["ttft_avg"] == pytest.approx(750.0)             # (500+1000)/2
         assert p1["t"] == 1 and p1["rps"] == pytest.approx(3.0)
+        assert p0["tpot_avg"] == pytest.approx(90.0)
+        assert p0["tpot_p95"] == pytest.approx(180.0)
+        assert p0["itl_avg"] == pytest.approx(70.0)
+        assert p0["itl_p95"] == pytest.approx(140.0)
         assert ts["errors"] == [{"key": "HTTPError('HTTP 429')", "count": 3}]
         assert "timeseries.json" in result.report_files
 

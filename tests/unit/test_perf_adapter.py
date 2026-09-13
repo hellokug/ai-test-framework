@@ -417,12 +417,15 @@ class TestDatasetLoad:
         conn = sqlite3.connect(d / "benchmark_data.db")
         conn.execute("CREATE TABLE result (start_time REAL, completed_time REAL,"
                      " latency REAL, first_chunk_latency REAL, success INT,"
-                     " completion_tokens INT)")
+                     " completion_tokens INT, time_per_output_token REAL,"
+                     " inter_token_latencies TEXT)")
         # 0-5s 桶：2 成功（ttft 0.1/0.3s，latency 1/2s，54 tok）+1 失败；5-10s 桶：1 成功
         conn.executemany(
-            "INSERT INTO result VALUES (?,?,?,?,?,?)",
-            [(0.0, 1.0, 1.0, 0.1, 1, 54), (1.0, 2.5, 1.5, 0.3, 1, 54),
-             (2.0, 3.0, 0.5, None, 0, 0), (6.0, 7.0, 1.0, 0.2, 1, 60)])
+            "INSERT INTO result VALUES (?,?,?,?,?,?,?,?)",
+            [(0.0, 1.0, 1.0, 0.1, 1, 54, 0.012, "[10,20,30]"),
+             (1.0, 2.5, 1.5, 0.3, 1, 54, 0.014, "[40,50]"),
+             (2.0, 3.0, 0.5, None, 0, 0, None, None),
+             (6.0, 7.0, 1.0, 0.2, 1, 60, 0.016, "[60,70,80]")])
         conn.commit()
         conn.close()
         result = PerfAdapter().collect(make_request(work_dir=tmp_path))
@@ -463,8 +466,10 @@ SUMMARY = {
     "Avg Input Tokens": 43.0, "Avg Output Tokens": 54.0,
 }
 PERCENTILE = [
-    {"Percentiles": "50%", "Latency (s)": 10.92, "TTFT (ms)": 7405.51},
-    {"Percentiles": "95%", "Latency (s)": 14.55, "TTFT (ms)": 11042.56},
+    {"Percentiles": "50%", "Latency (s)": 10.92, "TTFT (ms)": 7405.51,
+     "TPOT (ms)": 100.0, "ITL (ms)": 95.0},
+    {"Percentiles": "95%", "Latency (s)": 14.55, "TTFT (ms)": 11042.56,
+     "TPOT (ms)": 180.0, "ITL (ms)": 150.0},
 ]  # noqa: E501
 
 
@@ -534,6 +539,8 @@ class TestCollect:
         assert by_metric["latency_avg_ms"].value == pytest.approx(9100)
         assert by_metric["latency_p95_ms"].value == pytest.approx(14550)  # 秒→毫秒
         assert by_metric["ttft_p95_ms"].value == pytest.approx(11042.56)
+        assert by_metric["tpot_p95_ms"].value == pytest.approx(180.0)
+        assert by_metric["itl_p95_ms"].value == pytest.approx(150.0)
         assert by_metric["qps"].value == pytest.approx(0.55)
         assert by_metric["output_tps"].value == pytest.approx(8.8)
         assert by_metric["avg_input_tokens"].value == pytest.approx(43.0)

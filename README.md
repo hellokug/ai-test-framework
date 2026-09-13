@@ -271,6 +271,23 @@ tools:
 （每档 summary/percentile json、sla_summary、performance_summary.txt、
 perf_report.html、执行日志）。
 
+**两引擎指标对齐表**（F1 大屏/表单的权威依据；档级行 + locust 全场行
+`locust:total`）：
+
+| 指标 | 含义 | avg | p95 |
+|---|---|---|---|
+| `ttft_ms` | 首 token 延迟 | ✅ | ✅ |
+| `tpot_ms` | 每输出 token 时间（生成段均摊） | ✅ | ✅ |
+| `itl_ms` | token 间延迟（生成平滑度，token 级样本） | ✅ | ✅ |
+| `latency_ms` | 端到端响应时间 | ✅ | ✅ |
+| `qps` / `output_tps` | 请求吞吐 / token 吞吐（全局 Σ/Σ） | ✅ | — |
+| `avg_input_tokens` / `avg_output_tokens` | 平均输入/输出长度 | ✅ | — |
+| `error_rate` | 失败率 + 错误明细（错误文本×次数） | ✅ | — |
+
+时序点形状（`/runs/{id}/timeseries`，两引擎一致）：`{t, users, ttft_avg,
+ttft_p95, latency_avg, latency_p95, tpot_avg, tpot_p95, itl_avg, rps, tok_s,
+errors}`。
+
 **阶梯曲线**（timeseries `combined` 字段）：多档 sweep 的时间演进全景——各档
 按执行序拼接为一条绝对时间轴曲线（`{t, users, rps, tok_s, ttft_p95,
 latency_p95, errors}`，users 随档位阶梯变化），一张图看完整个爬坡过程；各档
