@@ -86,7 +86,7 @@ def _history_series(output_dir: Path) -> list[dict]:
         by_ts: dict[float, dict] = {}
         for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
             rtype = hrow.get("Type")
-            if rtype not in ("POST", "TTFT", "TPOT", "ITL"):
+            if rtype not in ("POST", "TTFT", "TPOT", "ITL", "LATENCY"):
                 continue
             ts = _num(hrow, "Timestamp")
             if ts is None:
@@ -95,6 +95,7 @@ def _history_series(output_dir: Path) -> list[dict]:
             if rtype == "POST":
                 b["rps"] += _num(hrow, "Requests/s") or 0.0
                 b["errors"] += _num(hrow, "Failures/s") or 0.0
+            elif rtype == "LATENCY":
                 for col in ("50%", "95%"):
                     if _num(hrow, col) is not None:
                         b["latency"].append(_num(hrow, col))
@@ -262,12 +263,16 @@ class ChatUser(HttpUser):
     @task
     def chat(self):
         payload = {"model": MODEL, "stream": STREAM,
+                   "stream_options": {"include_usage": True},
                    "messages": [{"role": "user", "content": self._next_prompt()}]}
         if MAX_TOKENS:
             payload["max_tokens"] = int(MAX_TOKENS)
         t0 = time.perf_counter()
+        # stream=True：真流式观测（TTFT/ITL/TPOT 的前提）——False 时响应
+        # 完整缓冲后一次读取，所有到达间隔为 0（观测全废）
         with self.client.post(URL, json=payload, name="POST /chat/completions",
-                              catch_response=True, timeout=300) as resp:
+                              catch_response=True, timeout=300,
+                              stream=True) as resp:
             if resp.status_code != 200:
                 resp.failure(f"HTTP {resp.status_code}: {resp.text[:200]}")
                 return
@@ -278,10 +283,12 @@ class ChatUser(HttpUser):
             resp.success()
 
     def _stream_metrics(self, resp, t0: float):
-        """流式逐块采集：TTFT / ITL（块间隔）/ TPOT / TPS（请求级 tok/s）。
+        """流式逐块采集：TTFT / ITL（块间隔）/ TPOT / tok/s 记录。
 
         token 数取 usage.completion_tokens（端点回传 usage 时精确），否则以
         chunk 数近似（主流推理服务 1 chunk ≈ 1 token）。
+        ITL/TPOT 仅在真流式（逐 token 到达）时产生：网关缓冲型端点整个响应
+        瞬间到达，块间隔为微秒级噪声——不满足逐 token 特征的不 fire（宁缺毋错）。
         """
         ttft_ms = None
         prev_ms = None
@@ -294,7 +301,8 @@ class ChatUser(HttpUser):
             now_ms = (time.perf_counter() - t0) * 1000.0
             if ttft_ms is None:
                 ttft_ms = now_ms
-            elif prev_ms is not None:
+            elif prev_ms is not None and now_ms - prev_ms >= 1.0:
+                # 间隔 <1ms = 读缓冲批量解包噪声（非真实 token 到达），不上报
                 self._fire("ITL", now_ms - prev_ms)
             prev_ms = now_ms
             chunk_count += 1
@@ -312,13 +320,16 @@ class ChatUser(HttpUser):
                     pass
         if ttft_ms is None or prev_ms is None:
             return
-        self._fire("TTFT", ttft_ms)
+        self._fire("LATENCY", prev_ms)     # 端到端 = 最后一块到达（stream 下
+        self._fire("TTFT", ttft_ms)        #   resp.elapsed 只是 TTFB 口径）
         tokens = completion_tokens if completion_tokens else max(chunk_count - 1, 1)
         gen_ms = prev_ms - ttft_ms            # 生成段时长（首 token 之后）
         if gen_ms > 0 and tokens > 1:
-            # evalscope 公式：生成段时长 / (token 数 - 1)（首 token 计入 TTFT）
-            self._fire("TPOT", gen_ms / (tokens - 1))              # ms / token
             _record_tokens(tokens, gen_ms, prompt_tokens)          # 吞吐+长度数据源
+            # 真流式判定（与入库失真门槛同口径）：均摊 <1ms/token = 批量到达，
+            # TPOT 为噪声不 fire
+            if gen_ms / (tokens - 1) >= 1.0:
+                self._fire("TPOT", gen_ms / (tokens - 1))          # ms / token
 
     def _json_metrics(self, resp, t0: float):
         """非流式：整段均摊口径的 TPOT（无 TTFT/ITL，与 evalscope 一致）。"""
@@ -547,16 +558,20 @@ class LocustAdapter(ToolAdapter):
         by_type: dict[str, dict] = {}
         for r in rows:
             rtype = r.get("Type")
-            if rtype in ("TTFT", "ITL", "TPOT", "TOKPS") and rtype not in by_type:
+            if rtype in ("TTFT", "ITL", "TPOT", "LATENCY") and rtype not in by_type:
                 by_type[rtype] = r
         total = _num(agg, "Request Count") or 0
         failed = _num(agg, "Failure Count") or 0
         metrics = {
-            "latency_avg_ms": _num(agg, "Average Response Time"),
-            "latency_p95_ms": _num(agg, "95%"),
             "qps": _num(agg, "Requests/s"),
             "error_rate": (failed / total) if total else None,
         }
+        # 延迟：LATENCY 事件行（stream=True 下 POST 原生统计≈TTFB 口径），
+        # 无 LATENCY 行兜底 POST/Aggregated
+        lat_row = by_type.get("LATENCY") or agg
+        if lat_row is not None:
+            metrics["latency_avg_ms"] = _num(lat_row, "Average Response Time")
+            metrics["latency_p95_ms"] = _num(lat_row, "95%")
         ttft = by_type.get("TTFT")
         if ttft is not None:   # 非流式无 TTFT 行 → 跳过（口径同 perf：None 不入库）
             metrics["ttft_ms"] = _num(ttft, "Average Response Time")

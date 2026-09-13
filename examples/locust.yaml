@@ -7,9 +7,9 @@ engine: locust                     # 与 evalscope-perf 并列：非 OpenAI 端�
 
 target:
   type: openai_compatible
-  base_url: https://api.deepseek.com/v1     # 云端 API 示例；本地 Ollama 换回
-  model: deepseek-chat                      #   http://localhost:11434/v1 + qwen2.5:3b
-  api_key_env: DEEPSEEK_API_KEY             # 密钥走环境变量（禁止明文入配置/git）
+  base_url: http://localhost:11434/v1     # 云端 API 示例；本地 Ollama 换回
+  model: qwen2.5:3b                      #   http://localhost:11434/v1 + qwen2.5:3b
+#  api_key_env: DEEPSEEK_API_KEY             # 密钥走环境变量（禁止明文入配置/git）
                                             #   set DEEPSEEK_API_KEY=sk-xxx 后运行
 
 perf:                              # 复用 evalscope-perf 的 perf 配置段（同键同语义）
@@ -17,10 +17,10 @@ perf:                              # 复用 evalscope-perf 的 perf 配置段（
   max_tokens: 1024                  # 标量定长（locust 侧无区间采样）
 
   mode: baseline                   # baseline / ramp / soak（probe 不支持——SLA 二分
-  baseline: {parallel: 512}          #   搜索是 evalscope perf 专有，配置即报错）
+  baseline: {parallel: 8}          #   搜索是 evalscope perf 专有，配置即报错）
 #  ramp: {from: 1, to: 20, step: 2}
 
-  duration: 20                    # 整场总时长（秒）；多档均分每档。
+  duration: 300                    # 整场总时长（秒）；多档均分每档。
                                    #   与 level_duration 二选一；locust 必配其一
                                    #   （无请求数上限语义，number 配了忽略）
 #  level_duration: 60            # 每档固定秒数
