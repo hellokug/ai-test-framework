@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from aite.tools.base import ToolRunRequest
-from aite.tools.locust_adapter import LocustAdapter, _history_series
+from aite.tools.locust_adapter import LocustAdapter, _combined_series, _history_series
 from aite.tools.perf_common import expand_ramp
 
 
@@ -135,6 +135,50 @@ class TestTokenOnlySeconds:
         assert pts[5.0]["tok_s"] == 500.0
         assert pts[5.0]["rps"] == 0.0                  # 纯 token 桶其余字段安全
         assert pts[5.0]["tpot_avg"] is None
+
+
+class TestCombinedSeries:
+    def test_combined_full_metrics_shape(self, tmp_path):
+        """combined 阶梯曲线点形状与 series 对齐（全指标）——前端单一数据源。"""
+        agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "10",
+               "Failure Count": "0", "Average Response Time": "900",
+               "Requests/s": "1.0", "95%": "1200"}
+        raw = tmp_path / "locust_raw"
+        _write_stats(raw, 4, agg, ("560", "1100"))
+        hist_cols = ["Timestamp", "User Count", "Type", "Name", "Requests/s",
+                     "Failures/s", "50%", "95%"]
+        import csv as _csv
+        with (raw / "locust_u4_stats_history.csv").open("w", newline="",
+                                                        encoding="utf-8") as fh:
+            w = _csv.DictWriter(fh, fieldnames=hist_cols)
+            w.writeheader()
+            w.writerow({"Timestamp": "100", "User Count": "4", "Type": "POST",
+                        "Name": "x", "Requests/s": "2.0", "Failures/s": "0.0",
+                        "50%": "800", "95%": "900"})
+            w.writerow({"Timestamp": "100", "User Count": "4", "Type": "TTFT",
+                        "Name": "x", "Requests/s": "0", "Failures/s": "0",
+                        "50%": "500", "95%": "800"})
+            w.writerow({"Timestamp": "100", "User Count": "4", "Type": "TPOT",
+                        "Name": "x", "Requests/s": "0", "Failures/s": "0",
+                        "50%": "30", "95%": "55"})
+            w.writerow({"Timestamp": "100", "User Count": "4", "Type": "ITL",
+                        "Name": "x", "Requests/s": "0", "Failures/s": "0",
+                        "50%": "25", "95%": "45"})
+        (raw / "locust_u4_tokens.jsonl").write_text(
+            json.dumps({"t": 100.5, "tokens": 50, "gen_ms": 900}) + "\n",
+            encoding="utf-8")
+        combined = _combined_series(raw)
+        assert len(combined) == 1
+        pt = combined[0]
+        # 与 series 点形状一致（全指标），前端单一数据源
+        for key in ("t", "ts", "users", "ttft_avg", "ttft_p95", "latency_avg",
+                    "latency_p95", "tpot_avg", "tpot_p95", "itl_avg", "itl_p95",
+                    "rps", "tok_s", "errors"):
+            assert key in pt, key
+        assert pt["ttft_avg"] == pytest.approx(650.0)   # (500+800)/2
+        assert pt["tpot_avg"] == pytest.approx(30.0)    # (30+55)/2 → wait (30+55)/2=42.5? 30/55 为 50/95
+        assert pt["itl_p95"] == pytest.approx(45.0)
+        assert pt["tok_s"] == 50.0                      # 50 tokens / 1s
 
 
 class TestLocustfileSignatures:

@@ -1,0 +1,5 @@
+Timestamp,User Count,Type,Name,Requests/s,Failures/s,50%,95%
+100,4,POST,x,2.0,0,800,900
+100,4,TTFT,x,0,0,500,800
+100,4,TPOT,x,0,0,30,55
+100,4,ITL,x,0,0,25,45

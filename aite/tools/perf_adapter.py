@@ -172,7 +172,7 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> tuple[list[dict], float
         idx = int(max((completed or 0) - t0, 0.0) // bucket)
         b = buckets.setdefault(idx, {"n": 0, "errors": 0, "tokens": 0.0,
                                      "ttft": [], "latency": [], "tpot": [],
-                                     "itl_sum": 0.0, "itl_n": 0})
+                                     "itl": []})
         b["n"] += 1
         b["tokens"] += float(tokens or 0)
         if ok:
@@ -185,8 +185,7 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> tuple[list[dict], float
             if itl_json:
                 try:
                     for iv in json.loads(itl_json):
-                        b["itl_sum"] += float(iv) * 1000.0
-                        b["itl_n"] += 1
+                        b["itl"].append(float(iv) * 1000.0)
                 except ValueError:
                     pass
         else:
@@ -209,8 +208,8 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> tuple[list[dict], float
             # tpot/itl 失真门槛：<1ms 为读缓冲批量到达（观测失真），置 None
             "tpot_avg": _gated(_ms(b["tpot"], avg=True)),
             "tpot_p95": _gated(_ms(b["tpot"], avg=False)),
-            "itl_avg": _gated(round(b["itl_sum"] / b["itl_n"], 1)
-                              if b["itl_n"] else None),
+            "itl_avg": _gated(_ms(b["itl"], avg=True)),
+            "itl_p95": _gated(_ms(b["itl"], avg=False)),
             "rps": round(b["n"] / bucket, 3),
             "tok_s": round(b["tokens"] / bucket, 1),
             "errors": b["errors"],

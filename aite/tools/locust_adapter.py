@@ -70,7 +70,7 @@ def _num(row: dict, key: str) -> float | None:
 
 def _new_bucket() -> dict:
     """秒级聚合桶（单一结构定义——history 行与 token 记录两条合并路径共用）。"""
-    return {"ttft": [], "latency": [], "rps": 0.0, "errors": 0.0, "tok_s": 0.0,
+    return {"ttft": [], "latency": [], "rps": 0.0, "fails": 0.0, "tok_s": 0.0,
             "tpot_avg": [], "tpot_p95": [], "itl_avg": [], "itl_p95": []}
 
 
@@ -94,7 +94,7 @@ def _history_series(output_dir: Path) -> list[dict]:
             b = by_ts.setdefault(ts, _new_bucket())
             if rtype == "POST":
                 b["rps"] += _num(hrow, "Requests/s") or 0.0
-                b["errors"] += _num(hrow, "Failures/s") or 0.0
+                b["fails"] += _num(hrow, "Failures/s") or 0.0
             elif rtype == "LATENCY":
                 for col in ("50%", "95%"):
                     if _num(hrow, col) is not None:
@@ -143,28 +143,60 @@ def _tokens_by_sec(path: Path) -> dict[int, float]:
 
 def _combined_series(output_dir: Path) -> list[dict]:
     """绝对时间轴（stats_history 的 Timestamp 为 epoch 秒，各档进程同源时钟）
-    合并全部档位 → 一条完整阶梯曲线（users 随档位阶梯、指标连续）。"""
-    points = []
+    合并全部档位 → 一条完整阶梯曲线（users 随档位阶梯、指标连续）。
+
+    点形状与 series 点一致（全指标：ttft/latency/tpot/itl 分位、rps、tok_s）。
+    """
+    merged: dict[float, dict] = {}
     for history_path in sorted(output_dir.glob("*_stats_history.csv")):
         users = int(history_path.name[len("locust_u"):-len("_stats_history.csv")])
         for hrow in csv.DictReader(history_path.open(encoding="utf-8")):
-            if hrow.get("Type") != "POST":
+            rtype = hrow.get("Type")
+            if rtype not in ("POST", "LATENCY", "TTFT", "TPOT", "ITL"):
                 continue
             ts = _num(hrow, "Timestamp")
             if ts is None:
                 continue
-            points.append((ts, users, _num(hrow, "Requests/s") or 0.0,
-                           _num(hrow, "Failures/s") or 0.0,
-                           _num(hrow, "95%")))
-    if not points:
+            b = merged.setdefault(ts, {"users": users, "rps": 0.0, "fails": 0.0,
+                                       "latency": [], "ttft": [], "tpot_avg": [],
+                                       "tpot_p95": [], "itl_avg": [], "itl_p95": []})
+            b["users"] = users
+            if rtype == "POST":
+                b["rps"] += _num(hrow, "Requests/s") or 0.0
+                b["fails"] += _num(hrow, "Failures/s") or 0.0
+            elif rtype in ("LATENCY", "TTFT"):
+                key = "latency" if rtype == "LATENCY" else "ttft"
+                for col in ("50%", "95%"):
+                    if _num(hrow, col) is not None:
+                        b[key].append(_num(hrow, col))
+            else:                      # TPOT / ITL：50% 列 → avg，95% 列 → p95
+                key = rtype.lower()
+                if _num(hrow, "50%") is not None:
+                    b[f"{key}_avg"].append(_num(hrow, "50%"))
+                if _num(hrow, "95%") is not None:
+                    b[f"{key}_p95"].append(_num(hrow, "95%"))
+    if not merged:
         return []
-    points.sort(key=lambda r: r[0])
-    t0 = points[0][0]
     tok_by_sec = _tokens_by_sec_all(output_dir)
-    return [{"t": round(ts - t0, 3), "users": users, "rps": round(rps, 3),
-             "errors": int(fails), "latency_p95": round(p95, 1) if p95 else None,
-             "tok_s": round(tok_by_sec.get(ts, 0.0), 1) or None}
-            for ts, users, rps, fails, p95 in points]
+    t0 = min(merged)
+    out = []
+    for ts in sorted(merged):
+        b = merged[ts]
+        out.append({
+            "t": round(ts - t0, 3), "ts": round(ts, 3), "users": b["users"],
+            "ttft_avg": round(sum(b["ttft"]) / len(b["ttft"]), 1) if b["ttft"] else None,
+            "ttft_p95": round(max(b["ttft"]), 1) if b["ttft"] else None,
+            "latency_avg": round(sum(b["latency"]) / len(b["latency"]), 1) if b["latency"] else None,
+            "latency_p95": round(max(b["latency"]), 1) if b["latency"] else None,
+            "tpot_avg": round(sum(b["tpot_avg"]) / len(b["tpot_avg"]), 1) if b["tpot_avg"] else None,
+            "tpot_p95": round(max(b["tpot_p95"]), 1) if b["tpot_p95"] else None,
+            "itl_avg": round(sum(b["itl_avg"]) / len(b["itl_avg"]), 1) if b["itl_avg"] else None,
+            "itl_p95": round(max(b["itl_p95"]), 1) if b["itl_p95"] else None,
+            "rps": round(b["rps"], 3),
+            "tok_s": round(tok_by_sec.get(ts, 0.0), 1) or None,
+            "errors": int(b["fails"]),
+        })
+    return out
 
 
 def _tokens_by_sec_all(output_dir: Path) -> dict[int, float]:
@@ -190,7 +222,7 @@ def _point(ts: float, b: dict, t0: float) -> dict:
         "itl_p95": round(max(b["itl_p95"]), 1) if b["itl_p95"] else None,
         "rps": round(b["rps"], 3),
         "tok_s": round(b["tok_s"], 1) if b.get("tok_s") else None,
-        "errors": int(b["errors"]),
+        "errors": int(b["fails"]),
     }
 
 

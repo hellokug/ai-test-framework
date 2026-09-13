@@ -288,7 +288,10 @@ def main() -> None:
         if args.pick:
             idx = args.pick
         else:
-            raw = input(f"选择序号 [1-{len(hits)}，回车=1]: ").strip()
+            try:
+                raw = input(f"选择序号 [1-{len(hits)}，回车=1]: ").strip()
+            except EOFError:
+                raw = "1"          # 非交互环境（管道/CI）默认最新
             idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(hits) else 1
         path = hits[idx - 1]
         data = load_from_file(path)
