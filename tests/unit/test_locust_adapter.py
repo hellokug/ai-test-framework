@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from aite.tools.base import ToolRunRequest
-from aite.tools.locust_adapter import LocustAdapter
+from aite.tools.locust_adapter import LocustAdapter, _history_series
 from aite.tools.perf_common import expand_ramp
 
 
@@ -103,6 +103,38 @@ class TestBuildConfig:
         assert "ttft_ms" in tasks[0]["metrics"]
         # 流式统计增强后与 evalscope-perf 指标对齐（tpot/itl/output_tps 均可产出）
         assert {"tpot_ms", "itl_ms", "output_tps"} <= set(tasks[0]["metrics"])
+
+
+class TestTokenOnlySeconds:
+    def test_token_seconds_without_history_row(self, tmp_path):
+        """回归：token 完成秒与 history 行不重合时（run 尾部），秒桶走
+        token 合并路径创建——不得因桶结构漂移 KeyError。"""
+        agg = {"Type": "Aggregated", "Name": "Aggregated", "Request Count": "10",
+               "Failure Count": "0", "Average Response Time": "900",
+               "Requests/s": "1.0", "95%": "1200"}
+        raw = tmp_path / "locust_raw"
+        _write_stats(raw, 4, agg, ("560", "1100"))
+        hist_cols = ["Timestamp", "User Count", "Type", "Name", "Requests/s",
+                     "Failures/s", "50%", "95%"]
+        import csv as _csv
+        with (raw / "locust_u4_stats_history.csv").open("w", newline="",
+                                                        encoding="utf-8") as fh:
+            w = _csv.DictWriter(fh, fieldnames=hist_cols)
+            w.writeheader()
+            w.writerow({"Timestamp": "100", "User Count": "4", "Type": "POST",
+                        "Name": "x", "Requests/s": "2.0", "Failures/s": "0.0",
+                        "50%": "800", "95%": "900"})
+        # token 记录落在 history 没有的秒（105）
+        (raw / "locust_u4_tokens.jsonl").write_text(
+            json.dumps({"t": 105.2, "tokens": 500, "gen_ms": 800}) + "\n",
+            encoding="utf-8")
+        series = _history_series(raw)
+        assert len(series) == 1
+        pts = {p["t"]: p for p in series[0]["points"]}
+        assert 5.0 in pts                              # 105 - 100 = 5s（token 桶）
+        assert pts[5.0]["tok_s"] == 500.0
+        assert pts[5.0]["rps"] == 0.0                  # 纯 token 桶其余字段安全
+        assert pts[5.0]["tpot_avg"] is None
 
 
 class TestLocustfileSignatures:

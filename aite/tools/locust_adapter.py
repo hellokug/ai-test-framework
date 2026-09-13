@@ -68,6 +68,12 @@ def _num(row: dict, key: str) -> float | None:
         return None
 
 
+def _new_bucket() -> dict:
+    """秒级聚合桶（单一结构定义——history 行与 token 记录两条合并路径共用）。"""
+    return {"ttft": [], "latency": [], "rps": 0.0, "errors": 0.0, "tok_s": 0.0,
+            "tpot_avg": [], "tpot_p95": [], "itl_avg": [], "itl_p95": []}
+
+
 def _history_series(output_dir: Path) -> list[dict]:
     """各档 _stats_history.csv → 时序 series（--csv-full-history，原生 1s 打点）。
 
@@ -85,10 +91,7 @@ def _history_series(output_dir: Path) -> list[dict]:
             ts = _num(hrow, "Timestamp")
             if ts is None:
                 continue
-            b = by_ts.setdefault(ts, {"ttft": [], "latency": [], "rps": 0.0,
-                                      "errors": 0.0, "tok_s": 0.0,
-                                      "tpot_avg": [], "tpot_p95": [],
-                                      "itl_avg": [], "itl_p95": []})
+            b = by_ts.setdefault(ts, _new_bucket())
             if rtype == "POST":
                 b["rps"] += _num(hrow, "Requests/s") or 0.0
                 b["errors"] += _num(hrow, "Failures/s") or 0.0
@@ -106,8 +109,7 @@ def _history_series(output_dir: Path) -> list[dict]:
                 if _num(hrow, "95%") is not None:
                     b[f"{key}_p95"].append(_num(hrow, "95%"))
         for sec, tokens in tokens_by_sec.items():   # token 吞吐并入秒桶
-            b = by_ts.setdefault(sec, {"ttft": [], "latency": [], "rps": 0.0,
-                                       "errors": 0.0, "tok_s": 0.0})
+            b = by_ts.setdefault(sec, _new_bucket())
             b["tok_s"] += tokens
         if not by_ts:
             continue
