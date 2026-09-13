@@ -37,12 +37,25 @@ def load_from_file(path: Path) -> dict:
     data.setdefault("status", "passed")
     data.setdefault("chaos_events", [])
     data.setdefault("summaries", [])
+    # 旧格式回填墙钟：以文件 mtime 为曲线终点，按相对 t 反推各点 epoch
+    pts = (data.get("combined") or (data.get("series") or [{}])[0].get("points", []))
+    if pts and all("ts" not in p for p in pts):
+        end = path.stat().st_mtime
+        span = max(p["t"] for p in pts) or 1
+        for p in pts:
+            p["ts"] = round(end - (span - p["t"]), 3)
     return data
 
 
 def make_demo_data() -> dict:
-    """合成四档阶梯 + 故障注入窗口的演示数据（结构 = 真实契约）。"""
+    """合成四档阶梯 + 故障注入窗口的演示数据（结构 = 真实契约）。
+
+    墙钟时间：以当前时刻为曲线终点，按相对 t 回铺各点的 ts（epoch 秒）。
+    """
+    import time as _time
+
     rng = random.Random(42)
+    end_epoch = _time.time()
     series, combined, summaries = [], [], []
     offset = 0
     for users in (8, 16, 32, 64):
@@ -52,8 +65,9 @@ def make_demo_data() -> dict:
             t = offset + i * 5
             chaos = 22 <= t <= 34                     # 第 3 档中段注入窗口
             ttft = ttft_base + rng.uniform(-80, 120) + (2500 if chaos else 0)
+            ts = round(end_epoch - (260 - t), 1)
             points.append({
-                "t": round(t - offset, 1), "users": users,
+                "t": round(t - offset, 1), "users": users, "ts": ts,
                 "ttft_avg": round(ttft, 1), "ttft_p95": round(ttft * 1.45, 1),
                 "latency_avg": round(ttft * 2.1, 1),
                 "latency_p95": round(ttft * 3.0, 1),
@@ -144,7 +158,9 @@ const pts = D.combined && D.combined.length ? D.combined
 document.getElementById("meta").innerHTML =
   `<span class="badge" style="background:${D.status === "passed" ? "#16a34a" : "#d97706"}">${D.status}</span>` +
   ` <b>${D.run_name}</b> <span style="color:#8a919f">${D.engine} · ${D.series.length} 档 · ${pts.length} 点</span>`;
-const x = pts.map(p => p.t);
+// x 轴：优先墙钟时间戳（ts epoch 秒 → ms），无 ts 的旧数据回落相对秒
+const USE_WALL = pts.length && pts[0].ts !== undefined;
+const x = pts.map(p => USE_WALL ? p.ts * 1000 : p.t);
 const chaosWindows = [];
 if (D.chaos_events && D.chaos_events.length) {
   let start = null;
@@ -158,17 +174,23 @@ if (D.chaos_events && D.chaos_events.length) {
   }
 }
 const mk = (id, opt) => echarts.init(document.getElementById(id)).setOption(opt);
+// 时间轴：墙钟模式 type=time（HH:MM，1/5min 自动刻度）；旧数据相对秒
+const xaxis = USE_WALL
+  ? {type: "time",
+     axisLabel: {formatter: "{HH}:{mm}"},
+     splitLine: {show: true}}
+  : {type: "value", name: "s"};
 const axis = (name) => ({type: "value", name});
 function lineChart(id, title, seriesDef, markChaos) {
   const opt = {tooltip: {trigger: "axis"}, legend: {top: 0},
     grid: {left: 50, right: 20, top: 30, bottom: 25},
-    xAxis: {type: "value", name: "s"}, series: seriesDef};
+    xAxis: xaxis, series: seriesDef};
   if (chaosWindows.length) {
     opt.series = opt.series.map(s => ({...s, markArea: {silent: true, data: chaosWindows}}));
   }
   mk(id, {tooltip: {trigger: "axis"}, legend: {top: 0},
           grid: {left: 50, right: 20, top: 30, bottom: 25},
-          xAxis: {...axis("s"), type: "value"}, yAxis: seriesDef.length > 1 && seriesDef[1].yAxisIndex ? [axis(title), axis(seriesDef[1].name)] : axis(title),
+          xAxis: xaxis, yAxis: seriesDef.length > 1 && seriesDef[1].yAxisIndex ? [axis(title), axis(seriesDef[1].name)] : axis(title),
           series: seriesDef});
 }
 lineChart("ttft", "ms", [
@@ -180,9 +202,9 @@ lineChart("tpot", "ms", [
   {name: "TPOT p95", type: "line", showSymbol: false, lineStyle: {type: "dashed"},
    data: x.map((t, i) => [t, pts[i].tpot_p95])},
   {name: "ITL avg", type: "line", showSymbol: false, data: x.map((t, i) => [t, pts[i].itl_avg])}], true);
-mk("lat", {tooltip: {trigger: "axis"}, legend: {top: 0},
+mk("lat", {tooltip: {trigger: "axis", formatter: USE_WALL ? (ps => new Date(ps[0].value).toTimeString().slice(0, 5) + " " + ps[0].value[1]) : undefined}, legend: {top: 0},
   grid: {left: 50, right: 55, top: 30, bottom: 25},
-  xAxis: {type: "value", name: "s"},
+  xAxis: xaxis,
   yAxis: [axis("ms"), axis("rps")],
   series: [
     {name: "Latency p95", type: "line", showSymbol: false,
@@ -191,7 +213,7 @@ mk("lat", {tooltip: {trigger: "axis"}, legend: {top: 0},
      data: x.map((t, i) => [t, pts[i].rps])}]});
 mk("tps", {tooltip: {trigger: "axis"}, legend: {top: 0},
   grid: {left: 55, right: 55, top: 30, bottom: 25},
-  xAxis: {type: "value", name: "s"},
+  xAxis: xaxis,
   yAxis: [axis("tok/s"), axis("users")],
   series: [
     {name: "tok/s", type: "line", showSymbol: false,

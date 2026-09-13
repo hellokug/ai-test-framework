@@ -116,6 +116,8 @@ def _history_series(output_dir: Path) -> list[dict]:
             continue
         t0 = min(by_ts)
         points = [_point(ts, by_ts[ts], t0) for ts in sorted(by_ts)]
+        for pt, ts in zip(points, sorted(by_ts), strict=True):
+            pt["ts"] = round(ts, 3)
         series.append({"users": int(users), "run": 0,
                        "label": f"locust:u{users}", "points": points})
     return series

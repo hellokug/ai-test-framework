@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from aite.tools.base import (
@@ -140,12 +141,14 @@ def _quantile(sorted_vals: list[float], q: float) -> float | None:
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
 
 
-def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
+def _aggregate_level_db(db_path: Path, bucket: float) -> tuple[list[dict], float] | None:
     """单档 benchmark_data.db → 桶级时序点（大屏曲线数据源）。
 
     逐请求记录（evalscope perf 子进程流式写入）事后聚合：按 completed_time 落桶，
     t = 桶起点相对该档首个请求开始的秒数。成功请求计 TTFT/延迟分位，失败计错误数；
     rps/tok_s = 桶内完成请求数 / completion_tokens 和 ÷ 桶时长。
+    返回 (点列表, raw_t0)——raw_t0 为同源原始时钟（perf 进程相对秒），供 combined
+    跨档拼接与 epoch 换算。
     """
     uri = f"file:{db_path.as_posix()}?mode=ro"
     try:
@@ -212,7 +215,7 @@ def _aggregate_level_db(db_path: Path, bucket: float) -> list[dict] | None:
             "tok_s": round(b["tokens"] / bucket, 1),
             "errors": b["errors"],
         })
-    return series
+    return series, t0
 
 
 def _resolve_rate(cfg: dict) -> list[float] | None:
@@ -503,26 +506,36 @@ class PerfAdapter(ToolAdapter):
             label = item[0]
             return (0, int(label.rsplit("c", 1)[1])) if ":c" in label                 else (1, float(label.rsplit("q", 1)[1]))
 
-        offset = 0.0   # combined 绝对偏移：档实际时长累加 + 档间间隔（阶梯近似）
+        # 各档 db 共用 perf 进程时钟（同源相对秒）——换算 epoch 基准后点即可
+        # 映射墙钟；combined 用同源原值直接拼接（天然连续，无近似偏移）
+        level_points: list[tuple[str, int, list[dict], float]] = []
+        min_raw, max_raw = None, 0.0
+        for label, items in sorted(grouped.items(), key=_label_key):
+            for _d, _p, summary_path, users in items:
+                agg = _aggregate_level_db(
+                    summary_path.parent / "benchmark_data.db", bucket)
+                if agg:
+                    points, raw_t0 = agg
+                    level_points.append((label, users, points, raw_t0))
+                    min_raw = raw_t0 if min_raw is None else min(min_raw, raw_t0)
+                    max_raw = max(max_raw, raw_t0 + points[-1]["t"] + bucket)
+        epoch_base = (time.time() - max_raw - 1.0) if max_raw else 0.0
+
         for label, items in sorted(grouped.items(), key=_label_key):
             metrics, total = _level_metrics(items)
             self._append_metric_rows(req, out, label, metrics, total)
             tps = metrics.get("output_tps")
             if tps is not None:
                 out.raw_score[label] = float(tps)
-            for run_idx, (data, _p, summary_path, users) in enumerate(items):
-                points = _aggregate_level_db(
-                    summary_path.parent / "benchmark_data.db", bucket)
-                if points:
-                    timeseries["series"].append({
-                        "users": users, "run": run_idx, "label": label,
-                        "points": points})
-                    for pt in points:
-                        timeseries["combined"].append({
-                            **pt, "t": round(pt["t"] + offset, 3),
-                            "users": users})
-                    offset += (float(data.get("Test Duration (s)") or 0)
-                               + SLEEP_INTERVAL_BETWEEN_LEVELS)
+        for label, users, points, raw_t0 in level_points:
+            for pt in points:
+                pt["ts"] = round(epoch_base + raw_t0 + pt["t"], 3)
+            timeseries["series"].append({
+                "users": users, "run": 0, "label": label, "points": points})
+            for pt in points:   # combined：同源原值直接拼接（天然阶梯连续）
+                timeseries["combined"].append({
+                    **pt, "t": round(raw_t0 + pt["t"] - (min_raw or 0), 3),
+                    "users": users})
 
         total_failed = sum(int(d.get("Failed Requests") or 0)
                            for items in grouped.values()
