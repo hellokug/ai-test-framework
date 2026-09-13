@@ -160,7 +160,17 @@ class TestTemplate:
         assert len(classes) == 1
         methods = {n.name for n in classes[0].body
                    if isinstance(n, ast.FunctionDef)}
-        assert {"on_start", "chat"} <= methods
+        assert {"on_start", "chat", "_stream_metrics",
+                "_json_metrics"} <= methods
+        # chat 内所有 self.X 方法调用必须可解析（防方法掉出类体：
+        # 曾因类外定义 self._stream_metrics 实跑 0 请求 + AttributeError）
+        chat = next(n for n in classes[0].body
+                    if isinstance(n, ast.FunctionDef) and n.name == "chat")
+        self_calls = {n.attr for n in ast.walk(chat)
+                      if isinstance(n, ast.Attribute)
+                      and isinstance(n.value, ast.Name) and n.value.id == "self"}
+        undefined = self_calls - methods - {"client"}   # client 为基类属性
+        assert not undefined, f"chat 调用了未定义方法: {undefined}"
 
     def test_stream_metrics_present(self, tmp_path):
         cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))

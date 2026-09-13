@@ -136,70 +136,69 @@ class ChatUser(HttpUser):
             resp.success()
 
 
-def _stream_metrics(resp, t0: float) -> dict:
-    """流式逐块采集：TTFT 首包、ITL 逐块间隔、TPOT（生成段 / (tokens-1)）。
+    def _stream_metrics(self, resp, t0: float) -> dict:
+        """流式逐块采集：TTFT 首包、ITL 逐块间隔、TPOT（生成段 / (tokens-1)）。
 
-    token 数取 usage.completion_tokens（端点回传 usage 时精确），否则以
-    chunk 数近似（主流推理服务 1 chunk ≈ 1 token）。
-    """
-    ttft_ms = None
-    prev_ms = None
-    chunk_count = 0
-    completion_tokens = None
-    prompt_tokens = None
-    itls = []
-    for raw in resp.iter_lines():
-        if not raw.startswith(b"data: "):
-            continue
-        now_ms = (time.perf_counter() - t0) * 1000.0
-        if ttft_ms is None:
-            ttft_ms = now_ms
-        elif prev_ms is not None and now_ms - prev_ms >= 1.0:
-            # 间隔 <1ms = 读缓冲批量解包噪声（非真实 token 到达），不入样本
-            itls.append(now_ms - prev_ms)
-        prev_ms = now_ms
-        chunk_count += 1
-        data = raw[6:].strip()
-        if data == b"[DONE]":
-            break
-        if b'"usage"' in data:
-            try:
-                usage = json.loads(data).get("usage") or {}
-                if usage.get("completion_tokens"):
-                    completion_tokens = int(usage["completion_tokens"])
-                if usage.get("prompt_tokens"):
-                    prompt_tokens = int(usage["prompt_tokens"])
-            except ValueError:
-                pass
-    latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-    tokens = completion_tokens if completion_tokens else max(chunk_count - 1, 1)
-    gen_ms = (prev_ms - ttft_ms) if (ttft_ms is not None and prev_ms is not None) else 0.0
-    tpot_ms = round(gen_ms / (tokens - 1), 1) if tokens > 1 and gen_ms > 0 else None
-    itl_avg = round(sum(itls) / len(itls), 1) if itls else None
-    itl_p95 = round(sorted(itls)[int(0.95 * (len(itls) - 1))], 1) if itls else None
-    return {"latency_ms": latency_ms,
-            "ttft_ms": round(ttft_ms, 1) if ttft_ms is not None else None,
-            "tpot_ms": tpot_ms, "itl_avg": itl_avg, "itl_p95": itl_p95,
-            "itl_n": len(itls), "tokens": tokens, "gen_ms": round(gen_ms, 1),
-            "prompt_tokens": prompt_tokens}
+        token 数取 usage.completion_tokens（端点回传 usage 时精确），否则以
+        chunk 数近似（主流推理服务 1 chunk ≈ 1 token）。
+        """
+        ttft_ms = None
+        prev_ms = None
+        chunk_count = 0
+        completion_tokens = None
+        prompt_tokens = None
+        itls = []
+        for raw in resp.iter_lines():
+            if not raw.startswith(b"data: "):
+                continue
+            now_ms = (time.perf_counter() - t0) * 1000.0
+            if ttft_ms is None:
+                ttft_ms = now_ms
+            elif prev_ms is not None and now_ms - prev_ms >= 1.0:
+                # 间隔 <1ms = 读缓冲批量解包噪声（非真实 token 到达），不入样本
+                itls.append(now_ms - prev_ms)
+            prev_ms = now_ms
+            chunk_count += 1
+            data = raw[6:].strip()
+            if data == b"[DONE]":
+                break
+            if b'"usage"' in data:
+                try:
+                    usage = json.loads(data).get("usage") or {}
+                    if usage.get("completion_tokens"):
+                        completion_tokens = int(usage["completion_tokens"])
+                    if usage.get("prompt_tokens"):
+                        prompt_tokens = int(usage["prompt_tokens"])
+                except ValueError:
+                    pass
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        tokens = completion_tokens if completion_tokens else max(chunk_count - 1, 1)
+        gen_ms = (prev_ms - ttft_ms) if (ttft_ms is not None and prev_ms is not None) else 0.0
+        tpot_ms = round(gen_ms / (tokens - 1), 1) if tokens > 1 and gen_ms > 0 else None
+        itl_avg = round(sum(itls) / len(itls), 1) if itls else None
+        itl_p95 = round(sorted(itls)[int(0.95 * (len(itls) - 1))], 1) if itls else None
+        return {"latency_ms": latency_ms,
+                "ttft_ms": round(ttft_ms, 1) if ttft_ms is not None else None,
+                "tpot_ms": tpot_ms, "itl_avg": itl_avg, "itl_p95": itl_p95,
+                "itl_n": len(itls), "tokens": tokens, "gen_ms": round(gen_ms, 1),
+                "prompt_tokens": prompt_tokens}
 
-
-def _json_metrics(resp, t0: float) -> dict:
-    """非流式：整段均摊口径的 TPOT（无 TTFT/ITL，与 evalscope 一致）。"""
-    latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-    try:
-        data = resp.json()
-    except ValueError:
-        return {"latency_ms": latency_ms, "ttft_ms": None, "tpot_ms": None,
+    def _json_metrics(self, resp, t0: float) -> dict:
+        """非流式：整段均摊口径的 TPOT（无 TTFT/ITL，与 evalscope 一致）。"""
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        try:
+            data = resp.json()
+        except ValueError:
+            return {"latency_ms": latency_ms, "ttft_ms": None, "tpot_ms": None,
+                    "itl_avg": None, "itl_p95": None, "itl_n": 0,
+                    "tokens": 0, "gen_ms": 0.0, "prompt_tokens": None}
+        usage = data.get("usage") or {}
+        tokens = int(usage.get("completion_tokens") or 0)
+        tpot_ms = round(latency_ms / tokens, 1) if tokens > 0 else None
+        return {"latency_ms": latency_ms, "ttft_ms": None, "tpot_ms": tpot_ms,
                 "itl_avg": None, "itl_p95": None, "itl_n": 0,
-                "tokens": 0, "gen_ms": 0.0, "prompt_tokens": None}
-    usage = data.get("usage") or {}
-    tokens = int(usage.get("completion_tokens") or 0)
-    tpot_ms = round(latency_ms / tokens, 1) if tokens > 0 else None
-    return {"latency_ms": latency_ms, "ttft_ms": None, "tpot_ms": tpot_ms,
-            "itl_avg": None, "itl_p95": None, "itl_n": 0,
-            "tokens": tokens, "gen_ms": round(latency_ms, 1),
-            "prompt_tokens": int(usage.get("prompt_tokens") or 0) or None}
+                "tokens": tokens, "gen_ms": round(latency_ms, 1),
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0) or None}
 '''
 
 
