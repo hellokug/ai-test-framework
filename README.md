@@ -317,10 +317,14 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似。
   ttft_ms / latency_avg_ms / latency_p95_ms / **itl_ms** / **tpot_ms** /
   **output_tps** / qps / error_rate + 错误明细（`_failures.csv` → 错误文本×次数）。
   LLM 指标由生成 locustfile 的流式采集提供：TTFT 首包计时、ITL 逐块间隔事件、
-  TPOT（生成段毫秒/token）；token 数取 usage.completion_tokens（端点不回传时
-  以 chunk 数近似）。output_tps 与 avg_input_tokens / avg_output_tokens
-  （平均输入/输出长度）为全局口径行（`dataset="locust:total"`：Σtokens÷Σ生成秒
-  / 逐请求均值），与 evalscope 同口径直接可比
+  TPOT（生成段毫秒/token，分母 = token 数 - 1，与 evalscope 公式一致）；
+  token 数取 usage.completion_tokens（端点不回传时以 chunk 数近似）。
+  output_tps 与 avg_input_tokens / avg_output_tokens（平均输入/输出长度）
+  为全局口径行（`dataset="locust:total"`：Σtokens÷Σ生成秒 / 逐请求均值），
+  与 evalscope 同口径直接可比。**适用条件**：TPOT/ITL/TTFT 要求端点透传
+  真流式（逐 token flush）——网关缓冲型端点（部分云 API）整个响应完成时
+  一次性到达，TTFT 退化为端到端延迟、TPOT/ITL 不可测（collect 自动检测
+  TTFT≈总延迟并告警，ITL/TPOT 拒绝入库）；本地 Ollama / vLLM 为真流式
 
 ```bash
 pip install 'aite[locust]'

@@ -315,8 +315,9 @@ class ChatUser(HttpUser):
         self._fire("TTFT", ttft_ms)
         tokens = completion_tokens if completion_tokens else max(chunk_count - 1, 1)
         gen_ms = prev_ms - ttft_ms            # 生成段时长（首 token 之后）
-        if gen_ms > 0 and tokens > 0:
-            self._fire("TPOT", gen_ms / tokens)                    # ms / token
+        if gen_ms > 0 and tokens > 1:
+            # evalscope 公式：生成段时长 / (token 数 - 1)（首 token 计入 TTFT）
+            self._fire("TPOT", gen_ms / (tokens - 1))              # ms / token
             _record_tokens(tokens, gen_ms, prompt_tokens)          # 吞吐+长度数据源
 
     def _json_metrics(self, resp, t0: float):
@@ -569,6 +570,14 @@ class LocustAdapter(ToolAdapter):
             metrics["tpot_ms"] = _num(tpot, "Average Response Time")
             metrics["tpot_p95_ms"] = _num(tpot, "95%")
         # output_tps（全局口径）由 run_tool_suite 后置注入（tokens 文件聚合）
+        # 非真流式端点检测：TTFT ≈ 端到端延迟 = SSE 被网关缓冲（整个响应
+        # 完成时一次性到达）——TPOT/ITL 原理性不可测，TTFT 实为端到端延迟
+        if (metrics.get("ttft_ms") and metrics.get("latency_avg_ms")
+                and abs(metrics["ttft_ms"] - metrics["latency_avg_ms"])
+                < 0.01 * metrics["latency_avg_ms"]):
+            logger.warning(
+                "locust %s: TTFT ≈ 端到端延迟——端点 SSE 被网关缓冲（非真流式），"
+                "TPOT/ITL 不可测；TTFT 数值实为端到端延迟", label)
         # ITL/TPOT 失真门槛（宁缺毋错）：高并发下客户端读缓冲批量到达 SSE 行，
         # 块间隔被压缩到微秒级（avg < 1ms）——此时 ITL/TPOT 不可信，不入库
         degraded = [name for name in ("itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms")
