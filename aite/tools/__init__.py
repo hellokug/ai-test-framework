@@ -68,6 +68,26 @@ def build_overall_rows(rows: list[ToolMetricRow]) -> list[MetricSummary]:
     return overall
 
 
+def serialize_summaries(rows: list[ToolMetricRow]) -> list[dict]:
+    """指标行 → timeseries.json 的 ``summaries`` 形状（大屏统计表数据源）。
+
+    overall 行（dataset=None，与 CLI 汇总表同源）在前、档级行在后；逐字段
+    平铺为可 JSON 序列化的 dict，value/threshold/passed 允许 None（未配阈值
+    → passed=None → 前端显示 "-"）。
+    """
+
+    def _dict(metric, dataset, value, count, threshold, passed, higher):
+        return {"metric": metric, "dataset": dataset, "value": value,
+                "count": count, "threshold": threshold, "passed": passed,
+                "higher_is_better": higher}
+
+    out = [_dict(r.metric, None, r.value, r.count, r.threshold, r.passed,
+                 r.higher_is_better) for r in build_overall_rows(rows)]
+    out += [_dict(r.metric, r.dataset, r.value, r.count, r.threshold,
+                  r.passed, r.higher_is_better) for r in rows]
+    return out
+
+
 def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     """工具型 suite yaml → (ToolRunRequest, 原始配置快照)。
 

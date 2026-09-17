@@ -128,9 +128,13 @@ async def run_timeseries(run_id: str, state: Any = Depends(get_state)):
     """压测时序（大屏曲线数据源）：读 run.details.work_dir 下 timeseries.json。
 
     形状 {engine, bucket_seconds, series: [{users, run, label, points}],
-    errors: [{key, count}]}；points 每元素
-    {t, ttft_avg, ttft_p95, latency_avg, latency_p95, rps, tok_s, errors}。
-    非压测 run 或未产出 → 404。
+    combined, errors: [{key, count}], summaries: [{metric, dataset, value,
+    count, threshold, passed, higher_is_better}]}；points 每元素 {t, ts, users,
+    ttft_avg, ttft_p95, latency_avg, latency_p95, tpot_avg, tpot_p95, itl_avg,
+    itl_p95, rps, tok_s, errors}（t = 档内相对秒，ts = 墙钟 epoch 秒）；combined
+    为各档按 ts 排序的全场阶梯曲线（t 重定基全场首秒）；summaries 为统计表
+    数据源（overall 行 dataset=None 与 CLI 汇总同源 + 档级行）。非压测 run
+    或未产出 → 404。
     """
     run = await state.repo.get_run(run_id)
     if not run:

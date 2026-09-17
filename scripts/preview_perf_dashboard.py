@@ -3,12 +3,16 @@
 数据契约与 `GET /runs/{id}/timeseries` + `/runs/{id}` 完全一致——本脚本的
 HTML 就是 F1 前端大屏的参考实现（Vue/ECharts 同源）。
 
+版式（用户约定）：顶部为统计结果表（timeseries.json 的 summaries 字段，
+与 CLI 汇总同源——overall 行一眼看最终结论，档级行作明细）；图表按指标族
+拆分，同族 avg/p95 共图，不同指标一律不混轴。
+
 用法：
   python scripts/preview_perf_dashboard.py                 # 自动找最新真实数据
   python scripts/preview_perf_dashboard.py --data <timeseries.json>
   python scripts/preview_perf_dashboard.py --demo          # 合成演示数据（含故障窗口）
   python scripts/preview_perf_dashboard.py --run-id <id>   # 从库读（summaries 全量）
-输出：perf_dashboard_preview.html（浏览器打开）
+输出：perf_dashboard_<run名>.html（浏览器打开）
 """
 
 from __future__ import annotations
@@ -18,10 +22,6 @@ import json
 import random
 from datetime import datetime
 from pathlib import Path
-
-OUT_DEFAULT = "perf_dashboard_preview.html"
-ERROR_KEYS_SKIP = ("engine", "bucket_seconds", "series", "combined", "errors")
-
 
 # ---------------------------------------------------------------- data loading
 
@@ -73,6 +73,8 @@ def make_demo_data() -> dict:
     end_epoch = _time.time()
     series, combined, summaries = [], [], []
     offset = 0
+    total_count = 0
+    ttft_weighted = 0.0
     for users in (8, 16, 32, 64):
         points = []
         ttft_base = 300 + users * 28
@@ -89,6 +91,7 @@ def make_demo_data() -> dict:
                 "tpot_avg": round(18 + users * 0.7 + rng.uniform(-4, 6), 1),
                 "tpot_p95": round(28 + users * 1.1, 1),
                 "itl_avg": round(12 + users * 0.5 + rng.uniform(-3, 5), 1),
+                "itl_p95": round(20 + users * 0.8, 1),
                 "rps": round(users * 2.2 + rng.uniform(-4, 6), 2),
                 "tok_s": round(users * 44 + rng.uniform(-60, 90), 1),
                 "errors": rng.randint(0, 3) if users == 64 else 0,
@@ -96,13 +99,23 @@ def make_demo_data() -> dict:
             combined.append({**points[-1], "t": round(t, 1)})
         offset += 65
         label = f"locust:u{users}"
+        n = users * 12
+        total_count += n
+        ttft_weighted += ttft_base * n
         series.append({"users": users, "run": 0, "label": label, "points": points})
         summaries.append({"dataset": label, "metric": "qps",
-                          "value": round(users * 2.2, 2), "count": users * 26,
+                          "value": round(users * 2.2, 2), "count": n,
                           "threshold": None, "passed": None})
         summaries.append({"dataset": label, "metric": "ttft_ms",
-                          "value": round(ttft_base, 1), "count": users * 26,
+                          "value": round(ttft_base, 1), "count": n,
                           "threshold": 3000, "passed": ttft_base < 3000})
+    # overall 行（dataset=None）：与 CLI 汇总表同源，一眼看最终结论
+    summaries.insert(0, {"dataset": None, "metric": "qps", "value": 132.0,
+                         "count": total_count, "threshold": None, "passed": None})
+    summaries.insert(0, {"dataset": None, "metric": "ttft_ms",
+                         "value": round(ttft_weighted / total_count, 1),
+                         "count": total_count, "threshold": 3000,
+                         "passed": ttft_weighted / total_count < 3000})
     return {
         "engine": "evalscope-perf", "run_name": "demo-ramp", "run_id": "demo",
         "status": "passed", "bucket_seconds": 5.0,
@@ -149,21 +162,26 @@ _HTML = """<!DOCTYPE html>
 <style>
 body{font-family:system-ui,sans-serif;background:#f0f2f5;margin:16px}
 h1{font-size:18px} h3{font-size:14px;margin:12px 0 4px}
+.unit{color:#999;font-weight:normal;font-size:12px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .card{background:#fff;border-radius:8px;padding:8px;box-shadow:0 1px 2px #0001}
-.chart{width:100%;height:300px}.full{grid-column:1/3}
+.chart{width:100%;height:260px}.full{grid-column:1/3}
 .badge{display:inline-block;padding:2px 10px;border-radius:10px;color:#fff;font-size:12px}
 table{border-collapse:collapse;width:100%;font-size:12px}
-td,th{border:1px solid #e8eaee;padding:4px 8px}
+td,th{border:1px solid #e8eaee;padding:4px 8px;text-align:left}
+th{background:#f8f9fb}
 </style></head><body>
 <h1>压测大屏预览 <span id="meta"></span></h1>
 <div class="grid">
- <div class="card"><h3>TTFT（首 token 延迟）<span style="color:#999">ms</span></h3><div id="ttft" class="chart"></div></div>
- <div class="card"><h3>TPOT / ITL（token 生成）<span style="color:#999">ms</span></h3><div id="tpot" class="chart"></div></div>
- <div class="card"><h3>延迟 p95 + RPS</h3><div id="lat" class="chart"></div></div>
- <div class="card"><h3>token 吞吐 + 并发阶梯</h3><div id="tps" class="chart"></div></div>
- <div class="card"><h3>错误统计</h3><div id="err" class="chart" style="height:200px"></div></div>
- <div class="card"><h3>档级汇总</h3><div id="tbl"></div></div>
+ <div class="card full"><h3>统计结果 <span class="unit">与 CLI 汇总同源：overall 结论 + 档级明细</span></h3><div id="tbl"></div></div>
+ <div class="card"><h3>TTFT（首 token 延迟）<span class="unit">ms</span></h3><div id="ttft" class="chart"></div></div>
+ <div class="card"><h3>延迟（端到端）<span class="unit">ms</span></h3><div id="lat" class="chart"></div></div>
+ <div class="card"><h3>TPOT（每 token 生成）<span class="unit">ms</span></h3><div id="tpot" class="chart"></div></div>
+ <div class="card"><h3>ITL（token 间间隔）<span class="unit">ms</span></h3><div id="itl" class="chart"></div></div>
+ <div class="card"><h3>RPS（请求吞吐）<span class="unit">req/s</span></h3><div id="rps" class="chart"></div></div>
+ <div class="card"><h3>Token 吞吐<span class="unit">tok/s</span></h3><div id="tps" class="chart"></div></div>
+ <div class="card"><h3>并发阶梯<span class="unit">users</span></h3><div id="users" class="chart"></div></div>
+ <div class="card"><h3>错误统计</h3><div id="err" class="chart"></div></div>
 </div>
 <script>window.__D__ = __DATA__;</script>
 <script>
@@ -188,64 +206,61 @@ if (D.chaos_events && D.chaos_events.length) {
     }
   }
 }
-const mk = (id, opt) => echarts.init(document.getElementById(id)).setOption(opt);
-// 时间轴：墙钟模式 type=time（HH:MM，1/5min 自动刻度）；旧数据相对秒
 const xaxis = USE_WALL
-  ? {type: "time",
-     axisLabel: {formatter: "{HH}:{mm}"},
-     splitLine: {show: true}}
+  ? {type: "time", axisLabel: {formatter: "{HH}:{mm}"}, splitLine: {show: true}}
   : {type: "value", name: "s"};
 const axis = (name) => ({type: "value", name});
-function lineChart(id, title, seriesDef, markChaos) {
-  const opt = {tooltip: {trigger: "axis"}, legend: {top: 0},
-    grid: {left: 50, right: 20, top: 30, bottom: 25},
-    xAxis: xaxis, series: seriesDef};
-  if (chaosWindows.length) {
-    opt.series = opt.series.map(s => ({...s, markArea: {silent: true, data: chaosWindows}}));
-  }
+const mk = (id, opt) => echarts.init(document.getElementById(id)).setOption(opt);
+// 同一指标族的 avg/p95 共图（实线 avg、虚线 p95）；不同指标族一律不混图
+function familyChart(id, unit, defs) {
   mk(id, {tooltip: {trigger: "axis"}, legend: {top: 0},
-          grid: {left: 50, right: 20, top: 30, bottom: 25},
-          xAxis: xaxis, yAxis: seriesDef.length > 1 && seriesDef[1].yAxisIndex ? [axis(title), axis(seriesDef[1].name)] : axis(title),
-          series: seriesDef});
+    grid: {left: 50, right: 20, top: 30, bottom: 25},
+    xAxis: xaxis, yAxis: axis(unit),
+    series: defs.map(([key, name, dashed]) => ({
+      name, type: "line", showSymbol: false,
+      lineStyle: dashed ? {type: "dashed"} : {},
+      markArea: {silent: true, data: chaosWindows},
+      data: x.map((t, i) => [t, pts[i][key]])}))});
 }
-lineChart("ttft", "ms", [
-  {name: "TTFT avg", type: "line", showSymbol: false, data: x.map((t, i) => [t, pts[i].ttft_avg])},
-  {name: "TTFT p95", type: "line", showSymbol: false, lineStyle: {type: "dashed"},
-   data: x.map((t, i) => [t, pts[i].ttft_p95])}], true);
-lineChart("tpot", "ms", [
-  {name: "TPOT avg", type: "line", showSymbol: false, data: x.map((t, i) => [t, pts[i].tpot_avg])},
-  {name: "TPOT p95", type: "line", showSymbol: false, lineStyle: {type: "dashed"},
-   data: x.map((t, i) => [t, pts[i].tpot_p95])},
-  {name: "ITL avg", type: "line", showSymbol: false, data: x.map((t, i) => [t, pts[i].itl_avg])}], true);
-mk("lat", {tooltip: {trigger: "axis", formatter: USE_WALL ? (ps => new Date(ps[0].value).toTimeString().slice(0, 5) + " " + ps[0].value[1]) : undefined}, legend: {top: 0},
-  grid: {left: 50, right: 55, top: 30, bottom: 25},
-  xAxis: xaxis,
-  yAxis: [axis("ms"), axis("rps")],
-  series: [
-    {name: "Latency p95", type: "line", showSymbol: false,
-     data: x.map((t, i) => [t, pts[i].latency_p95])},
-    {name: "RPS", type: "line", showSymbol: false, yAxisIndex: 1,
-     data: x.map((t, i) => [t, pts[i].rps])}]});
-mk("tps", {tooltip: {trigger: "axis"}, legend: {top: 0},
-  grid: {left: 55, right: 55, top: 30, bottom: 25},
-  xAxis: xaxis,
-  yAxis: [axis("tok/s"), axis("users")],
-  series: [
-    {name: "tok/s", type: "line", showSymbol: false,
-     data: x.map((t, i) => [t, pts[i].tok_s])},
-    {name: "users", type: "line", showSymbol: false, step: "end", yAxisIndex: 1,
-     lineStyle: {type: "dotted"}, data: x.map((t, i) => [t, pts[i].users])}]});
+familyChart("ttft", "ms", [["ttft_avg", "avg"], ["ttft_p95", "p95", 1]]);
+familyChart("lat", "ms", [["latency_avg", "avg"], ["latency_p95", "p95", 1]]);
+familyChart("tpot", "ms", [["tpot_avg", "avg"], ["tpot_p95", "p95", 1]]);
+familyChart("itl", "ms", [["itl_avg", "avg"], ["itl_p95", "p95", 1]]);
+familyChart("rps", "req/s", [["rps", "RPS"]]);
+familyChart("tps", "tok/s", [["tok_s", "tok/s"]]);
+mk("users", {tooltip: {trigger: "axis"}, legend: {top: 0},
+  grid: {left: 50, right: 20, top: 30, bottom: 25},
+  xAxis: xaxis, yAxis: axis("users"),
+  series: [{name: "users", type: "line", showSymbol: false, step: "end",
+            markArea: {silent: true, data: chaosWindows},
+            data: x.map((t, i) => [t, pts[i].users])}]});
 const errs = D.errors || [];
 mk("err", {grid: {left: 160, right: 20, top: 10, bottom: 25},
   xAxis: {type: "value"}, yAxis: {type: "category", data: errs.map(e => e.key)},
   series: [{type: "bar", data: errs.map(e => e.count), itemStyle: {color: "#dc2626"}}]});
-const tbl = document.getElementById("tbl");
-const rows = (D.summaries || []).filter(s => s.dataset);
-tbl.innerHTML = rows.length ? `<table><tr><th>档位</th><th>指标</th><th>值</th><th>阈值</th><th>结果</th></tr>` +
-  rows.map(s => `<tr><td>${s.dataset}</td><td>${s.metric}</td><td>${s.value}</td>` +
-    `<td>${s.threshold ?? "—"}</td><td>${s.passed === null || s.passed === undefined ? "-" :
-    (s.passed ? "PASS" : "FAIL")}</td></tr>`).join("") + "</table>"
-  : '<span style="color:#8a919f">无档级汇总</span>';
+// 统计结果表：overall 行（与 CLI 汇总表同列：metric/value/threshold/result）+ 档级明细
+const SM = D.summaries || [];
+const badge = p => p === true ? '<span class="badge" style="background:#16a34a">PASS</span>'
+              : p === false ? '<span class="badge" style="background:#dc2626">FAIL</span>'
+              : '<span style="color:#8a919f">—</span>';
+const fmt = v => (v === null || v === undefined) ? "—" : v;
+const rowHtml = (s, withDs) => `<tr>${withDs ? `<td>${s.dataset || ""}</td>` : ""}` +
+  `<td>${s.metric}</td><td><b>${fmt(s.value)}</b></td><td>${fmt(s.threshold)}</td>` +
+  `<td>${badge(s.passed)}</td><td>${fmt(s.count)}</td></tr>`;
+const overall = SM.filter(s => !s.dataset);
+const levels = SM.filter(s => s.dataset);
+let tbl = "";
+if (overall.length) {
+  tbl += "<table><tr><th>指标</th><th>值</th><th>阈值</th><th>结果</th><th>样本数</th></tr>" +
+         overall.map(s => rowHtml(s, false)).join("") + "</table>";
+}
+if (levels.length) {
+  tbl += (overall.length ? '<h3 style="margin-top:10px">档级明细</h3>' : "") +
+         "<table><tr><th>档位</th><th>指标</th><th>值</th><th>阈值</th><th>结果</th><th>样本数</th></tr>" +
+         levels.map(s => rowHtml(s, true)).join("") + "</table>";
+}
+if (!tbl) tbl = '<span style="color:#8a919f">无统计数据——旧版 timeseries.json 不含 summaries 字段，重跑一次压测即可</span>';
+document.getElementById("tbl").innerHTML = tbl;
 </script></body></html>
 """
 
