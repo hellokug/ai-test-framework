@@ -28,6 +28,7 @@ class TestBuildConfig:
         assert cfg["url"] == "http://localhost:11434/v1/chat/completions"
         assert cfg["model"] == "qwen2.5:3b"
         assert cfg["stream"] is True
+        assert cfg["jitter"] == 0.2                       # 缺省开启打散波次
         run = cfg["runs"][0]
         assert run["users"] == 4 and run["seconds"] == 60.0
         assert run["spawn_rate"] == 4                       # 缺省瞬时拉满
@@ -56,6 +57,61 @@ class TestBuildConfig:
             perf={"prompt": "p", "parallel": [1, 4], "level_duration": 30}))
         assert [(r["users"], r["seconds"]) for r in cfg["runs"]] == \
             [(1, 30.0), (4, 30.0)]
+
+    def test_duplicate_users_disambiguation(self):
+        """重复并发档（稳定性复跑）产物路径必须消歧，防 jsonl 合并/csv 覆盖。"""
+        cfg = LocustAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [4, 4], "level_duration": 30}))
+        stems = [Path(r["metrics_file"]).name for r in cfg["runs"]]
+        assert stems == ["locust_u4_1_metrics.jsonl", "locust_u4_2_metrics.jsonl"]
+        assert cfg["runs"][0]["csv"] != cfg["runs"][1]["csv"]
+        assert cfg["runs"][0]["html"] != cfg["runs"][1]["html"]
+
+    def test_arrival_models(self):
+        """到达模型校验与归一化：poisson 需 qps；spike/custom 形状校验。"""
+        cfg = LocustAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [4], "duration": 60, "qps": 20,
+                  "arrival": {"mode": "poisson"}}))
+        assert cfg["arrival"] == {"mode": "poisson"}
+        cfg = LocustAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [4], "duration": 60,
+                  "arrival": {"mode": "spike", "spike": {
+                      "base_qps": 2, "spike_qps": 20, "period": 60,
+                      "spike_duration": 10}}}))
+        assert cfg["arrival"]["spike"] == {"base_qps": 2.0, "spike_qps": 20.0,
+                                           "period": 60.0, "spike_duration": 10.0}
+        profile = [[0, 2], [30, 20], [60, 2]]
+        cfg = LocustAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [4], "duration": 60,
+                  "arrival": {"mode": "custom", "profile": profile,
+                              "repeat": True}}))
+        assert cfg["arrival"] == {"mode": "custom",
+                                  "profile": [[0.0, 2.0], [30.0, 20.0],
+                                              [60.0, 2.0]], "repeat": True}
+
+    def test_arrival_validation_errors(self):
+        cases = [
+            ({"prompt": "p", "parallel": [4], "duration": 60,
+              "arrival": {"mode": "poisson"}}, "perf.qps"),
+            ({"prompt": "p", "parallel": [4], "duration": 60, "qps": 5,
+              "arrival": {"mode": "spike", "spike": {
+                  "base_qps": 2, "spike_qps": 20, "period": 10,
+                  "spike_duration": 30}}}, "spike_duration"),
+            ({"prompt": "p", "parallel": [4], "duration": 60,
+              "arrival": {"mode": "custom", "profile": [[30, 5], [0, 2]]}},
+             "升序"),
+            ({"prompt": "p", "parallel": [4], "duration": 60,
+              "arrival": {"mode": "ramp"}}, "poisson | spike | custom"),
+            ({"prompt": "p", "parallel": [4], "duration": 60,
+              "arrival": "poisson"}, "须为对象"),
+            ({"prompt": "p", "parallel": [4], "duration": 60, "jitter": -1},
+             "jitter"),
+            ({"prompt": "p", "parallel": [4], "duration": 60,
+              "extra_body": "x"}, "extra_body"),
+        ]
+        for perf, err in cases:
+            with pytest.raises(ValueError, match=err):
+                LocustAdapter().build_config(make_request(perf=perf))
 
     def test_validation_errors(self):
         cases = [
@@ -177,8 +233,14 @@ class TestTemplate:
         LocustAdapter()._write_load(cfg)
         text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
         for marker in ('"usage"', "_stream_metrics", "_record(",
-                       "constant_pacing", 'itls', 'tpot_ms'):
+                       "constant_pacing", 'itls', 'tpot_ms',
+                       'iter_lines(chunk_size=1)',   # 逐字节读：防 512B 合批回归
+                       "_Pacer", "EXTRA_BODY", "JITTER",
+                       '"Accept-Encoding": "identity"'):
             assert marker in text
+        # keep-alive 回归：[DONE] 分支不得 break（响应未读完 → 连接被弃用
+        # → 每请求重付 TCP+TLS 握手，TTFT 平抬 ~100ms）
+        assert 'b"[DONE]":' + "\n" + "                break" not in text
 
 
 def _write_metrics(path: Path, recs: list[dict]) -> None:
@@ -218,6 +280,12 @@ class TestCollect:
         assert by_metric["error_rate"].value == 0.0
         assert by_metric["error_rate"].passed is True
         assert "timeseries.json" in result.report_files
+        # summaries：大屏统计表数据源（overall 行与 CLI 汇总同源）
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        overall = {s["metric"]: s for s in ts["summaries"] if s["dataset"] is None}
+        assert overall["qps"]["value"] == pytest.approx(1.25)
+        assert overall["qps"]["count"] == 5
+        assert {"locust:u4"} <= {s["dataset"] for s in ts["summaries"]}
 
     def test_error_aggregation(self, tmp_path):
         recs = [_ok_rec(t=1.0, tokens=50), {"t": 2.0, "ok": 0, "tokens": 0,
@@ -229,6 +297,45 @@ class TestCollect:
         assert by_metric["error_rate"].value == pytest.approx(2 / 3)
         ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
         assert ts["errors"] == [{"key": "HTTP 429", "count": 2}]
+
+    def test_combined_staircase_and_labels(self, tmp_path):
+        """combined 全场阶梯：按墙钟排序、t 重定基全场首秒；series 带 label。"""
+        raw = tmp_path / "locust_raw"
+        _write_metrics(raw / "locust_u2_metrics.jsonl",
+                       [_ok_rec(t=10.0 + i) for i in range(3)])
+        _write_metrics(raw / "locust_u4_metrics.jsonl",
+                       [_ok_rec(t=20.0 + i) for i in range(3)])
+        LocustAdapter().collect(make_request(work_dir=tmp_path))
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        assert [s["label"] for s in ts["series"]] == ["locust:u2", "locust:u4"]
+        assert [p["users"] for p in ts["combined"]] == [2, 2, 2, 4, 4, 4]
+        assert ts["combined"][0]["t"] == 0.0            # 全场首秒起
+        assert ts["combined"][3]["t"] == 10.0           # 第二档接续（非档内归零）
+        assert ts["series"][1]["points"][0]["t"] == 0.0  # 档内相对轴不变
+
+    def test_duplicate_users_labels(self, tmp_path):
+        """消歧档名 locust_u<users>_<序> → 独立 label，指标行不再混档。"""
+        raw = tmp_path / "locust_raw"
+        _write_metrics(raw / "locust_u4_1_metrics.jsonl", [_ok_rec(t=10.0)])
+        _write_metrics(raw / "locust_u4_2_metrics.jsonl", [_ok_rec(t=20.0)])
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        labels = {r.dataset for r in result.rows}
+        assert {"locust:u4#1", "locust:u4#2"} <= labels
+
+    def test_buffered_stream_gate(self, tmp_path):
+        """网关缓冲端点（TTFT≈延迟）：TPOT/ITL/output_tps 拒绝入库，TTFT 保留。"""
+        recs = [_ok_rec(t=100.0 + i, ttft_ms=899.0, latency_ms=900.0,
+                        tpot_ms=5.0, itl_avg=4.0, itl_p95=6.0, itl_n=100,
+                        gen_ms=1.0, tokens=200.0) for i in range(5)]
+        self._one_level(tmp_path, recs)
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        by_metric = {r.metric: r for r in result.rows}
+        assert {"tpot_ms", "itl_ms", "output_tps"}.isdisjoint(by_metric)
+        assert {"ttft_ms", "latency_avg_ms", "qps"} <= set(by_metric)
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        pt = ts["series"][0]["points"][0]
+        assert pt["tpot_avg"] is None and pt["itl_avg"] is None
+        assert pt["latency_avg"] is not None   # 端到端时延仍真实可用
 
     def test_no_output_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="压测产出"):
@@ -264,3 +371,55 @@ class TestExec:
         assert captured["env"]["AITE_LOCUST_METRICS_FILE"].endswith(
             "locust_u4_metrics.jsonl")
         assert captured["env"]["AITE_LOCUST_STREAM"] == "1"
+        assert "AITE_LOCUST_QPS" not in captured["env"]   # 未配不注入
+
+    def test_env_injects_qps(self, tmp_path, monkeypatch):
+        """回归：perf.qps 须注入 AITE_LOCUST_QPS（曾静默失效——限速不生效）。"""
+        import shutil as sh
+        captured = {}
+
+        def fake_subprocess(args, **kw):
+            captured["env"] = kw.get("env_extra", {})
+            return 0, "", ""
+
+        monkeypatch.setattr(sh, "which", lambda name: "locust-stub")
+        monkeypatch.setattr("aite.tools.locust_adapter.run_tool_subprocess",
+                            fake_subprocess)
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [4], "duration": 10, "qps": 50}))
+        LocustAdapter()._write_load(cfg)
+        LocustAdapter()._exec(cfg)
+        assert captured["env"]["AITE_LOCUST_QPS"] == "50.0"
+        assert captured["env"]["AITE_LOCUST_JITTER"] == "0.2"   # 未配缺省开启
+
+    def test_env_injects_arrival_jitter_extra_body(self, tmp_path, monkeypatch):
+        """到达模型/抖动/请求体扩展三键注入（注入链三段断言，防静默失效回归）。"""
+        import shutil as sh
+        captured = {}
+
+        def fake_subprocess(args, **kw):
+            captured["env"] = kw.get("env_extra", {})
+            return 0, "", ""
+
+        monkeypatch.setattr(sh, "which", lambda name: "locust-stub")
+        monkeypatch.setattr("aite.tools.locust_adapter.run_tool_subprocess",
+                            fake_subprocess)
+        cfg = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [4], "duration": 10, "jitter": 0.5,
+                  "arrival": {"mode": "spike", "spike": {
+                      "base_qps": 2, "spike_qps": 20, "period": 60,
+                      "spike_duration": 10}},
+                  "extra_body": {"ignore_eos": True, "min_tokens": 256}}))
+        LocustAdapter()._write_load(cfg)
+        LocustAdapter()._exec(cfg)
+        assert captured["env"]["AITE_LOCUST_JITTER"] == "0.5"
+        cfg0 = LocustAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={"prompt": "p", "parallel": [4], "duration": 10, "jitter": 0}))
+        assert cfg0["jitter"] == 0.0                            # 显式 0 关闭
+        arrival = json.loads(captured["env"]["AITE_LOCUST_ARRIVAL"])
+        assert arrival["mode"] == "spike"
+        extra = json.loads(captured["env"]["AITE_LOCUST_EXTRA_BODY"])
+        assert extra == {"ignore_eos": True, "min_tokens": 256}

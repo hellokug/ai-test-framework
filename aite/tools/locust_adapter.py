@@ -16,12 +16,18 @@ evalscope-perf 的分工：后者 LLM 原生指标（TPOT/ITL/吞吐分档）更
 - ``spawn_rate``：每档用户拉起速率（用户/秒），缺省 = 档位并发（瞬时拉满）
 - ``qps``：闭环封顶目标 QPS（constant_total_pacing）——服务端拖慢时实际
   QPS 随之下降；精确开环 QPS 用 evalscope-perf 的 ``perf.rate``
-- ``number`` 对 locust 无语义（按时长/用户数驱动），配了忽略
+- ``jitter``：到达抖动秒数（并发模式打散同步波次；缺省 0.2s，显式 0 关闭）；
+  ``arrival``：到达模型
+  poisson（泊松到达）/spike（浪涌）/custom（自定义 QPS 曲线，现网流量形状）
+  ——全局节拍器接管限速，并发数退化为在途上限；``extra_body``：请求体扩展
+  （vLLM ignore_eos/min_tokens 定长输出等）；``number`` 对 locust 无语义，
+  配了忽略
 
 **采集通道（全部走 jsonl 文件，不经 locust stats）**：每档一个
 ``locust_uN_metrics.jsonl``，每请求一条 {t, ok, error?, latency_ms, ttft_ms,
 tpot_ms, itl_avg, itl_p95, itl_n, tokens, gen_ms, prompt_tokens}——collect 从
-jsonl 聚合档级指标与秒级时序。locust stats 通道只保留 POST 原生行（TTFT/
+jsonl 聚合档级指标、秒级时序与全场阶梯曲线（combined，按各档进程墙钟拼接）。
+locust stats 通道只保留 POST 原生行（TTFT/
 ITL/TPOT 自定义事件会污染 Aggregated 且 int 取整损失精度，故不进 stats）；
 请求经 stream=True 真流式读取，端到端延迟单独记录。
 """
@@ -62,8 +68,11 @@ _LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms"
 _LOCUSTFILE_TEMPLATE = '''# 由 aite locust 适配器生成（勿手改；regenerate per run）
 import json
 import os
+import random
 import time
 
+import gevent
+from gevent.lock import Semaphore
 from locust import HttpUser, constant, constant_pacing, events, task
 
 URL = os.environ["AITE_LOCUST_URL"]
@@ -76,6 +85,15 @@ METRICS_FILE = os.environ["AITE_LOCUST_METRICS_FILE"]
 # QPS 限速（可选）：闭环封顶语义——服务端拖慢时实际 QPS 随之下降；
 # user 数退化为最大并发上限。未设置 = 并发模式（无间隔连发）。
 QPS = os.environ.get("AITE_LOCUST_QPS")
+# 到达抖动（秒）：并发闭环模式每请求前随机等待 U(0, JITTER)——打散同步波次
+# （8 user 同相起跑会被服务端批处理正反馈锁死：TTFT 尖峰周期化 + 吞吐虚低）
+JITTER = float(os.environ.get("AITE_LOCUST_JITTER", "0") or 0)
+# 到达模型（可选，配置后接管限速）：poisson（泊松到达，需 QPS）/ spike（浪涌）/
+# custom（自定义 QPS 曲线，模拟现网流量形状）——配置校验见 aite 侧 build_config
+ARRIVAL = json.loads(os.environ.get("AITE_LOCUST_ARRIVAL") or "null") or {}
+# 请求体扩展（可选）：JSON object 合并进 payload——如 vLLM 定长输出
+# {"min_tokens": 256, "ignore_eos": true}（一般 OpenAI 兼容端点不认识会 4xx）
+EXTRA_BODY = json.loads(os.environ.get("AITE_LOCUST_EXTRA_BODY") or "{}")
 
 with open(PROMPTS_FILE, encoding="utf-8") as fh:
     PROMPTS = [line for line in (l.strip() for l in fh) if line]
@@ -87,9 +105,61 @@ def _record(rec: dict):
         fh.write(json.dumps(rec, ensure_ascii=False) + "\\n")
 
 
+def _rate_at(now: float) -> float:
+    """到达模型在时刻 now 的全局目标 QPS。"""
+    mode = ARRIVAL.get("mode")
+    if mode == "poisson":
+        return float(QPS)
+    if mode == "spike":
+        sp = ARRIVAL["spike"]
+        in_window = (now % sp["period"]) < sp["spike_duration"]
+        return float(sp["spike_qps"] if in_window else sp["base_qps"])
+    profile = ARRIVAL["profile"]            # custom：[[t, qps], ...] 阶梯
+    span = profile[-1][0]
+    if ARRIVAL.get("repeat") and span > 0:
+        now = now % span
+    rate = float(profile[0][1])
+    for t, q in profile:
+        if now >= t:
+            rate = float(q)
+        else:
+            break
+    return rate
+
+
+class _Pacer:
+    """全局到达节拍器：全部 user 共享一把锁，按到达模型发放请求时隙。
+
+    与 per-user constant_pacing 不同，admission 时刻集中计算间隔——泊松模式
+    逐时隙指数随机（真全局泊松过程），浪涌/自定义按当前目标速率均匀发牌。
+    并发数（-u）退化为在途上限：user 全忙时请求在节拍器前排队。
+    """
+
+    def __init__(self):
+        self._next = time.time()
+        self._sem = Semaphore()
+
+    def wait(self) -> float:
+        with self._sem:
+            now = time.time()
+            delay = self._next - now
+            rate = max(_rate_at(now), 1e-6)
+            step = (random.expovariate(rate) if ARRIVAL.get("mode") == "poisson"
+                    else 1.0 / rate)
+            self._next = max(self._next, now) + step
+        return max(delay, 0.0)
+
+
+_PACER = _Pacer() if ARRIVAL.get("mode") in ("poisson", "spike", "custom") else None
+
+
 def _wait_time():
+    if _PACER is not None:
+        return lambda self: _PACER.wait()
     if QPS:
         return constant_pacing(1.0 / float(QPS), constant_total_pacing=True)
+    if JITTER > 0:
+        return lambda self: random.uniform(0, JITTER)
     return constant(0)
 
 
@@ -103,6 +173,9 @@ class ChatUser(HttpUser):
         self.client.headers.update({
             "Authorization": f"Bearer {API_KEY}",
             "Content-Type": "application/json",
+            # requests 缺省携带 Accept-Encoding: gzip——SSE 过压缩网关会被
+            # 重缓冲（首包延迟/合批）；aiohttp（evalscope）缺省不请求压缩
+            "Accept-Encoding": "identity",
         })
         self._i = -1
 
@@ -117,6 +190,8 @@ class ChatUser(HttpUser):
                    "messages": [{"role": "user", "content": self._next_prompt()}]}
         if MAX_TOKENS:
             payload["max_tokens"] = int(MAX_TOKENS)
+        if EXTRA_BODY:
+            payload.update(EXTRA_BODY)
         t0 = time.perf_counter()
         # stream=True：真流式观测（TTFT/ITL/TPOT 的前提）——False 时响应
         # 完整缓冲后一次读取，所有到达间隔为 0（观测全废）
@@ -148,20 +223,27 @@ class ChatUser(HttpUser):
         completion_tokens = None
         prompt_tokens = None
         itls = []
-        for raw in resp.iter_lines():
+        # chunk_size=1 逐字节读：iter_lines 缺省 512B 缓冲会把多个 SSE 事件
+        # 合批（实测 ITL 采样密度仅 0.35、均值虚高 ~3 倍），逐字节读保留
+        # 真实到达粒度，与 evalscope（aiohttp 逐网络包）同口径
+        for raw in resp.iter_lines(chunk_size=1):
             if not raw.startswith(b"data: "):
                 continue
             now_ms = (time.perf_counter() - t0) * 1000.0
             if ttft_ms is None:
                 ttft_ms = now_ms
-            elif prev_ms is not None and now_ms - prev_ms >= 1.0:
-                # 间隔 <1ms = 读缓冲批量解包噪声（非真实 token 到达），不入样本
+            elif prev_ms is not None:
+                # 全量入样（含合批 0 间隔）——与 evalscope 逐 token 口径一致；
+                # 网关缓冲型端点（整包到达）的假流式由 collect 侧守卫拦截
                 itls.append(now_ms - prev_ms)
             prev_ms = now_ms
             chunk_count += 1
             data = raw[6:].strip()
             if data == b"[DONE]":
-                break
+                # 不 break：继续读完尾部空行直至流自然结束——提前退出会让
+                # urllib3 判定响应未消费完而弃用连接，每请求重付 TCP+TLS
+                # 握手（TTFT 平抬 ~100ms + 服务端连接 churn）
+                continue
             if b'"usage"' in data:
                 try:
                     usage = json.loads(data).get("usage") or {}
@@ -227,15 +309,35 @@ class LocustAdapter(ToolAdapter):
                                 or isinstance(qps, bool) or qps <= 0):
             raise ValueError("perf.qps 须为 >0 的数字（目标总 QPS，闭环封顶）")
 
+        jitter = cfg.get("jitter")
+        if jitter is not None and (not isinstance(jitter, (int, float))
+                                   or isinstance(jitter, bool) or jitter < 0):
+            raise ValueError("perf.jitter 须为 ≥0 的数字（秒，到达抖动——打散同步波次）")
+        if jitter is None:
+            jitter = 0.2   # 缺省开启；显式配 0 关闭（纯连发语义）
+        arrival = self._resolve_arrival(cfg, qps)
+        if arrival is not None and arrival["mode"] != "poisson" and qps is not None:
+            logger.info("locust arrival=%s 接管限速，perf.qps=%s 忽略",
+                        arrival["mode"], qps)
+        extra_body = cfg.get("extra_body") or {}
+        if not isinstance(extra_body, dict):
+            raise ValueError("perf.extra_body 须为对象（合并进请求体，"
+                             "如 vLLM 的 {min_tokens, ignore_eos} 定长输出）")
+
         spawn_rate = cfg.get("spawn_rate")
         output_dir = req.work_dir / "locust_raw"
+        # 重复并发档（如 [4, 4] 稳定性复跑）共用此前缀会互相覆盖/append 合并
+        # → 全档加执行序后缀消歧（collect 侧 locust_u<users>_<序> → u<users>#<序>）
+        duplicated = len(parallel) != len(set(parallel))
         runs = []
-        for users, secs in zip(parallel, self._level_seconds(plan, parallel), strict=True):
-            prefix = output_dir / f"locust_u{users}"
+        for i, (users, secs) in enumerate(
+                zip(parallel, self._level_seconds(plan, parallel), strict=True), 1):
+            stem = f"locust_u{users}" + (f"_{i}" if duplicated else "")
+            prefix = output_dir / stem
             rate = int(spawn_rate) if spawn_rate else users   # 缺省瞬时拉满
             runs.append({"users": users, "spawn_rate": rate, "seconds": float(secs),
                          "csv": str(prefix), "html": f"{prefix}_report.html",
-                         "metrics_file": str(output_dir / f"locust_u{users}_metrics.jsonl")})
+                         "metrics_file": str(output_dir / f"{stem}_metrics.jsonl")})
 
         return {
             "url": url, "model": model, "api_key": api_key,
@@ -243,6 +345,8 @@ class LocustAdapter(ToolAdapter):
             "stream": bool(cfg.get("stream", True)),
             "qps": float(qps) if qps is not None else None,
             "max_tokens": cfg.get("max_tokens"),
+            "jitter": float(jitter) if jitter else 0.0,
+            "arrival": arrival, "extra_body": extra_body,
             "locustfile": str(req.work_dir / "locustfile.py"),
             "prompts_file": str(req.work_dir / "load" / "prompts.txt"),
             "runs": runs,
@@ -250,6 +354,56 @@ class LocustAdapter(ToolAdapter):
             "timeout": int(req.extra.get("timeout", 3600)),
             "output_dir": str(output_dir),
         }
+
+    @staticmethod
+    def _resolve_arrival(cfg: dict, qps) -> dict | None:
+        """perf.arrival 到达模型校验 → 模板环境 JSON（locust 专有）。
+
+        poisson 泊松到达（需 qps 作平均速率）；spike 浪涌（基线与峰值 QPS 按
+        周期切换）；custom 自定义 QPS 阶梯曲线（模拟现网流量形状，可 repeat
+        循环）。配置后由全局节拍器接管限速（qps 封顶不再生效）。
+        """
+        raw = cfg.get("arrival")
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ValueError("perf.arrival 须为对象（mode: poisson | spike | custom）")
+        mode = raw.get("mode")
+        if mode == "poisson":
+            if qps is None:
+                raise ValueError("arrival.mode=poisson 需要 perf.qps（平均到达率）")
+            return {"mode": "poisson"}
+        if mode == "spike":
+            sp = raw.get("spike")
+            if not isinstance(sp, dict):
+                raise ValueError("arrival.spike 须为对象 {base_qps, spike_qps, "
+                                 "period, spike_duration}")
+            keys = ("base_qps", "spike_qps", "period", "spike_duration")
+            if any(not isinstance(sp.get(k), (int, float)) or isinstance(sp.get(k), bool)
+                   or sp.get(k) <= 0 for k in keys):
+                raise ValueError(f"arrival.spike 的 {keys} 须为 >0 的数字")
+            if sp["spike_duration"] > sp["period"]:
+                raise ValueError("arrival.spike.spike_duration 须 ≤ period（浪涌窗口）")
+            return {"mode": "spike",
+                    "spike": {k: float(sp[k]) for k in keys}}
+        if mode == "custom":
+            profile = raw.get("profile")
+            if (not isinstance(profile, list) or len(profile) < 1
+                    or not all(isinstance(pt, (list, tuple)) and len(pt) == 2
+                               and isinstance(pt[0], (int, float))
+                               and not isinstance(pt[0], bool) and pt[0] >= 0
+                               and isinstance(pt[1], (int, float))
+                               and not isinstance(pt[1], bool) and pt[1] > 0
+                               for pt in profile)):
+                raise ValueError("arrival.custom.profile 须为 [[t 秒, qps], ...] "
+                                 "数组（t ≥ 0 升序，qps > 0）")
+            times = [pt[0] for pt in profile]
+            if times != sorted(times):
+                raise ValueError("arrival.custom.profile 的 t 须升序")
+            return {"mode": "custom",
+                    "profile": [[float(t), float(q)] for t, q in profile],
+                    "repeat": bool(raw.get("repeat"))}
+        raise ValueError("perf.arrival.mode 须为 poisson | spike | custom")
 
     @staticmethod
     def _level_seconds(plan, parallel: list[int]) -> list[float]:
@@ -297,6 +451,13 @@ class LocustAdapter(ToolAdapter):
         }
         if cfg["max_tokens"]:
             base_env["AITE_LOCUST_MAX_TOKENS"] = str(int(cfg["max_tokens"]))
+        if cfg["qps"]:
+            base_env["AITE_LOCUST_QPS"] = str(cfg["qps"])
+        base_env["AITE_LOCUST_JITTER"] = str(cfg["jitter"])   # 缺省 0.2，显式 0 关闭
+        if cfg["arrival"]:
+            base_env["AITE_LOCUST_ARRIVAL"] = json.dumps(cfg["arrival"])
+        if cfg["extra_body"]:
+            base_env["AITE_LOCUST_EXTRA_BODY"] = json.dumps(cfg["extra_body"])
         host = cfg["url"].rsplit("/chat/completions", 1)[0]
         for i, run in enumerate(cfg["runs"]):
             env_extra = dict(base_env, AITE_LOCUST_METRICS_FILE=run["metrics_file"])
@@ -331,18 +492,23 @@ class LocustAdapter(ToolAdapter):
                                "查看 logs/locust.log")
         all_recs: list[dict] = []
         for mf in metrics_files:
-            users = mf.name[len("locust_u"):-len("_metrics.jsonl")]
-            label = f"locust:u{users}"
+            # 档名 locust_u<users> 或重复档消歧 locust_u<users>_<执行序>
+            stem = mf.name[len("locust_u"):-len("_metrics.jsonl")]
+            users = int(stem.partition("_")[0])
+            label = "locust:u" + stem.replace("_", "#")
             recs = self._read_recs(mf)
             self._collect_level(req, out, recs, label)
             self._collect_failures(out, recs, label)
-            all_recs.extend({**r, "users": int(users)} for r in recs)
+            all_recs.extend({**r, "users": users} for r in recs)
 
         # ---- 秒级时序（请求完成时刻 epoch → 1s 桶）----
+        series, combined = self._series_from_recs(all_recs)
+        from aite.tools import serialize_summaries  # 懒导入：包 __init__ 注册适配器，顶层导入成环
         timeseries: dict = {"engine": self.name, "run_name": req.run_name,
                             "bucket_seconds": 1.0,
-                            "series": self._series_from_recs(all_recs),
-                            "errors": self._errors_summary(all_recs)}
+                            "series": series, "combined": combined,
+                            "errors": self._errors_summary(all_recs),
+                            "summaries": serialize_summaries(out.rows)}
         if timeseries["series"]:
             ts_path = Path(cfg["output_dir"]).parent / "timeseries.json"
             ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
@@ -376,6 +542,15 @@ class LocustAdapter(ToolAdapter):
             logger.warning("locust %s: 无请求记录，跳过", label)
             return
         ok_recs = [r for r in recs if r.get("ok")]
+        share = self._buffered_share(ok_recs)
+        if share >= 0.9:
+            logger.warning(
+                "locust %s: %.0f%% 请求 TTFT≈总延迟——端点疑似整包缓冲（非真流式），"
+                "TPOT/ITL/output_tps 不可测，拒绝入库", label, share * 100)
+            # 就地置空：指标行与秒级时序同步剔除假流式测量（TTFT 保留，退化为端到端口径）
+            for r in recs:
+                for k in ("tpot_ms", "itl_avg", "itl_p95", "gen_ms"):
+                    r[k] = None
         total = len(recs)
         failed = total - len(ok_recs)
 
@@ -421,6 +596,20 @@ class LocustAdapter(ToolAdapter):
             out.raw_score[label] = metrics["qps"]
 
     @staticmethod
+    def _buffered_share(ok_recs: list[dict]) -> float:
+        """TTFT≈端到端延迟的请求占比（网关缓冲/假流式检测）。
+
+        整包缓冲的响应首字节随完整 body 一起到达（ttft_ms ≥ 0.95×latency_ms），
+        ITL 全 0、TPOT 失真。真流式请求 TTFT 占比通常 <0.5，阈值留足余量。
+        """
+        if not ok_recs:
+            return 0.0
+        hits = sum(1 for r in ok_recs
+                   if r.get("ttft_ms") is not None and r.get("latency_ms")
+                   and float(r["ttft_ms"]) >= 0.95 * float(r["latency_ms"]))
+        return hits / len(ok_recs)
+
+    @staticmethod
     def _span_seconds(recs: list[dict]) -> float | None:
         """首末请求完成时刻差（秒）；不足两条返回 None。"""
         ts = sorted(float(r["t"]) for r in recs if r.get("t"))
@@ -452,10 +641,15 @@ class LocustAdapter(ToolAdapter):
             out.failures.append({"dataset": label, "case": "POST",
                                  "detail": f"{err} ×{n}"})
 
-    def _series_from_recs(self, recs: list[dict]) -> list[dict]:
-        """全部请求（带 users 标记）→ 1s 桶时序 series（完整阶梯曲线数据源）。"""
+    def _series_from_recs(self, recs: list[dict]) -> tuple[list[dict], list[dict]]:
+        """全部请求（带 users 标记）→ 各档 1s 桶 series + 全场 combined 阶梯。
+
+        series 每档独立相对轴（t 自档内首秒起）；combined 复制各档点、按墙钟
+        ts（各档进程同源时钟）排序、t 重定基为全场首秒——多档 ramp 一条
+        连续曲线看完整个爬坡（与 evalscope-perf 的 combined 同语义）。
+        """
         if not recs:
-            return []
+            return [], []
         by_user_sec: dict[tuple[int, int], dict] = {}
         for r in recs:
             t = r.get("t")
@@ -475,7 +669,9 @@ class LocustAdapter(ToolAdapter):
                         b[dst].append(float(v))
             else:
                 b["fails"] += 1
-        series = []
+        t0_global = min(sec for _u, sec in by_user_sec)
+        series: list[dict] = []
+        combined: list[dict] = []
         for u in sorted({users for users, _sec in by_user_sec}):
             secs = {sec: b for (uu, sec), b in by_user_sec.items() if uu == u}
             t0 = min(secs)
@@ -490,7 +686,7 @@ class LocustAdapter(ToolAdapter):
                 tpot_p95 = round(max(b["tpot"]), 1) if b["tpot"] else None
                 itl_avg = round(sum(b["itl"]) / len(b["itl"]), 1) if b["itl"] else None
                 itl_p95 = round(max(b["itl"]), 1) if b["itl"] else None
-                points.append({
+                pt = {
                     "t": round(sec - t0, 3), "users": u, "ts": round(sec, 3),
                     "ttft_avg": ttft_avg, "ttft_p95": ttft_p95,
                     "latency_avg": lat_avg, "latency_p95": lat_p95,
@@ -498,9 +694,13 @@ class LocustAdapter(ToolAdapter):
                     "itl_avg": itl_avg, "itl_p95": itl_p95,
                     "rps": round(b["n"], 3), "tok_s": round(b["tokens"], 1),
                     "errors": int(b["fails"]),
-                })
-            series.append({"users": u, "run": 0, "points": points})
-        return series
+                }
+                points.append(pt)
+                combined.append({**pt, "t": round(sec - t0_global, 3)})
+            series.append({"users": u, "run": 0, "label": f"locust:u{u}",
+                           "points": points})
+        combined.sort(key=lambda p: p["ts"])
+        return series, combined
 
     def _errors_summary(self, recs: list[dict]) -> list[dict]:
         errs: dict[str, int] = {}
