@@ -53,6 +53,10 @@ bench = [
 locust = [
     "locust>=2.20",
 ]
+# 可靠性 chaos（模块 I）：进程发现/注入经 psutil（懒加载，缺失优雅降级）。
+chaos = [
+    "psutil>=5.9",
+]
 agent = [
     "langchain-core>=0.2",
     "langgraph>=0.2",

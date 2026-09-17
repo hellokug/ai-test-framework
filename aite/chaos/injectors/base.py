@@ -39,6 +39,12 @@ def list_injectors() -> list[str]:
     return sorted(_INJECTORS)
 
 
+def list_weapons() -> list[dict]:
+    """武器目录：注入器名 + 支持的故障类型（发现层/前端选择器数据源）。"""
+    return [{"injector": name, "kinds": sorted(_INJECTORS[name].kinds)}
+            for name in sorted(_INJECTORS)]
+
+
 class Injector(ABC):
     """故障注入器契约：注入 → 生效确认 → 恢复（三段生命周期，I2/I3/I4）。
 
@@ -47,9 +53,11 @@ class Injector(ABC):
     - verify 必须区分「注入动作失败」与「故障无效应」（返回 False）
     - recover 必须幂等（controller 的兜底恢复可能重复调用）
     - 全部实现为 async（网络型注入器走 REST；本地型亦统一签名）
+    - kinds: 注入器支持的故障类型清单（武器目录 /chaos/weapons 数据源）
     """
 
     name: ClassVar[str]
+    kinds: ClassVar[list[str]] = []
 
     @abstractmethod
     async def inject(self, spec: FaultSpec) -> FaultHandle: ...

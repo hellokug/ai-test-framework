@@ -33,6 +33,7 @@ _TOXIC_TYPES = {
 
 @register_injector("toxiproxy")
 class ToxiproxyInjector(Injector):
+    kinds = ["latency", "timeout", "bandwidth"]
     name = "toxiproxy"
 
     async def inject(self, spec: FaultSpec) -> FaultHandle:

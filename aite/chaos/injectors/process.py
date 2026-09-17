@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import os
+
 from aite.chaos.injectors.base import Injector, register_injector
 from aite.chaos.model import FaultHandle, FaultSpec
 from aite.utils.logging import get_logger
@@ -26,6 +28,7 @@ def _psutil():
 @register_injector("process")
 class ProcessInjector(Injector):
     name = "process"
+    kinds = ["kill", "suspend"]
 
     async def inject(self, spec: FaultSpec) -> FaultHandle:
         if spec.kind not in ("kill", "suspend"):
@@ -75,10 +78,16 @@ class ProcessInjector(Injector):
                 return psutil.Process(int(target["pid"]))
             except psutil.NoSuchProcess as exc:
                 raise ValueError(f"目标进程不存在: pid={target['pid']}") from exc
-        name = str(target.get("name") or "")
+        name = str(target.get("name") or "").strip().lower()
         if not name:
-            raise ValueError("process 故障 target 需要 pid 或 name")
-        for proc in psutil.process_iter(["name"]):
-            if (proc.info.get("name") or "").lower() == name.lower():
-                return proc
-        raise ValueError(f"按名称未找到进程: {name!r}")
+            raise ValueError("process 故障 target 需要 pid 或 name（模糊子串）")
+        matches = [proc for proc in psutil.process_iter(["pid", "name"])
+                   if name in (proc.info.get("name") or "").lower()
+                   and proc.info.get("pid") != os.getpid()]
+        if not matches:
+            raise ValueError(f"按名称模糊匹配未找到进程: {name!r}")
+        if len(matches) > 1:
+            logger.warning("chaos[process] 名称 %r 命中 %d 个进程，取 pid 最小 %s",
+                           name, len(matches),
+                           sorted(p.info["pid"] for p in matches)[:5])
+        return min(matches, key=lambda p: p.info["pid"])

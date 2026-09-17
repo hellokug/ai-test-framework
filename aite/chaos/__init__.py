@@ -11,6 +11,7 @@ suspend）两个注入器 + run_with_chaos 编排器；ChaosBlade 包装为二�
 """
 
 from aite.chaos.controller import ChaosVerifyError, run_with_chaos
+from aite.chaos.discovery import discover_targets as discover_targets
 from aite.chaos.injectors.base import (
     get_injector as get_injector,
 )
@@ -35,7 +36,9 @@ from aite.chaos.model import (
 from aite.chaos.model import (
     validate_specs as validate_specs,
 )
+from aite.chaos.observer import observe_under_chaos as observe_under_chaos
 
 __all__ = ["ChaosVerifyError", "FaultEvent", "FaultHandle", "FaultSpec",
-           "get_injector", "list_injectors", "register_injector",
-           "run_with_chaos", "unregister_injector", "validate_specs"]
+           "discover_targets", "get_injector", "list_injectors",
+           "observe_under_chaos", "register_injector", "run_with_chaos",
+           "unregister_injector", "validate_specs"]
