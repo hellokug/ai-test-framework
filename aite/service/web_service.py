@@ -6,8 +6,35 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+def list_perf_datasets() -> list[dict]:
+    """性能场景数据集产物清单（模块 J）：stats 摘要 + 时间倒序。
+
+    磁盘枚举收口本层（原则 1：路由不直接读磁盘）；产物目录见
+    config.DEFAULT_PERFDATA_DIR。
+    """
+    from aite import config
+
+    base = Path(config.DEFAULT_PERFDATA_DIR)
+    if not base.is_dir():
+        return []
+    items = []
+    for stats_path in sorted(base.glob("*.stats.json"),
+                             key=lambda p: p.stat().st_mtime, reverse=True):
+        file_path = stats_path.with_name(
+            stats_path.name[:-len(".stats.json")] + ".jsonl")
+        items.append({
+            "file": file_path.name,
+            "path": str(file_path),
+            "stats": json.loads(stats_path.read_text(encoding="utf-8")),
+            "created_at": datetime.fromtimestamp(
+                stats_path.stat().st_mtime).isoformat(timespec="seconds"),
+        })
+    return items
 
 
 def parse_jsonl_records(text: str) -> list[dict]:
