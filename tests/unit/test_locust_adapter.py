@@ -28,7 +28,7 @@ class TestBuildConfig:
         assert cfg["url"] == "http://localhost:11434/v1/chat/completions"
         assert cfg["model"] == "qwen2.5:3b"
         assert cfg["stream"] is True
-        assert cfg["jitter"] == 0.2                       # 缺省开启打散波次
+        assert cfg["jitter"] == 0.0                       # 缺省 0：与 evalscope 同形态
         run = cfg["runs"][0]
         assert run["users"] == 4 and run["seconds"] == 60.0
         assert run["spawn_rate"] == 4                       # 缺省瞬时拉满
@@ -277,6 +277,9 @@ class TestCollect:
         assert by_metric["tpot_ms"].value == pytest.approx(32.0)
         assert by_metric["itl_ms"].value == pytest.approx(30.0)
         assert by_metric["qps"].value == pytest.approx(1.25)     # 5 / 4s
+        # output_tps 与 evalscope 同口径：Σtokens ÷ 墙钟时长
+        # （start=100-0.9=99.1, end=104 → wall=4.9s; Σtokens=435）
+        assert by_metric["output_tps"].value == pytest.approx(88.8, abs=0.1)
         assert by_metric["error_rate"].value == 0.0
         assert by_metric["error_rate"].passed is True
         assert "timeseries.json" in result.report_files
@@ -330,7 +333,9 @@ class TestCollect:
         self._one_level(tmp_path, recs)
         result = LocustAdapter().collect(make_request(work_dir=tmp_path))
         by_metric = {r.metric: r for r in result.rows}
-        assert {"tpot_ms", "itl_ms", "output_tps"}.isdisjoint(by_metric)
+        assert {"tpot_ms", "itl_ms"}.isdisjoint(by_metric)
+        # output_tps 墙钟聚合口径对缓冲端点仍可测（token 按墙钟到达，只是不流式）
+        assert "output_tps" in by_metric
         assert {"ttft_ms", "latency_avg_ms", "qps"} <= set(by_metric)
         ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
         pt = ts["series"][0]["points"][0]
@@ -391,7 +396,7 @@ class TestExec:
         LocustAdapter()._write_load(cfg)
         LocustAdapter()._exec(cfg)
         assert captured["env"]["AITE_LOCUST_QPS"] == "50.0"
-        assert captured["env"]["AITE_LOCUST_JITTER"] == "0.2"   # 未配缺省开启
+        assert captured["env"]["AITE_LOCUST_JITTER"] == "0.0"   # 未配缺省 0
 
     def test_env_injects_arrival_jitter_extra_body(self, tmp_path, monkeypatch):
         """到达模型/抖动/请求体扩展三键注入（注入链三段断言，防静默失效回归）。"""

@@ -314,7 +314,9 @@ class LocustAdapter(ToolAdapter):
                                    or isinstance(jitter, bool) or jitter < 0):
             raise ValueError("perf.jitter 须为 ≥0 的数字（秒，到达抖动——打散同步波次）")
         if jitter is None:
-            jitter = 0.2   # 缺省开启；显式配 0 关闭（纯连发语义）
+            jitter = 0.0   # 缺省 0 = 零思考时间在途钉满，与 evalscope 形态同构
+                           # （keep-alive 修复后到达自然错开，无需抖动护航；
+                           #  突发场景显式配 jitter/arrival 刻意制造）
         arrival = self._resolve_arrival(cfg, qps)
         if arrival is not None and arrival["mode"] != "poisson" and qps is not None:
             logger.info("locust arrival=%s 接管限速，perf.qps=%s 忽略",
@@ -546,7 +548,8 @@ class LocustAdapter(ToolAdapter):
         if share >= 0.9:
             logger.warning(
                 "locust %s: %.0f%% 请求 TTFT≈总延迟——端点疑似整包缓冲（非真流式），"
-                "TPOT/ITL/output_tps 不可测，拒绝入库", label, share * 100)
+                "TPOT/ITL 不可测拒绝入库（output_tps 墙钟聚合口径仍可测，保留）",
+                label, share * 100)
             # 就地置空：指标行与秒级时序同步剔除假流式测量（TTFT 保留，退化为端到端口径）
             for r in recs:
                 for k in ("tpot_ms", "itl_avg", "itl_p95", "gen_ms"):
@@ -622,12 +625,21 @@ class LocustAdapter(ToolAdapter):
 
     @staticmethod
     def _global_tps(recs: list[dict]) -> float | None:
-        """输出吞吐（全局口径，与 evalscope 对齐）：Σtokens / Σ生成秒。"""
-        pairs = [(float(r["tokens"]), float(r.get("gen_ms") or 0)) for r in recs
-                 if r.get("ok") and r.get("tokens")]
-        tot_tok = sum(t for t, _ in pairs)
-        tot_gen = sum(g for _, g in pairs) / 1000.0
-        return round(tot_tok / tot_gen, 1) if tot_gen > 0 else None
+        """输出吞吐（与 evalscope Output Throughput 同口径）：Σtokens ÷ 墙钟时长。
+
+        evalscope 按测试墙钟聚合（8 并发的 tok/s 是 8 流之和）；locust 旧口径
+        Σtokens/Σ生成秒实为单流速率（≈1000/ITL），同名指标差 ~在途并发倍——
+        2026-09-17 对比工具首次暴露。单流速率由 ITL 已覆盖，此处对齐聚合口径。
+        """
+        with_tok = [r for r in recs if r.get("ok") and r.get("tokens")]
+        if len(with_tok) < 2:
+            return None
+        total_tokens = sum(float(r["tokens"]) for r in with_tok)
+        start = min(float(r["t"]) - float(r.get("latency_ms") or 0) / 1000.0
+                    for r in with_tok)
+        end = max(float(r["t"]) for r in with_tok)
+        wall = end - start
+        return round(total_tokens / wall, 1) if wall > 0 else None
 
     @staticmethod
     def _collect_failures(out: ToolRunResult, recs: list[dict], label: str) -> None:

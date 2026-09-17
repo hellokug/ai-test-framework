@@ -336,7 +336,8 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似拼接。
   **适用条件**：TPOT/ITL/TTFT 要求端点透传
   真流式（逐 token flush）——网关缓冲型端点（部分云 API）整个响应完成时
   一次性到达，TTFT 退化为端到端延迟、TPOT/ITL 不可测（collect 自动检测
-  TTFT≈总延迟并告警，TPOT/ITL/output_tps 拒绝入库）；本地 Ollama / vLLM 为真流式
+  TTFT≈总延迟并告警，TPOT/ITL 拒绝入库，output_tps 墙钟聚合口径仍保留）；
+  本地 Ollama / vLLM 为真流式
 
 ```bash
 pip install 'aite[locust]'
