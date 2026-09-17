@@ -10,6 +10,7 @@ import os
 
 DEFAULT_DB_URL = "sqlite+aiosqlite:///./aite.db"
 DEFAULT_REPORTS_DIR = "./reports"
+DEFAULT_PERFDATA_DIR = "./perf_datasets"   # 性能场景数据集生成产物（模块 J）
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8300
 ENV_DB_URL = "AITE_DB"

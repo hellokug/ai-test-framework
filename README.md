@@ -121,9 +121,9 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 `pass_rate` 统一入 `run_metric_summary`，与精度跑分在 Web 趋势中并列可比。
 依赖：`pip install "aite[functional]"`（pytest>=8.2）。
 
-内置 8 场景（52 例，`aite tool benchmarks pytest` 可查），分两个域：
+内置 9 场景（64 例，`aite tool benchmarks pytest` 可查），分两个域：
 
-**模型能力域**（4 场景 14 例）：
+**模型能力域**（5 场景 26 例）：
 
 | 场景 | 例数 | 覆盖 |
 |---|---|---|
@@ -131,6 +131,7 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 | `structured_output` | 4 | JSON 可解析 / 定长数组 / 枚举字段 / 两层嵌套 |
 | `tool_calling` | 3 | 正确选工具 / arguments 可解析含关键参数 |
 | `long_context` | 3 | needle-in-a-haystack（确定性填充，4k/16k/尾部） |
+| `agent_tasks` | 12 | **Agent 评测集**：工具选择与语义区分 / 参数抽取（含中文、订单号精确抽取）/ 多轮续作（工具结果→最终回答、补参二次调用）/ 能力边界拒答（no_tool）——每例带 tools 定义与客观断言（tool/tool_args_contains/no_tool/finish_reason） |
 
 **API 契约域**（4 场景 38 例，测 OpenAI 兼容层本身的协议正确性，断言严格按
 OpenAI 规范）：
@@ -152,7 +153,7 @@ OpenAI 规范）：
 engine: pytest
 target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
 tools:
-  datasets: [basic_chat, structured_output, tool_calling, long_context]
+  datasets: [agent_tasks, basic_chat, structured_output, tool_calling, long_context]
   metric_thresholds: {pass_rate: 1.0}   # auto 等价 1.0（零容忍）；不配则无判定
 ```
 
@@ -271,8 +272,8 @@ tools:
 （每档 summary/percentile json、sla_summary、performance_summary.txt、
 perf_report.html、执行日志）。
 
-**两引擎指标对齐表**（F1 大屏/表单的权威依据；档级行 + locust 全场行
-`locust:total`）：
+**两引擎指标对齐表**（F1 大屏/表单的权威依据；两引擎均各并发档一行，
+`dataset="perf:c<并发>"` / `"locust:u<用户数>"`）：
 
 | 指标 | 含义 | avg | p95 |
 |---|---|---|---|
@@ -289,10 +290,10 @@ ttft_p95, latency_avg, latency_p95, tpot_avg, tpot_p95, itl_avg, rps, tok_s,
 errors}`。
 
 **阶梯曲线**（timeseries `combined` 字段）：多档 sweep 的时间演进全景——各档
-按执行序拼接为一条绝对时间轴曲线（`{t, users, rps, tok_s, ttft_p95,
-latency_p95, errors}`，users 随档位阶梯变化），一张图看完整个爬坡过程；各档
-明细 series 保留供下钻。locust 按各档进程 epoch 时间戳精确对齐；
-evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似。
+按执行序拼接为一条连续时间轴（点形状与 series 点一致，users 随档位阶梯变化），
+一张图看完整个爬坡过程；各档明细 series 保留供下钻。两引擎均已产出：locust
+按各档请求墙钟（jsonl 的 t 字段，各档进程同源时钟）排序 + 重定基，精确无缝；
+evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似拼接。
 
 口径说明：判定为**可选阈值 + 记录**（性能绝对阈值换环境即失效；基线回归对比
 后置）；本地单卡并发梯度预期平坦（GPU 吞吐瓶颈，历史实测），梯度压测的发力场景
@@ -312,35 +313,194 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似。
 - **locust 特有**：`spawn_rate`（每秒拉起用户数，缺省 = 档位并发）；`qps`
   （闭环封顶目标 QPS——`constant_pacing(constant_total_pacing=True)`，服务端
   拖慢则实际 QPS 下降；user 数退化为最大并发上限。精确开环 QPS 请用
-  evalscope-perf 的 `perf.rate`）；`number` 无语义，配了忽略；**必配一个时长键**
-- 指标与 evalscope-perf 全集对齐（`dataset="locust:u<用户数>"`）：
+  evalscope-perf 的 `perf.rate`）；`jitter`（到达抖动秒数，缺省 0.2
+  开启、显式 0 关闭——并发闭环的同步波次会被服务端批处理正反馈锁死：
+  TTFT 尖峰周期化 + 吞吐虚低；另 locustfile 已修 [DONE] 提前 break 弃用
+  连接的缺陷并显式 Accept-Encoding: identity，与 aiohttp 同为连接复用 +
+  不压缩语义）；`arrival`
+  （到达模型 poisson/spike/custom，见「性能场景数据集与到达模型」节）；
+  `extra_body`（JSON 合并进请求体，vLLM 定长输出等）；`number` 无语义，
+  配了忽略；**必配一个时长键**
+- 指标与 evalscope-perf 全集对齐（每档一行，`dataset="locust:u<用户数>"`）：
   ttft_ms / latency_avg_ms / latency_p95_ms / **itl_ms** / **tpot_ms** /
-  **output_tps** / qps / error_rate + 错误明细（`_failures.csv` → 错误文本×次数）。
-  LLM 指标由生成 locustfile 的流式采集提供（`stream=True` 真流式 + 延迟经
-  LATENCY 事件上报端到端口径——stream 下 POST 原生统计退化为 TTFB）：TTFT 首
-  包计时、ITL 逐块间隔事件、
+  **output_tps** / qps / error_rate + 错误明细（错误文本×次数）。
+  LLM 指标由生成 locustfile 的流式采集提供（`stream=True` 真流式；每请求一条
+  完整记录写入 `locust_uN_metrics.jsonl`——aite 侧统计与时序的唯一数据源，
+  不经 locust stats）：TTFT 首包计时、ITL 逐事件全量入样（`iter_lines(chunk_size=1)`
+  逐字节读还原到达粒度，含合批 0 间隔——与 evalscope 逐 token 口径对齐；缺省
+  512B 缓冲会把多个 SSE 事件合批，实测采样密度仅 0.35、均值虚高 ~3 倍）、
   TPOT（生成段毫秒/token，分母 = token 数 - 1，与 evalscope 公式一致）；
   token 数取 usage.completion_tokens（端点不回传时以 chunk 数近似）。
-  output_tps 与 avg_input_tokens / avg_output_tokens（平均输入/输出长度）
-  为全局口径行（`dataset="locust:total"`：Σtokens÷Σ生成秒 / 逐请求均值），
-  与 evalscope 同口径直接可比。**适用条件**：TPOT/ITL/TTFT 要求端点透传
+  output_tps（Σtokens÷Σ生成秒）与 avg_input_tokens / avg_output_tokens
+  （平均输入/输出长度）为档内全局口径，与 evalscope 同口径直接可比。
+  **适用条件**：TPOT/ITL/TTFT 要求端点透传
   真流式（逐 token flush）——网关缓冲型端点（部分云 API）整个响应完成时
   一次性到达，TTFT 退化为端到端延迟、TPOT/ITL 不可测（collect 自动检测
-  TTFT≈总延迟并告警，ITL/TPOT 拒绝入库）；本地 Ollama / vLLM 为真流式
+  TTFT≈总延迟并告警，TPOT/ITL/output_tps 拒绝入库）；本地 Ollama / vLLM 为真流式
 
 ```bash
 pip install 'aite[locust]'
 aite run -c examples/locust.yaml
 ```
 
-## 可靠性 chaos 框架（模块 I 骨架）
+### 性能场景数据集与到达模型（模块 J 一期）
 
-故障注入 + 业务评测交织的可靠性测试。**调研结论**：网络层集成
-[Toxiproxy](https://github.com/Shopify/toxiproxy)（用户态 TCP 代理，跨平台
-无 root，REST 控制），进程/资源层集成 [ChaosBlade](https://github.com/chaosblade-io/chaosblade)
-（Linux 执行机，二期注入器）；Chaos Mesh / Litmus 强依赖 K8s 不采用。
-自研部分 = aite 语义层的故障编排：**注入 → 生效确认 → 业务执行 → 兜底恢复**
-（恢复失败显式告警防故障泄漏），事件时间线写入 run details。
+**场景数据集生成**——压测专用负载（输入长度分桶 + 前缀共享率），替代直接
+复用精度域 QA 数据集（输出长度随模型漂移不可复现；零命中形态无法代表 RAG
+等高共享前缀场景）。四步操作：
+
+**① 准备语料池**（任一形态）：目录（批量 .txt/.md：业务文档、运维手册、
+对话日志）或单文件（.txt/.md，或 .jsonl——每行取 text/input/content/
+prompt/question 首个命中字段）。要求：按行切段（<20 字符的行忽略）、贪婪
+合并为 ~400 字符块，**切分后 ≥2 块**才可生成——太小的 QA 文件（如仅 1KB
+的示例数据集）会被显式拒绝，语料太少生成不出有代表性的负载。
+
+**② 生成**（脚本与 REST 字段同名，任选）：
+
+```bash
+# 脚本：本地操作
+python -m aite.tools.perf_dataset --corpus ./corpus --count 200 \
+    --lengths 512,2048 --weights 0.7,0.3 --prefix-sharing 0.6 \
+    --output-tokens 256 --seed 42 --name rag-scene
+```
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `--corpus` / `corpus` | ✓ | 语料池：目录或 .txt/.md/.jsonl 文件 |
+| `--count` / `count` | ✓ | 生成条数（≥1） |
+| `--lengths` / `input_lengths` | ✓ | 输入长度分桶（字符），逗号分隔 |
+| `--weights` / `input_weights` | | 桶配比（缺省均分），与桶等长的正数数组 |
+| `--prefix-sharing` / `prefix_sharing` | | 共享前缀的请求占比 0~1（0 = 零命中） |
+| `--prefix-groups` / `prefix_groups` | | 共享前缀组数（缺省 4） |
+| `--output-tokens` / `output_tokens` | | 期望输出长度（写入元数据供参考） |
+| `--seed` / `seed` | | 种子（缺省 42；同 seed + 同语料 + 同配置 → 逐字节一致） |
+| `--name` / `name` | | 产物名（缺省 perf-scene） |
+| `--out-dir` | | 产物目录（缺省 ./perf_datasets） |
+
+```text
+POST /api/v1/perf/datasets            # 生成（字段同名，返回 path/stats/preview）
+GET  /api/v1/perf/datasets            # 产物清单（含 stats 摘要，时间倒序）
+POST /api/v1/perf/datasets/validate   # 干跑校验（不读语料池，前端表单实时反馈）
+```
+
+**③ 产物**：`perf_datasets/<name>-<时间戳>.jsonl`——每行一条记录：`input`
+（按桶定长的语料文本）+ `bucket`/`actual_chars`（目标/实际字符数）+
+`prefix_group`/`prefix_chars`（共享前缀组与命中长度，独立采样为 null/0）+
+`output_tokens`；同名 `.stats.json` 为场景快照（桶分布、共享率、平均长度、
+seed）。同组同桶样本的前缀逐字节一致——这是服务端 KV cache 命中的前提。
+
+**④ 消费**：suite yaml 的 `perf.dataset` 直接指向产物路径（与普通数据集同
+一通道），输出长度用 `max_tokens` 定上限、vLLM 端点可经 `extra_body` 精确
+定长（一般 OpenAI 兼容端点不认识 ignore_eos 会 4xx，去掉即可）：
+
+```yaml
+perf:
+  dataset: ./perf_datasets/rag-scene-20260916-011232.jsonl
+  max_tokens: 256
+  extra_body: {min_tokens: 256, ignore_eos: true}   # 仅 vLLM 类端点
+  mode: baseline
+  baseline: {parallel: 8}
+  duration: 120
+```
+
+**到达模型（locust 专有）**——并发闭环的同步波次会被服务端批处理正反馈
+锁死（TTFT 尖峰周期化 + 吞吐虚低），三种应对（yaml 示意为互斥选项）：
+
+```yaml
+perf:
+  jitter: 0.5                        # 每请求随机等待 U(0, jitter)，打散波次
+  qps: 20
+  arrival: {mode: poisson}           # 泊松到达（qps = 平均速率）
+  arrival:                           # 浪涌：基线/峰值 QPS 按周期切换
+    mode: spike
+    spike: {base_qps: 2, spike_qps: 20, period: 60, spike_duration: 10}
+  arrival:                           # 自定义 QPS 阶梯曲线（现网流量形状）
+    mode: custom
+    profile: [[0, 5], [60, 20], [120, 5]]
+    repeat: true
+```
+
+arrival 配置后由全局节拍器接管限速（并发数退化为在途上限，user 全忙时在
+节拍器前排队）；poisson 逐时隙指数随机（真全局泊松过程）。poisson/spike/
+custom 为 locust 专有，evalscope-perf 配置即报错（上游仅支持固定速率
+`perf.rate`）。
+
+### 压测曲线图（大屏预览）
+
+曲线图数据源 = 压测 run 产出的 `timeseries.json`（两引擎同 schema，落盘在
+run 工作目录 `reports/tool/<engine>/<run名>/<时间戳>/` 下；REST 经
+`GET /runs/{run_id}/timeseries` 读取，F1 前端大屏将直接接该端点）。本地生成
+HTML 曲线用预览脚本（数据契约与 REST 端点完全一致，即 F1 大屏的参考实现）：
+
+```bash
+# 完整流程第一步：跑一次压测，产出 timeseries.json
+aite run -c examples/locust.yaml            # 或 examples/perf_evalscope.yaml
+
+# 方式一：交互清单——列出 reports/ 下全部压测时序（最新在前），回车选最新
+python scripts/preview_perf_dashboard.py
+
+# 方式二：直接指定 timeseries.json
+python scripts/preview_perf_dashboard.py --data reports/tool/locust/perf-locust/<时间戳>/timeseries.json
+
+# 方式三：从库按 run_id 读（档级汇总表全量；--db 指定 storage，缺省 ./aite.db）
+python scripts/preview_perf_dashboard.py --run-id <run_id>
+
+# 方式四：合成演示数据（无需真实压测，含故障注入窗口）
+python scripts/preview_perf_dashboard.py --demo
+```
+
+输出 `perf_dashboard_<run名>.html`，浏览器打开：**顶部统计结果表**（timeseries
+的 `summaries` 字段，与 CLI 汇总同源——overall 行直接看最终 PASS/FAIL 结论 +
+档级明细），下方图表**按指标族拆分**：TTFT / 延迟 / TPOT / ITL 各自 avg+p95
+同族共图，RPS、token 吞吐、并发阶梯、错误统计各自独立成图，不同指标不混轴。
+x 轴优先墙钟时间（points 的 `ts` epoch 秒），chaos 故障窗口自动叠加阴影区。
+多档 ramp 的全程阶梯曲线读 timeseries 的 `combined` 字段。
+注意：清单模式须在含 `reports/` 的目录下运行（缺省仓库根）；`--list` 仅列出
+数据源不渲染，`--pick N` 免交互选第 N 项，`--out` 自定义输出路径。旧版
+timeseries（无 `summaries` 字段）图表照常渲染，统计表提示重跑。
+
+## 可靠性 chaos 框架（模块 I 三层架构）
+
+故障注入 + 业务评测交织的可靠性测试，按三层组织：
+
+**发现层**——故障注入对象查询，返回 节点>容器>进程 树视图（全部大小写
+不敏感子串模糊匹配；跨节点发现依赖执行机 agent 二期，当前本机）：
+
+```text
+GET /api/v1/chaos/targets?node=&node_ip=&container=&container_ip=&process=xxx
+GET /api/v1/chaos/weapons          # 武器目录：注入器 × 支持的故障类型
+```
+
+**故障注入层**——武器化注入器，统一「注入 → 生效确认(观测) → 恢复」三段
+生命周期（恢复幂等 + 兜底逆序恢复防泄漏；新增武器 = 新增注入器文件走注册表）：
+
+- `toxiproxy`：网络层 latency / timeout / bandwidth（用户态代理，跨平台）
+- `process`：进程 kill / suspend（psutil；支持 pid 精确定位或进程名模糊
+  匹配——自动排除 aite 自身防误杀，多命中取 pid 最小并告警）
+- 二期：ChaosBlade（Linux 执行机进程/资源层）
+
+**观测层**——背景推理流量持续观测：流式探针按 interval（缺省 5s）对被测
+端点打点，成功标 pass、失败标 fail，形成按时间打点的视图；RTO 由
+last_fail → 恢复后首个 pass 的时间差判定（精度 ±探针间隔）：
+
+```text
+POST /api/v1/chaos/observe
+{
+  "target": {"base_url": "http://localhost:11434/v1", "model": "qwen2.5:3b"},
+  "faults": [{"injector": "process", "kind": "suspend",
+              "target": {"name": "ollama"}, "params": {}}],
+  "interval": 5, "duration": 60,
+  "post_window": 15
+}
+→ {events: [注入/生效/恢复时间线], probes: [{t, ok, ttft_ms, latency_ms, error}],
+   rto: {affected, first_fail, last_fail, recovered_at, rto_seconds}, summary}
+```
+
+`post_window`（缺省 interval×3）为恢复后补测窗口，保证 RTO 可判定；
+duration 上限 600s。**与评测编排组合**（Python API）：`run_with_chaos(faults,
+business)` 包裹任意业务协程；`POST /runs` 请求体加 `chaos: [fault...]` 段即
+包裹本次评测执行（事件时间线进 run details.chaos_events，与大屏曲线叠加
+标故障窗口）。
 
 ```python
 from aite.chaos import run_with_chaos
@@ -353,12 +513,6 @@ faults = [{
 result, events = await run_with_chaos(faults, business_coro)
 # 被测 suite 的 target.base_url 指向代理端口 18434；events 进 details.chaos_events
 ```
-
-- 内置注入器：`toxiproxy`（latency/timeout/bandwidth）、`process`
-  （kill/suspend，psutil 懒加载，高危按 pid 精确定位）
-- REST：`POST /runs` 请求体加 `chaos: [fault...]` 段即包裹本次执行
-  （本地执行）；agent 派发任务 suite_raw 带 chaos 段时在执行机侧注入
-- 与压测组合 = 错误率/TTFT 曲线叠加故障窗口（MTTR 观测）
 
 ## 执行机纳管（模块 G 一期）
 

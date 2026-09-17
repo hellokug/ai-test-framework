@@ -287,9 +287,49 @@ Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源�
       recover_failed 事件告警（防泄漏需人工跟进）
 - [x] I5 观测：FaultEvent 时间线（注入/生效/恢复时间戳）进 run
       details.chaos_events，与 timeseries 曲线叠加（大屏 F1 画故障窗口）
-- [ ] I6 二期：ChaosBlade 注入器（进程 kill/CPU/内存/磁盘，Linux 执行机）、
-      故障编排 DSL（时序/组合/按阶段注入）、agent 分布式注入（贴近被测系统）、
-      拓扑感知（注入点发现与展示）、MTTR 自动计算报告
+- [x] I6a 发现层一期（2026-09-16）：aite/chaos/discovery.py——节点名/IP/
+      容器名/容器IP/进程名 大小写不敏感子串模糊过滤 → 节点>容器>进程 树视图
+      （psutil 本机进程 + docker CLI 子进程 JSON 契约 + docker top 容器内进程，
+      全部懒加载优雅降级）；REST GET /chaos/targets + 武器目录 /chaos/weapons；
+      process 注入器升级名称模糊定位（排除 aite 自身防误杀，多命中取 pid
+      最小并告警）；pyproject 新增 chaos extra（psutil）
+- [x] I6b 观测层一期（2026-09-16）：aite/chaos/observer.py——背景推理探针
+      流式打点（interval 缺省 5s，pass=200 且内容非空）+ RTO 判定（last_fail
+      → 恢复后首个 pass，精度 ±间隔；post_window 恢复后补测窗口保证可测）+
+      observe_under_chaos 编排（run_with_chaos 复用）；REST POST /chaos/observe
+      （duration ≤600s 防长请求占死连接）
+- [ ] I6 二期剩余：ChaosBlade 注入器（进程 kill/CPU/内存/磁盘，Linux 执行机）、
+      故障编排 DSL（时序/组合/按阶段注入）、agent 分布式发现与注入（贴近被测
+      系统，跨节点拓扑聚合）、MTTR 自动计算报告
+
+### 模块 J：性能数据集工程（2026-09-16 立项，未实施）
+
+**动机（用户）**：压测的核心负载特征是输入/输出长度分布与前缀缓存命中率，
+当前压测直接复用精度域 QA 数据集——输出长度随模型自由漂移（结果不可复现
+不可比）、缓存命中只有一个固定档位（synthetic 刻意零命中）、无客户场景概念
+（RAG 客户是"长共享前缀 + 短问题"，与 QA 零命中形态的 TTFT/吞吐曲线完全是
+两回事）。已存档的数据集治理需求（requirements-datasetgov.md）通篇为精度域，
+性能数据集工程是规划空白。
+
+**能力形态**（perf.scenario 配置，产出带长度标注的 load/prompts.txt，两引擎
+共用，确定性可复现、可导出场景快照）：
+
+- 语料池（perf.corpus）+ 输入长度分桶采样（input_lengths/weights，token 级）
+- 输出长度控制（target/jitter；vLLM 走 min_tokens+ignore_eos 精确定长，
+  一般端点退化为区间采样 + "天然长输出"语料话术）
+- 前缀共享率（prefix_sharing：0=零命中即现 synthetic 语义，1=同前缀全命中，
+  模拟 RAG/Agent 场景）
+- 场景快照导出/复用（长度分布 + 命中率 + 到达间隔分布的组合）
+
+- [x] J1 语料池 + 长度分桶采样（2026-09-16 一期：aite/tools/perf_dataset.py
+      纯函数生成器——目录/jsonl 语料池切块、input_lengths/weights 桶配比、
+      同 seed 逐字节可复现；产物 jsonl 经 perf.dataset 两引擎直接消费）
+- [x] J2 输出长度控制（2026-09-16 一期：output_tokens 写元数据 + perf.extra_body
+      透传 vLLM {min_tokens, ignore_eos} 运行时定长；一般 OpenAI 兼容端点
+      退化为 max_tokens 区间——上游能力边界）
+- [x] J3 前缀共享率 + 场景快照（2026-09-16 一期：prefix_sharing/prefix_groups
+      同组共享长前缀模拟 RAG KV cache 命中；产物 stats.json 摘要落盘；
+      REST POST/GET /perf/datasets + validate 干跑校验供前端对接）
 
 ## 基线（已完成）
 
@@ -382,3 +422,16 @@ Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源�
 - 2026-09-13 真实联调第二轮：修复时序秒桶结构漂移 KeyError（token 完成秒与 history 行不重合时，token 合并路径的 setdefault 用旧桶结构缺 tpot/itl 键——抽 _new_bucket 工厂消除两份字面量结构；回归测试覆盖 token-only 秒）。教训固化：同一数据结构的字面量在两处出现必然漂移，抽工厂；heredoc 写码的转义断裂问题反复出现，模板类修改一律 Edit 工具。374 全绿。
 - 2026-09-13 双引擎受控对比实验（同端点本地 Ollama qwen2.5:3b / 同负载 business_qa / 同并发 4 / 同模式 baseline / 同 60s 时长）发现并修复 locust 重大观测缺陷：client.post 默认 stream=False——响应完整缓冲后一次读取，一切到达间隔为 0（ITL/TPOT 全废、tok/s 爆炸 21 万、TTFT≈延迟），而 evalscope（aiohttp）真流式测到 ITL/TPOT 23.4ms。修复：locustfile stream=True + LATENCY 自定义事件（stream 下 POST 原生统计退化为 TTFB 口径，端到端延迟经事件上报）+ stream_options include_usage（Ollama 流式回 usage，avg_input_tokens 从缺失变精确）。修复后对齐（evalscope/locust）：长度 ±1%、延迟 avg ±14%、TPOT p95 +15%、tok/s -14%、QPS -16%、TTFT p95 +62%（小样本长尾+顺序效应）、token 时延族 +18~27%（顺序效应与 ITL 噪声过滤同向叠加）——核心计量一致，无计点错误级缺陷；严格结论需交替多轮消除顺序效应（后续可选）。对比配置留存 reports/compare/。
 - 2026-09-14 locust 真实联调第三轮：修复 _stream_metrics/_json_metrics 定义在 ChatUser 类外（模块级带 self 参数）导致 self 调用 AttributeError、实跑 0 请求——移入类内。教训升级：生成产物的结构校验从「方法在类内」扩展到「self.X 调用必须可解析」（AST 属性调用集合 ⊆ 类方法集 ∪ 基类属性）。372 全绿。
+- 2026-09-14 locust 大屏链路四项收口（代码评审发现）：①perf.qps 静默失效修复——build_config 校验存储 qps、locustfile 读取 AITE_LOCUST_QPS，但 _exec 组装 base_env 从未注入，限速从未生效（单测只断言模板文本含变量名，注入链路无覆盖）→ 按 cfg["qps"] 条件注入 + fake_subprocess 断言注入值；②combined 阶梯曲线恢复——f6f6d64 jsonl 单通道重构遗失了 b1a3e93 经 stats_history.csv 的 combined 通道，大屏 ramp 多档只渲染首档 → 改从 jsonl 重建：各档点复制后按墙钟 ts（各档进程同源时钟）排序、t 重定基全场首秒，无档间偏移近似且与 series 点同源；③series 补 label 字段（locust:u<users>，与 perf 的 perf:c<并发> 对齐）；④重复并发档（如 [4,4] 稳定性复跑）产物路径消歧——metrics jsonl/csv/html 同前缀互相覆盖、jsonl 被 append 合并 → 全档加执行序后缀 locust_u<users>_<序>，collect 解析为 label u<users>#<序>。教训：cfg → env → 子进程读取的注入链三段都要断言，只测模板文本拦不住断链。+4 测试（372 全绿 + ruff 干净）；README 落「压测曲线图（大屏预览）」章节（四数据源 + 注意事项），/runs/{id}/timeseries 端点 docstring 补 combined 与 tpot/itl/ts 字段。
+- 2026-09-15 双引擎公平对比联调收口（用户实测 deepseek-flash 同端点/同 8 并发/同 120s/同 max_tokens）：①perf_evalscope 示例显式 number: 4 与 duration 先到为准，实际 4 请求 1.4s 即停——曲线只有 1 个桶点（大屏"没数据"）+ 指标与 locust 满载 118s 不可比；去掉 number 后时长驱动生效（number 自动放大 1e6 上限）。②TPOT 对齐验证（公平负载下 6.6 vs 6.7ms，公式两侧同为 (latency−TTFT)/(tokens−1)）。③ITL 差 3 倍根因 = 采集口径：locust requests iter_lines 缺省 512B 缓冲把多个 SSE 事件合批（采样密度 0.35、均值 20.2ms 只反映脉冲间隙），evalscope aiohttp 逐网络包全量入样（密度 1.00、p50=0 真实反映 DeepSeek 脉冲式 flush）→ 模板改 iter_lines(chunk_size=1) 逐字节读 + 取消 <1ms 过滤，全量入样对齐 evalscope。④取消过滤后网关缓冲端点会产生 ITL≈0 假优数据 → 补上 README 已承诺但 jsonl 重构时丢失的守卫：_buffered_share（TTFT≥0.95×延迟占比 ≥90% 判假流式）→ 告警 + TPOT/ITL/gen_ms 就地置空，指标行与时序同步拒绝入库，TTFT 保留（退化为端到端口径）。+1 测试（372 全绿 + ruff 干净）。教训：测量口径差异要落到采样密度等可量化指标上对比（itl_n/tokens），而不是只看均值；README 承诺的行为要有断言兜着，重构会静默丢守卫。
+- 2026-09-15 大屏版式定稿（用户需求：统计结果表置顶一眼看结论 + 指标族分图不混轴）：①timeseries.json 契约新增 `summaries` 字段（两引擎 collect 统一经 serialize_summaries 产出：overall 行 dataset=None 与 CLI 汇总表同源在前 + 档级行在后，字段 metric/dataset/value/count/threshold/passed/higher_is_better）——统计表数据随曲线数据同文件/同端点分发，旧版文件缺字段时大屏优雅降级提示重跑；②预览大屏重排版：顶部全宽统计结果表（overall 指标/值/阈值/PASS-FAIL 徽章/样本数 + 档级明细），下方八图按指标族拆分——TTFT/延迟/TPOT/ITL 各自 avg+p95 同族共图（实线 avg 虚线 p95），RPS、tok_s、并发阶梯、错误统计各自独立成图，废除原「TPOT+ITL 混图」「延迟+RPS 双轴混图」；chaos 故障阴影 markArea 覆盖全部曲线图。+2 断言（两引擎 collect 的 summaries 契约，372 全绿 + ruff 含 scripts 干净）；/runs/{id}/timeseries 端点 docstring 同步补 summaries 形状。
+- 2026-09-16 ITL 修复后双引擎 2×2 交叉对比（deepseek-flash/8 并发/120s/max_tokens 1024；evalscope 22:56 与 23:43 两轮、locust 新模板 23:17 与 00:32 两轮，时间交替排除单调时段漂移）：①测量口径全部对齐——ITL 采样密度两侧均 1.00（iter_lines(chunk_size=1) 修复生效，修复前 0.35）、TPOT 8.3 vs 6.5、基础 TTFT 同量级（locust 首 8 请求均值 156ms vs evalscope p50 107ms）；②剩余差距为结构性到达形态差：locust 同步波次（完成峰值 6/s 聚堆、尖峰周期 5.5s≈请求时长）触发服务端排队/限流——13% 请求 TTFT>1s（p99 5050ms）→ QPS -30%、生成段全线 +28~30%；evalscope 平滑到达（完成峰值恒 5/s、231 请求 0 个 TTFT>1s、p99 247ms）不触发。两引擎各自两轮高度自洽（evalscope QPS 1.76/1.77、locust 1.18/1.28），排除时段效应，锁定为闭环起跑同相 + 服务端批处理正反馈锁死波次。③验证路径（已有能力零代码）：spawn_rate 调小错相启动，或 perf.qps 闭环限速（constant_total_pacing 全局均匀到达）。根治 = 到达抖动（wait_time 随机化），未实施待用户拍板。④模块 J 性能数据集工程立项（见模块 J 节）。
+
+- 2026-09-16 三项压测能力落地（用户需求：波次修复 + 模块 J 一期 + 流量场景模拟）：①locust 到达抖动与到达模型——perf.jitter（每请求 U(0,jitter) 打散同步波次，治 2026-09-16 对比发现的 TTFT 尖峰/吞吐虚低）+ perf.arrival 到达模型（poisson 泊松到达 / spike 浪涌周期切换 / custom 自定义 QPS 阶梯曲线模拟现网流量），模板侧 _Pacer 全局节拍器（gevent 信号量 + admission 时刻集中算间隔，泊松逐时隙指数随机 = 真全局泊松过程；并发数退化为在途上限）；perf.extra_body 请求体扩展透传（vLLM ignore_eos/min_tokens 定长输出）；evalscope-perf 配 arrival 即报错（上游仅支持固定速率）。②模块 J 一期完成：aite/tools/perf_dataset.py 场景数据集生成器（目录/jsonl 语料池切块、输入长度分桶+权重配比、prefix_sharing/prefix_groups 同组共享长前缀模拟 RAG KV cache 命中、同 seed 逐字节可复现、产物 jsonl+stats.json）+ python -m 脚本入口 + REST 三端点（POST/GET /perf/datasets、validate 干跑校验，config.DEFAULT_PERFDATA_DIR 收口产物目录）。+14 测试（生成器 10 + 适配器到达模型/注入 3 + evalscope 守卫 1 + API 集成 4，389 全绿 + ruff 含 scripts 干净）。教训：负载形态（到达分布/长度分布/缓存命中）是与并发数同级的压测自变量，压测工具必须把三者都做成一等配置。
+
+- 2026-09-16 用户复测仍见差距→复盘定责：①该轮 suite 未配 jitter（示例与用户 yaml 未同步），修复未激活——改 jitter 缺省 0.2s（显式 0 关闭，适配器单一生成源，env 恒注入）；②重审模板发现 keep-alive 真 bug：流式循环遇 [DONE] 提前 break，响应未读完 → urllib3 弃用连接 → 每请求重付 TCP+TLS 握手（TTFT p50 平抬 ~100ms，恰为 locust 191 vs evalscope 107 的量级）+ 服务端连接 churn 或加剧排队——改为 continue 读完至流自然结束；③补 Accept-Encoding: identity（requests 缺省 gzip，SSE 过压缩网关会重缓冲；aiohttp 缺省不压缩）。三修复均零配置生效。教训：跨引擎对比异常时，先核对"修复是否真的在该轮生效"，再查新问题；客户端行为差异（连接复用/压缩协商/到达形状）是压测工具自身污染测量的三大来源。
+- 2026-09-16 双引擎收敛验证（jitter:0 形态对齐实验 + 同批对照）：①压力形态量化——用每请求起止时刻重建在途并发时间线：evalscope 零思考时间在途钉满（均值 7.37、=8 占比 48%、到达间隔 p50 395ms），locust 带 jitter 0.2 时在途均值仅 5.44 且到达间隔 p50 62ms（补发簇）——"压力形态不同"从猜想变实测。jitter:0（零思考时间）才是与 evalscope 同构的形态；但用户 yaml 未配键仍走缺省 0.2 的那轮反而完全收敛（在途 7.27、QPS 1.64 vs 1.68、TPOT +1.6%、ITL +5%、TTFT>1s 双零）——jitter 缺省 0.2 在 keep-alive 修复后代价仅 ~2%，保留。②收敛后残余：TTFT 全分位一致偏移 +36~47%（p50 差 ~45ms、p95 差 ~85ms）——requests/gevent 客户端栈的每请求固定开销（首包读路径），属口径差而非负载差，记录口径、不再追。③关键教训：同配置同代码的相邻两轮 locust（22:56 vs 23:16）行为完全不同（尖峰 9 vs 0、在途 5.4 vs 7.3）——DeepSeek 云端存在显著时段性状态，**任何单轮跨引擎对比都不可靠，交替 A/B/A/B 多轮取中位是云端对比的唯一可信方法**（此前多轮"差距大/收敛了"的反复摆动根源即此）。
+
+- 2026-09-16 三件套落地（用户需求）：①agent 评测集——functional/scenarios/agent_tasks/cases.jsonl 12 例（工具选择与语义区分/参数抽取含中文与订单号精确抽取/多轮续作：工具结果→最终回答、补参二次调用/能力边界拒答 no_tool），全部客观断言（tool/tool_args_contains/no_tool/finish_reason），引擎场景发现零改动即生效（cases.jsonl 即场景）；②发现层 I6a：discovery.py 节点>容器>进程模糊查询树（psutil+docker CLI 子进程 JSON 契约+docker top，全部降级安全）+ REST GET /chaos/targets、/chaos/weapons（注入器 kinds ClassVar 武器目录）+ process 注入器名称模糊定位（排除自身防误杀、多命中取最小 pid 告警）；③观测层 I6b：observer.py 流式推理探针（interval 缺省 5s，200+内容非空=pass）+ RTO 判定（last_fail→恢复后首个 pass，post_window 补测窗口保证可测）+ observe_under_chaos 编排（复用 run_with_chaos）+ REST POST /chaos/observe（duration ≤600s）。+25 测试（数据集走 harness.Case 真实校验器、发现层真实进程自匹配、观测器 httpx.MockTransport 假 SSE、编排 mock 注入器、API 集成，414 全绿 + ruff 干净）。坑：psutil 在 venv 缺失且 pyproject 无声明——补 chaos extra；新增内置场景须同步 test_functional_scenarios.EXPECTED 计数与 test_pytest_adapter 场景名清单（两处硬编码清单）。
+
+- 2026-09-17 evalscope 过夜压测超时复盘：duration 720s 跑在 23:44，~512s 时机器睡眠冻结进程树（日志 4851 行只有 23:44 的 6 行启动与 05:28 的 7 行唤醒），晨间唤醒后看门狗（monotonic 停走）立即判 3600s 超时杀进程——非框架 bug。数据核查：4205 请求中 3353 失败（唤醒后连接重启的失败爆发）、窗口 512/720s 被切断，**产物落盘但已被污染，作废不可出结论**。健壮性补丁：perf._exec 看门狗超时路径新增产物检查——benchmark_summary.json 已完整落盘（典型：睡眠发生在 summary 打印后、进程退出前）→ 显式告警后按完成处理继续 collect（污染数据经 error_rate 阈值显式 FAIL，不静默不丢弃）；无产物维持报错。跨夜压测 checklist：Windows 电源策略睡眠改"从不"/放服务器跑/extra.timeout 按需调整。+1 测试（415 全绿）。

@@ -67,8 +67,9 @@ overall 加权行）→ 阈值判定 → Web 趋势并列可比。**存储契约
   控制）、数据驱动（Case/load_cases/expect DSL 全部断言键）、收集器
   （pytest_collect_file → CasesFile → CaseItem，nodeid=cases.jsonl::id）、
   失败详情（failure_detail 带预算截断）。
-- **scenarios/**：8 场景 52 例 jsonl——能力域 4（basic_chat/structured_output/
-  tool_calling/long_context）+ API 契约域 4（api_params 22/api_stream 4/
+- **scenarios/**：9 场景 64 例 jsonl——能力域 5（basic_chat/structured_output/
+  tool_calling/long_context/**agent_tasks 12 例 agent 评测集**：工具选择/参数
+  抽取/多轮续作/能力边界拒答）+ API 契约域 4（api_params 22/api_stream 4/
   api_limits 7/api_shape 5，严格按 OpenAI 规范，Ollama 已知差异 9 例 desc 已标注）。
 - 文档：`docs/functional-testing.md`（架构深读）、README 功能测试章节（用法）。
 - 测试：test_functional_cases.py（DSL 纯函数+fake server）、
@@ -102,6 +103,7 @@ ruff check aite tests          # 每次提交前
 aite run -c examples/functional_pytest.yaml
 aite run -c examples/perf_evalscope.yaml
 aite tool benchmarks pytest            # 场景清单
+python scripts/preview_perf_dashboard.py --demo   # 压测大屏曲线预览（timeseries.json → HTML）
 ```
 
 ## 4. 当前状态（2026-09-09）
@@ -110,7 +112,8 @@ aite tool benchmarks pytest            # 场景清单
 - 模块 B 指标标准性：收缩，仅剩 tokenize 中文分词（低优先）
 - 模块 C evalscope 适配器：C0-C4b 完成（REST 四域任务 CRUD/运行打通）；
   **未完：C3 平台数据集灌入、C4c 文档收尾**
-- 模块 D 功能测试：D1-D9 全部完成（两域 8 场景 52 例）
+- 模块 D 功能测试：D1-D9 全部完成（两域 9 场景 64 例；含 agent_tasks
+  agent 评测集一期）
 - 模块 E 性能压测：E1-E7 全部完成（数据集负载 + 四模式 + 时长统一双键
   duration/level_duration + locust 适配器）
 - 模块 F 性能大屏：F2 数据层 + F3 合成负载完成；**F1 前端面板后置**
@@ -118,9 +121,16 @@ aite tool benchmarks pytest            # 场景清单
 - 模块 G 执行机纳管：**一期完成**（拉取式 agent + HTTP 回传 + 压测域白名单；
   agent 通道 REST 见 README；剩 G2 二期：标签调度/locust 原生分布式/重试）
 - 模块 H 归档：立项未实施
-- 模块 I 可靠性 chaos：**骨架完成**（aite/chaos/——toxiproxy+process 注入器、
-  run_with_chaos 编排、REST chaos 段；剩 I6 二期：ChaosBlade 注入器/编排
-  DSL/分布式注入/MTTR 报告）
+- 模块 I 可靠性 chaos：**三层架构一期完成**（发现层：节点>容器>进程 模糊
+  查询树视图 GET /chaos/targets；注入层：toxiproxy+process 武器目录
+  /chaos/weapons，process 支持名称模糊定位防误杀；观测层：背景推理探针
+  5s 打点 pass/fail 时间线 + RTO 判定 POST /chaos/observe；剩 I6 二期：
+  ChaosBlade 注入器/编排 DSL/agent 分布式发现与注入/跨节点拓扑）
+- 模块 J 性能数据集工程：**一期完成（2026-09-16）**——perf_dataset.py 场景
+  生成器（语料池/长度分桶/前缀共享/确定性）+ REST 三端点（POST/GET
+  /perf/datasets、validate）+ locust 到达模型（jitter / poisson / spike /
+  custom + extra_body 透传）；剩二期：适配器运行时直配 scenario、语料池
+  管理 UI、到达模型叠加曲线归档（模块 H）
 - 运行环境：conda env `evalscope`（Python 3.10，aite+evalscope 同装）；
   本地 Ollama（qwen2.5:3b / deepseek-r1:8b）；locust 未装（单测离线，
   真实压测需 `pip install 'aite[locust]'`）
@@ -141,6 +151,12 @@ CDN，aite/web/static）加面板三处：index.html nav+section、app.js go()/m
 分布式通道、任务重排队/重试、容量与并发上限（一期见 README 执行机纳管章节）。
 
 **性能数据归档（模块 H）**：run 冷热分层、原始产出压缩归档与检索恢复。
+
+**性能数据集工程（模块 J 二期）**：适配器运行时直配 scenario（现：生成产物
+经 perf.dataset 消费）；语料池管理与场景快照 UI（REST 已就绪）。
+
+**locust 到达模型二期**：spike/custom 到达模型下 user 池不足时的在途排队
+观测指标；到达速率叠加到 timeseries 曲线（目标 QPS vs 实际 RPS 对照线）。
 
 **可靠性 chaos（模块 I）**：先调研 chaosblade/chaos-mesh/Litmus 可集成性，
 不可行自研五能力（对象感知/注入/检测/恢复/业务观测），与 reliability 域打通。
