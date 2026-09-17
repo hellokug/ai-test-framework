@@ -47,6 +47,7 @@ collect 从各档 ``benchmark_summary.json`` / ``benchmark_percentile.json`` 提
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -416,6 +417,9 @@ class PerfAdapter(ToolAdapter):
         负载/模式/时长解析共用 perf_common；本方法只做编排与组装。
         """
         cfg = req.perf
+        if cfg.get("arrival"):
+            raise ValueError("perf.arrival 到达模型（poisson/spike/custom）为 locust"
+                             " 专有——evalscope perf 上游仅支持固定速率（perf.rate）")
         model = str(req.target.get("model") or "").strip()
         if not model:
             raise ValueError("evalscope-perf 需要 target.model")
@@ -482,10 +486,34 @@ class PerfAdapter(ToolAdapter):
                     fh.write(f"DURATION_BUDGET_EXHAUSTED after "
                              f"{cfg['duration_watchdog']}s\n{out}{err}")
                 return
+            # 看门狗超时但测量产物已完整落盘（典型：机器睡眠/唤醒导致进程
+            # 未及退出）——显式告警后按完成处理，数据可见而非整轮报错
+            # （污染数据会经 error_rate 阈值显式 FAIL，不静默）
+            summaries = list(Path(cfg["output_dir"])
+                             .glob("**/benchmark_summary.json"))
+            if summaries:
+                logger.warning("压测子进程超时（%ss）但测量产物已完整（%s）"
+                               "——按完成处理继续采集，结果可信度请核对"
+                               " error_rate 与样本跨度", cfg["timeout"],
+                               summaries[0].parent)
+                return
             raise RuntimeError(f"压测超时（{cfg['timeout']}s），日志: {log_path}")
         if rc != 0:
             raise RuntimeError(f"evalscope perf 执行失败（exit={rc}），"
+                               f"{self._api_error_hint(out)}"
                                f"日志: {log_path}\n{out[-2000:]}")
+
+    @staticmethod
+    def _api_error_hint(out: str) -> str:
+        """提取服务端拒绝类错误（401 密钥/402 余额/403 权限）到异常消息——
+        原则 9 错误显式化：根因直达，不必翻日志。"""
+        hits = re.findall(r"Non-retryable error \(HTTP (\d+)\): (.+)", out)
+        if not hits:
+            return ""
+        code, msg = hits[-1]
+        msg = re.sub(r"\s*Please check your --url and --api settings\.?$", "",
+                     msg.strip())
+        return f"服务端拒绝（HTTP {code}）——{msg[:200]}。"
 
     def collect(self, req: ToolRunRequest) -> ToolRunResult:
         """解析各档 benchmark_summary/percentile → 指标行（dataset=perf:c<并发>）。
@@ -543,6 +571,8 @@ class PerfAdapter(ToolAdapter):
         if total_failed:
             # evalscope 错误文本在 pickle 响应里，只给计数（文本级错误分布见 locust）
             timeseries["errors"] = [{"key": "failed", "count": total_failed}]
+        from aite.tools import serialize_summaries  # 懒导入：包 __init__ 注册适配器，顶层导入成环
+        timeseries["summaries"] = serialize_summaries(out.rows)
         self._write_timeseries(out, Path(cfg["output_dir"]).parent, timeseries)
         return out
 

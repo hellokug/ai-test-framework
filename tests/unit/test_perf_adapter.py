@@ -265,6 +265,41 @@ class TestDuration:
         with pytest.raises(RuntimeError, match="超时"):
             PerfAdapter()._exec(cfg)
 
+    def test_api_error_hint_surfaces_root_cause(self):
+        """服务端拒绝（402 余额/401 密钥）根因直达异常消息，不必翻日志。"""
+        from aite.tools.perf_adapter import PerfAdapter
+
+        log_line = ('2026-09-17 22:44:03 - evalscope - ERROR: Non-retryable '
+                    'error (HTTP 402): {"error": {"message": "Insufficient '
+                    'Balance", "type": "unknown_error"}}. Please check your '
+                    '--url and --api settings.')
+        hint = PerfAdapter._api_error_hint(log_line)
+        assert "HTTP 402" in hint and "Insufficient Balance" in hint
+        assert "Please check" not in hint
+        assert PerfAdapter._api_error_hint("no error here") == ""
+
+    def test_exec_timeout_with_summary_collects(self, tmp_path, monkeypatch):
+        """超时但测量产物已完整（典型：机器睡眠/唤醒进程未及退出）→
+        显式告警后按完成处理，不整轮报错（污染数据由 error_rate 阈值显式 FAIL）。"""
+        import subprocess as sp
+        from pathlib import Path
+
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        cfg["timeout"] = 1
+        summary = (Path(cfg["output_dir"]) / "m" / "parallel_8_number_8"
+                   / "benchmark_summary.json")
+        summary.parent.mkdir(parents=True)
+        summary.write_text("{}", encoding="utf-8")
+
+        def fake_run(*args, **kw):
+            raise sp.TimeoutExpired(cmd="evalscope", timeout=1)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+        import shutil as sh
+        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
+        PerfAdapter()._exec(cfg)                              # 不应抛错
+
     def test_collect_tolerates_truncated_summary(self, tmp_path):
         """看门狗截断可能杀在写盘中途：损坏产出跳过，其余轮次照常收集。"""
         d = tmp_path / "perf_raw" / "m" / "sla_parallel_8_run_0"
@@ -444,10 +479,23 @@ class TestDatasetLoad:
         assert b0["errors"] == 1
         assert b1["t"] == 5 and b1["ttft_p95"] == pytest.approx(200.0)
         assert "timeseries.json" in result.report_files
+        # summaries：大屏统计表数据源（overall 行与 CLI 汇总同源；
+        # overall = 档级行按 count 加权——单档即档级值本身，来自 summary 级指标）
+        level_ttft = next(r.value for r in result.rows if r.metric == "ttft_ms")
+        overall = {s["metric"]: s for s in ts["summaries"] if s["dataset"] is None}
+        assert overall["ttft_ms"]["value"] == pytest.approx(level_ttft)
+        assert {"perf:c4"} <= {s["dataset"] for s in ts["summaries"]}
         # bucket_seconds 可配
         cfg = PerfAdapter().build_config(make_request(
             perf={"prompt": "p", "parallel": [2], "number": 2, "bucket_seconds": 10}))
         assert cfg["dataset"] == ""      # 不影响 build_config 主体
+
+    def test_arrival_locust_only(self):
+        """到达模型（poisson/spike/custom）为 locust 专有，evalscope 配置即报错。"""
+        with pytest.raises(ValueError, match="locust"):
+            PerfAdapter().build_config(make_request(
+                perf={"prompt": "p", "parallel": [2], "number": 2,
+                      "arrival": {"mode": "poisson"}}))
 
     def test_max_tokens_bad_range(self):
         with pytest.raises(ValueError, match="max_tokens"):
