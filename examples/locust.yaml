@@ -25,8 +25,9 @@ perf:                              # 复用 evalscope-perf 的 perf 配置段（
                                    #   （无请求数上限语义，number 配了忽略）
 #  level_duration: 60            # 每档固定秒数
   spawn_rate: 4                    # 每秒拉起用户数（缺省 = 档位并发，瞬时拉满）
-  jitter: 0.5                      # 到达抖动（秒）：打散同步波次——防服务端批处理
-                                   #   正反馈锁死波次导致 TTFT 尖峰/吞吐虚低
+  # jitter: 0.5                    # 到达抖动（秒，缺省 0）：并发闭环的同步波次会
+  #                                #   被服务端批处理排队放大时才需要开启——
+  #                                #   平时保持 0 与 evalscope 压力形态同构
   # qps: 50                       # QPS 限速（闭环封顶：服务端拖慢则 QPS 下降；
   #                               #   user 数退化为并发上限。开环 QPS 用 perf.rate）
   stream: true                     # 流式逐块读，首包计时 TTFT

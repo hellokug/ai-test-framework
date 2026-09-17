@@ -16,7 +16,8 @@ evalscope-perf 的分工：后者 LLM 原生指标（TPOT/ITL/吞吐分档）更
 - ``spawn_rate``：每档用户拉起速率（用户/秒），缺省 = 档位并发（瞬时拉满）
 - ``qps``：闭环封顶目标 QPS（constant_total_pacing）——服务端拖慢时实际
   QPS 随之下降；精确开环 QPS 用 evalscope-perf 的 ``perf.rate``
-- ``jitter``：到达抖动秒数（并发模式打散同步波次；缺省 0.2s，显式 0 关闭）；
+- ``jitter``：到达抖动秒数（每请求前随机等待 U(0, jitter)；缺省 0——
+  零思考时间与 evalscope 形态同构，突发场景测试才显式开启）；
   ``arrival``：到达模型
   poisson（泊松到达）/spike（浪涌）/custom（自定义 QPS 曲线，现网流量形状）
   ——全局节拍器接管限速，并发数退化为在途上限；``extra_body``：请求体扩展
@@ -455,7 +456,7 @@ class LocustAdapter(ToolAdapter):
             base_env["AITE_LOCUST_MAX_TOKENS"] = str(int(cfg["max_tokens"]))
         if cfg["qps"]:
             base_env["AITE_LOCUST_QPS"] = str(cfg["qps"])
-        base_env["AITE_LOCUST_JITTER"] = str(cfg["jitter"])   # 缺省 0.2，显式 0 关闭
+        base_env["AITE_LOCUST_JITTER"] = str(cfg["jitter"])   # 缺省 0（与 evalscope 同形态）
         if cfg["arrival"]:
             base_env["AITE_LOCUST_ARRIVAL"] = json.dumps(cfg["arrival"])
         if cfg["extra_body"]:

@@ -313,11 +313,10 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似拼接。
 - **locust 特有**：`spawn_rate`（每秒拉起用户数，缺省 = 档位并发）；`qps`
   （闭环封顶目标 QPS——`constant_pacing(constant_total_pacing=True)`，服务端
   拖慢则实际 QPS 下降；user 数退化为最大并发上限。精确开环 QPS 请用
-  evalscope-perf 的 `perf.rate`）；`jitter`（到达抖动秒数，缺省 0.2
-  开启、显式 0 关闭——并发闭环的同步波次会被服务端批处理正反馈锁死：
-  TTFT 尖峰周期化 + 吞吐虚低；另 locustfile 已修 [DONE] 提前 break 弃用
-  连接的缺陷并显式 Accept-Encoding: identity，与 aiohttp 同为连接复用 +
-  不压缩语义）；`arrival`
+  evalscope-perf 的 `perf.rate`）；`jitter`（到达抖动秒数，缺省 0
+  ——零思考时间在途钉满，与 evalscope 压力形态同构；突发场景测试才显式
+  开启。连接复用（[DONE] 后读完流）与不压缩协商（Accept-Encoding: identity）
+  已内建，与 aiohttp 同语义）；`arrival`
   （到达模型 poisson/spike/custom，见「性能场景数据集与到达模型」节）；
   `extra_body`（JSON 合并进请求体，vLLM 定长输出等）；`number` 无语义，
   配了忽略；**必配一个时长键**
@@ -409,7 +408,7 @@ perf:
 
 ```yaml
 perf:
-  jitter: 0.5                        # 每请求随机等待 U(0, jitter)，打散波次
+  jitter: 0.5                        # 可选：每请求随机等待 U(0, jitter)（缺省 0）
   qps: 20
   arrival: {mode: poisson}           # 泊松到达（qps = 平均速率）
   arrival:                           # 浪涌：基线/峰值 QPS 按周期切换
