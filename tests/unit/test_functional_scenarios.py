@@ -11,6 +11,7 @@ SCENARIOS_DIR = Path(aite.functional.__file__).parent / "scenarios"
 EXPECTED = {
     "basic_chat": 4, "structured_output": 4, "tool_calling": 3, "long_context": 3,
     "api_params": 22, "api_stream": 4, "api_limits": 7, "api_shape": 5,
+    "agent_tasks": 12,
 }
 
 

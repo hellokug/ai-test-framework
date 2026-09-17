@@ -136,7 +136,7 @@ class TestBuildConfig:
         names = [t["name"] for t in tasks]
         assert names == sorted([
             "basic_chat", "long_context", "structured_output", "tool_calling",
-            "api_params", "api_stream", "api_limits", "api_shape",
+            "api_params", "api_stream", "api_limits", "api_shape", "agent_tasks",
         ])
         assert all(t["metrics"] == ["pass_rate"] and t["tags"] == ["functional"]
                    and t["few_shot_num"] is None for t in tasks)
