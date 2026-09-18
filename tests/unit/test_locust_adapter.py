@@ -234,10 +234,12 @@ class TestTemplate:
         text = (tmp_path / "locustfile.py").read_text(encoding="utf-8")
         for marker in ('"usage"', "_stream_metrics", "_record(",
                        "constant_pacing", 'itls', 'tpot_ms',
-                       'iter_lines(chunk_size=1)',   # 逐字节读：防 512B 合批回归
                        "_Pacer", "EXTRA_BODY", "JITTER",
                        '"Accept-Encoding": "identity"'):
             assert marker in text
+        # CPU 回归守卫：逐字节读开销 ~80×/请求，gevent hub 饱和致 TTFT 尖峰
+        # （守卫针对调用形态，模板注释里的"勿改 chunk_size=1"提示不受影响）
+        assert "iter_lines(chunk_size=1)" not in text
         # keep-alive 回归：[DONE] 分支不得 break（响应未读完 → 连接被弃用
         # → 每请求重付 TCP+TLS 握手，TTFT 平抬 ~100ms）
         assert 'b"[DONE]":' + "\n" + "                break" not in text

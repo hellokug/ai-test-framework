@@ -325,9 +325,10 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似拼接。
   **output_tps** / qps / error_rate + 错误明细（错误文本×次数）。
   LLM 指标由生成 locustfile 的流式采集提供（`stream=True` 真流式；每请求一条
   完整记录写入 `locust_uN_metrics.jsonl`——aite 侧统计与时序的唯一数据源，
-  不经 locust stats）：TTFT 首包计时、ITL 逐事件全量入样（`iter_lines(chunk_size=1)`
-  逐字节读还原到达粒度，含合批 0 间隔——与 evalscope 逐 token 口径对齐；缺省
-  512B 缓冲会把多个 SSE 事件合批，实测采样密度仅 0.35、均值虚高 ~3 倍）、
+  不经 locust stats）：TTFT 首包计时、ITL 全量入样（含合批 0 间隔——
+  evalscope 侧同样存在，其 ITL p50 即为 0；对齐的关键是取消 <1ms 过滤。
+  勿用逐字节读：CPU 开销 ~80×/请求，gevent hub 饱和致 TTFT 尾部尖峰 +
+  QPS 虚低 32%）、
   TPOT（生成段毫秒/token，分母 = token 数 - 1，与 evalscope 公式一致）；
   token 数取 usage.completion_tokens（端点不回传时以 chunk 数近似）。
   output_tps（Σtokens÷Σ生成秒）与 avg_input_tokens / avg_output_tokens

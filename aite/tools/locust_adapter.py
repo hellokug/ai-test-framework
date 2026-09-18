@@ -219,10 +219,12 @@ class ChatUser(HttpUser):
         completion_tokens = None
         prompt_tokens = None
         itls = []
-        # chunk_size=1 逐字节读：iter_lines 缺省 512B 缓冲会把多个 SSE 事件
-        # 合批（实测 ITL 采样密度仅 0.35、均值虚高 ~3 倍），逐字节读保留
-        # 真实到达粒度，与 evalscope（aiohttp 逐网络包）同口径
-        for raw in resp.iter_lines(chunk_size=1):
+        # iter_lines 缺省 512B 分块：合批到达的多行共享同一读取时间戳（间隔
+        # 记 0）——evalscope 逐 read 同样如此（其 ITL p50 即为 0），ITL 对齐
+        # 的关键是下方全量入样不过滤。勿改 chunk_size=1：逐字节读 CPU 开销
+        # ~80×（实测 16.7ms vs 0.2ms/请求），gevent 单线程 hub 饱和后首包
+        # 读取饿死——TTFT 尾部尖峰（30%+ 请求 >1s）+ QPS 虚低 32%
+        for raw in resp.iter_lines():
             if not raw.startswith(b"data: "):
                 continue
             now_ms = (time.perf_counter() - t0) * 1000.0
