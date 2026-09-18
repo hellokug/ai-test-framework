@@ -1,9 +1,12 @@
-"""perf / locust 两压测适配器的共享解析与常量（DRY 收口，CLAUDE.md 原则 3）。
+"""perf / locust 两压测适配器的共享解析、常量与产出逻辑（DRY 收口，原则 3）。
 
 load：dataset / prompt / synthetic 三选一；mode：baseline / ramp / soak（probe 为
 evalscope-perf 特有，由 allow_probe 控制）；duration：整场总时长与 level_duration
 每档秒数二选一（probe+duration → 看门狗语义仅 perf 使用）。
-两适配器共用同一套错误文案与校验口径，yaml 配置键同义。
+两适配器共用同一套错误文案、校验口径、阈值方向（LOWER_IS_BETTER）、指标行
+发射（append_metric_rows）与时序落盘（write_timeseries）——任何一处出现第二
+份副本即漂移温床（教训：_LOWER_IS_BETTER 双份定义曾致 evalscope 的
+tpot_p95/itl_p95 阈值方向误判）。
 """
 
 from __future__ import annotations
@@ -12,10 +15,19 @@ import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from aite.tools.base import ToolMetricRow
 
 DEFAULT_TIMEOUT = 3600                 # 整场压测总超时（秒），extra.timeout 可覆盖
 DURATION_DRIVEN_NUMBER_CAP = 1_000_000  # 时长驱动安全上限（先到为准，防默认条数提前结束）
 MODES = ("baseline", "ramp", "probe", "soak")
+# 阈值方向单一来源：越低越好（<=）；qps/output_tps/avg_* 越高越好（>=）。
+# 两压测适配器共用——此前双份定义曾漂移（perf 缺 *_p95_ms 致方向误判）。
+LOWER_IS_BETTER = frozenset({
+    "ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
+    "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms", "error_rate",
+})
 # 平台数据集输入键约定（与 aite/datasets/local 一致，自包含避免深 import）
 INPUT_KEYS = ("input", "question", "instruction", "prompt", "query", "user")
 
@@ -211,3 +223,32 @@ def generate_synthetic_prompts(count: int, prompt_length: int) -> list[str]:
         filler = (filler_cycle * (prompt_length // len(filler_cycle) + 1))[:prompt_length]
         prompts.append(_SYNTHETIC_SKELETON.format(i=i, filler=filler)[: prompt_length + 60])
     return prompts
+
+
+def append_metric_rows(rows: list[ToolMetricRow], thresholds: dict,
+                       label: str, metrics: dict, total: int) -> None:
+    """档级指标 → ToolMetricRow 追加（两压测适配器共享的发射逻辑）。
+
+    value 为 None 跳过（宁缺毋错）；thresholds 未配的指标 passed=None（仅
+    记录不判定）；方向按 LOWER_IS_BETTER（<=），其余 >=。
+    """
+    for name, value in metrics.items():
+        if value is None:
+            continue
+        thr = thresholds.get(name)
+        higher = name not in LOWER_IS_BETTER
+        rows.append(ToolMetricRow(
+            dataset=label, metric=name, value=float(value), count=total,
+            threshold=thr, higher_is_better=higher,
+            passed=((float(value) >= thr) if higher
+                    else (float(value) <= thr)) if thr is not None else None,
+        ))
+
+
+def write_timeseries(out: Any, work_dir: Path, timeseries: dict) -> None:
+    """秒级时序落盘（out.report_files 登记；series 为空不写，防空文件误导大屏）。"""
+    if timeseries.get("series"):
+        ts_path = work_dir / "timeseries.json"
+        ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
+                           encoding="utf-8")
+        out.report_files["timeseries.json"] = str(ts_path)

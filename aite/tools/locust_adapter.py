@@ -40,7 +40,6 @@ from pathlib import Path
 
 from aite.tools.base import (
     ToolAdapter,
-    ToolMetricRow,
     ToolRunRequest,
     ToolRunResult,
     api_endpoint,
@@ -48,12 +47,13 @@ from aite.tools.base import (
     run_sync_in_thread,
 )
 from aite.tools.perf_common import (
-    expand_ramp,
+    append_metric_rows,
     export_prompts,
     generate_synthetic_prompts,
     resolve_durations,
     resolve_load,
     resolve_mode_parallel,
+    write_timeseries,
 )
 from aite.tools.subproc import glob_report_files, run_tool_subprocess, which_or_fail
 from aite.utils.logging import get_logger
@@ -61,11 +61,6 @@ from aite.utils.logging import get_logger
 logger = get_logger(__name__)
 
 _LEVEL_GRACE = 120          # 每档子进程超时 = 档时长 + 宽限（locust -t 自退出）
-# 越低越好（阈值方向 <=）；qps/output_tps 越高越好（与 evalscope-perf 口径一致）
-_LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
-                    "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms",
-                    "error_rate"}
-
 _LOCUSTFILE_TEMPLATE = '''# 由 aite locust 适配器生成（勿手改；regenerate per run）
 import json
 import os
@@ -74,7 +69,7 @@ import time
 
 import gevent
 from gevent.lock import Semaphore
-from locust import HttpUser, constant, constant_pacing, events, task
+from locust import HttpUser, constant, constant_pacing, task
 
 URL = os.environ["AITE_LOCUST_URL"]
 MODEL = os.environ["AITE_LOCUST_MODEL"]
@@ -353,8 +348,6 @@ class LocustAdapter(ToolAdapter):
             "locustfile": str(req.work_dir / "locustfile.py"),
             "prompts_file": str(req.work_dir / "load" / "prompts.txt"),
             "runs": runs,
-            "metrics_files": sorted({r["metrics_file"] for r in runs}),
-            "timeout": int(req.extra.get("timeout", 3600)),
             "output_dir": str(output_dir),
         }
 
@@ -512,11 +505,7 @@ class LocustAdapter(ToolAdapter):
                             "series": series, "combined": combined,
                             "errors": self._errors_summary(all_recs),
                             "summaries": serialize_summaries(out.rows)}
-        if timeseries["series"]:
-            ts_path = Path(cfg["output_dir"]).parent / "timeseries.json"
-            ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
-                               encoding="utf-8")
-            out.report_files["timeseries.json"] = str(ts_path)
+        write_timeseries(out, Path(cfg["output_dir"]).parent, timeseries)
         out.report_files.update(glob_report_files(Path(cfg["output_dir"]).parent, (
             "locust_raw/**/*.html",
             "locust_raw/**/*_metrics.jsonl",
@@ -585,17 +574,8 @@ class LocustAdapter(ToolAdapter):
             "avg_input_tokens": self._mean_key(recs, "prompt_tokens"),
             "avg_output_tokens": self._mean_key(recs, "tokens"),
         }
-        for name, value in metrics.items():
-            if value is None:
-                continue
-            thr = req.metric_thresholds.get(name)
-            higher = name not in _LOWER_IS_BETTER
-            out.rows.append(ToolMetricRow(
-                dataset=label, metric=name, value=float(value), count=total,
-                threshold=thr, higher_is_better=higher,
-                passed=((float(value) >= thr) if higher
-                        else (float(value) <= thr)) if thr is not None else None,
-            ))
+        append_metric_rows(out.rows, req.metric_thresholds, label,
+                           metrics, total)
         if metrics.get("qps") is not None:
             out.raw_score[label] = metrics["qps"]
 
@@ -736,7 +716,3 @@ class LocustAdapter(ToolAdapter):
             "few_shot_num": None,
         }]
 
-
-def _expand_ramp(ramp: dict) -> list[int]:
-    """兼容旧导入名的别名（真实实现移至 perf_common.expand_ramp）。"""
-    return expand_ramp(ramp)

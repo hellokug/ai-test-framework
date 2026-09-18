@@ -1,10 +1,1 @@
-from aite.web.routers import (  # noqa: F401
-    cases,
-    manual_eval,
-    models,
-    reports,
-    runs,
-    suites,
-    tasks,
-    trends,
-)
+"""Web 路由模块（各路由子模块由 app.py 显式导入注册；此处不做再导出）。"""

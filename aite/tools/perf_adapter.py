@@ -54,7 +54,6 @@ from pathlib import Path
 
 from aite.tools.base import (
     ToolAdapter,
-    ToolMetricRow,
     ToolRunRequest,
     ToolRunResult,
     api_endpoint,
@@ -64,12 +63,14 @@ from aite.tools.base import (
 from aite.tools.perf_common import (
     DEFAULT_TIMEOUT,
     DURATION_DRIVEN_NUMBER_CAP,
+    append_metric_rows,
     export_prompts,
     generate_synthetic_prompts,
     positive_ints,
     resolve_durations,
     resolve_load,
     resolve_mode_parallel,
+    write_timeseries,
 )
 from aite.tools.subproc import glob_report_files, run_tool_subprocess, which_or_fail
 from aite.utils.logging import get_logger
@@ -101,9 +102,6 @@ _PERCENTILE_METRICS = {   # benchmark_percentile.json（取 95% 行，秒→毫�
     "tpot_p95_ms": ("TPOT (ms)", 1.0),
     "itl_p95_ms": ("ITL (ms)", 1.0),
 }
-# 越低越好（阈值方向 <=）：延迟/首 token/错误率；qps/output_tps 越高越好
-_LOWER_IS_BETTER = {"ttft_ms", "ttft_p95_ms", "tpot_ms", "itl_ms",
-                    "latency_avg_ms", "latency_p95_ms", "error_rate"}
 
 
 def _sla_params_json(sla: dict) -> str:
@@ -551,7 +549,8 @@ class PerfAdapter(ToolAdapter):
 
         for label, items in sorted(grouped.items(), key=_label_key):
             metrics, total = _level_metrics(items)
-            self._append_metric_rows(req, out, label, metrics, total)
+            append_metric_rows(out.rows, req.metric_thresholds, label,
+                               metrics, total)
             tps = metrics.get("output_tps")
             if tps is not None:
                 out.raw_score[label] = float(tps)
@@ -573,39 +572,17 @@ class PerfAdapter(ToolAdapter):
             timeseries["errors"] = [{"key": "failed", "count": total_failed}]
         from aite.tools import serialize_summaries  # 懒导入：包 __init__ 注册适配器，顶层导入成环
         timeseries["summaries"] = serialize_summaries(out.rows)
-        self._write_timeseries(out, Path(cfg["output_dir"]).parent, timeseries)
+        write_timeseries(out, Path(cfg["output_dir"]).parent, timeseries)
+        out.report_files.update(glob_report_files(
+            Path(cfg["output_dir"]).parent, (
+                "perf_raw/**/performance_summary.txt",
+                "perf_raw/**/perf_report.html",
+                "perf_raw/**/sla_summary.json",
+                "perf_raw/**/workload_timeline.json",
+                "perf_raw/**/benchmark_data.db",
+                "logs/perf.log",
+            )))
         return out
-
-    def _append_metric_rows(self, req: ToolRunRequest, out: ToolRunResult,
-                            label: str, metrics: dict, total: int) -> None:
-        """档级指标 → ToolMetricRow（阈值方向：延迟类 <=，吞吐类 >=）。"""
-        for name, value in metrics.items():
-            if value is None:
-                continue
-            thr = req.metric_thresholds.get(name)
-            higher = name not in _LOWER_IS_BETTER
-            out.rows.append(ToolMetricRow(
-                dataset=label, metric=name, value=float(value), count=total,
-                threshold=thr, higher_is_better=higher,
-                passed=((float(value) >= thr) if higher
-                        else (float(value) <= thr)) if thr is not None else None,
-            ))
-
-    @staticmethod
-    def _write_timeseries(out: ToolRunResult, work_dir: Path, timeseries: dict) -> None:
-        if timeseries["series"]:
-            ts_path = work_dir / "timeseries.json"
-            ts_path.write_text(json.dumps(timeseries, ensure_ascii=False),
-                               encoding="utf-8")
-            out.report_files["timeseries.json"] = str(ts_path)
-        out.report_files.update(glob_report_files(work_dir, (
-            "perf_raw/**/performance_summary.txt",
-            "perf_raw/**/perf_report.html",
-            "perf_raw/**/sla_summary.json",
-            "perf_raw/**/workload_timeline.json",
-            "perf_raw/**/benchmark_data.db",
-            "logs/perf.log",
-        )))
 
     def list_tasks(self) -> list[dict]:
         """压测无任务目录概念，返回单一 chat 压测伪任务（指标清单）。"""

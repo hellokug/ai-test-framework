@@ -25,7 +25,7 @@ perf:
   # soak: {parallel: 8}            # 长稳：时间驱动（配 duration）
 
 #  number: 4                         # 每档采样数（标量自动对齐档位；与时长先到为准）
-  duration: 720                  # 整场总时长（秒）：单档直传；ramp 均分每档；
+  duration: 180                  # 整场总时长（秒）：单档直传；ramp 均分每档；
   #                                # probe 轮数不可预知 → 看门狗到点截断收已完成轮次
   # level_duration: 60             # 每档固定秒数（与 duration 二选一）；probe = 每轮上限
   warmup_num: 1                     # 预热请求，不计入统计
@@ -34,7 +34,7 @@ perf:
 # 判定口径：显式阈值可选（换环境需自行校准），不配则只记录不判定；
 # 延迟/错误率类为"越低越好"（<= 判定），qps/output_tps 为"越高越好"
 tools:
-  metric_thresholds: {error_rate: 0.05}
+  metric_thresholds: {error_rate: 0}
   # extra_args:
   #   timeout: 3600                # 整场压测总超时（秒），默认 3600
 
