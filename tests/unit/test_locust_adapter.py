@@ -352,11 +352,27 @@ class TestCollect:
 class TestExec:
     def test_missing_binary_raises(self, tmp_path, monkeypatch):
         import shutil as sh
+        import sys
         cfg = LocustAdapter().build_config(make_request(work_dir=tmp_path))
         LocustAdapter()._write_load(cfg)
         monkeypatch.setattr(sh, "which", lambda name: None)
+        # 连同解释器同目录回退一并指向空目录（真 venv 里 locust.exe 实际存在）
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
         with pytest.raises(RuntimeError, match="locust"):
             LocustAdapter()._exec(cfg)
+
+    def test_binary_fallback_next_to_interpreter(self, tmp_path, monkeypatch):
+        """PATH 找不到时回退解释器同目录（venv Scripts/bin）——未激活 venv 场景。"""
+        import shutil as sh
+        import sys
+
+        from aite.tools.subproc import which_or_fail
+
+        monkeypatch.setattr(sh, "which", lambda name: None)
+        fake = tmp_path / "locust.exe"
+        fake.write_text("", encoding="utf-8")
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+        assert which_or_fail("locust", "hint") == str(fake)
 
     def test_env_injects_metrics_file(self, tmp_path, monkeypatch):
         import shutil as sh

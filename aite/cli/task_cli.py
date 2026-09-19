@@ -163,7 +163,12 @@ def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
             console.print_json(json.dumps(task["result"], ensure_ascii=False, default=str))
         if task["error"]:
             console.print(f"[red]error:[/red] {escape(task['error'])}")
+        # CI 语义：任务执行失败 → 1；套件业务判定非 passed（failed/error）→ 1
         if task["status"] != "succeeded":
+            raise SystemExit(1)
+        verdict = (task["result"] or {}).get("status") \
+            if isinstance(task["result"], dict) else None
+        if verdict is not None and verdict != "passed":
             raise SystemExit(1)
 
     @app.command("stop")

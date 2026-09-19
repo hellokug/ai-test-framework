@@ -14,9 +14,21 @@ from pathlib import Path
 
 
 def which_or_fail(name: str, hint: str) -> str:
-    """定位外部 CLI；缺失时抛带安装指引的 RuntimeError。"""
+    """定位外部 CLI；缺失时抛带安装指引的 RuntimeError。
+
+    PATH 找不到时回退解释器同目录（venv 的 Scripts/bin）——aite CLI 常在
+    未激活 venv 的 shell 里以 venv 解释器运行，pip 装的 locust/evalscope
+    可执行文件与 python 同目录而非 PATH 上（教训：Windows 实测 which 落空
+    致任务误判工具缺失）。
+    """
     binary = shutil.which(name)
     if binary is None:
+        import sys
+
+        for suffix in ("", ".exe", ".cmd", ".bat"):
+            candidate = Path(sys.executable).with_name(name + suffix)
+            if candidate.is_file():
+                return str(candidate)
         raise RuntimeError(hint)
     return binary
 

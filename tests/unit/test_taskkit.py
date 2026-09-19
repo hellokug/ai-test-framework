@@ -161,6 +161,22 @@ async def test_stop_running_task(repo):
     assert [f["type"] for f in frames] == ["started", "progress", "cancelled", "end"]
 
 
+async def test_stop_via_db_flag_cross_process(repo):
+    """跨进程停止桥：另一进程只把状态写成 stopping，执行进程轮询发现后
+    触发协作 cancel 并落 cancelled 终态（CLI 独立进程停止的真实路径）。"""
+    bus = EventBus()
+    kit = make_kit(FakeExecutor(wait_cancel=True), bus)
+    kit.stop_poll_interval = 0.05
+    task = await kit.create(repo, {"a": 1})
+    await kit.run(repo, task["id"])
+    await repo.update_domain_task(PerfTaskRow, task["id"],
+                                  expect_status=TASK_RUNNING, status=TASK_STOPPING)
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED and kit._handles == {}
+    frames = await drain(bus, kit.channel(task["id"]))
+    assert [f["type"] for f in frames] == ["started", "cancelled", "end"]
+
+
 async def test_stop_guards_and_idempotency(repo):
     kit = make_kit(FakeExecutor())
     task = await kit.create(repo, {"a": 1})

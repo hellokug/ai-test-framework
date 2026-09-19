@@ -203,3 +203,64 @@ CLI `run` 为同步等待形态（kit.wait）；`--spec` 接受内联 JSON/YAML 
 2. 重试语义：**新任务 + retry_of 链**，不改原记录。
 3. 功能/精度结果：**复用公共 run 存储**，不建域结果明细表。
 4. CLI run：**同步等待**形态，--detach 后续按需。
+5. （2026-09-20 实调后增补）任务状态 = **执行语义**（succeeded=执行完成未崩，
+   failed=执行器抛异常）；业务判定在 `result.status`（passed/failed/error），
+   CLI `run` 退出码 0 ⇔ 任务 succeeded 且 result.status=passed（CI 友好）。
+6. （2026-09-20 实调后增补）**跨进程停止桥**：CLI run 是独立进程，stop 请求
+   落 DB 的 stopping；执行进程以 `stop_poll_interval`（2s）轮询发现后触发
+   协作 cancel 并落 cancelled 终态（expect 守卫保证 stop 进程与执行进程
+   双写竞态安全，实测孤儿进程场景收敛正确）。
+
+## 10. 四域输入输出实录（2026-09-20 本机实调，Ollama qwen2.5:3b）
+
+### 输入（spec，任务创建时写入）
+
+套件型三域（functional / accuracy / perf）**同构**，仅 engine 与域段不同：
+
+```yaml
+engine: pytest|evalscope|locust|evalscope-perf   # 路由键
+run_name: smoke-ft
+target: {type: openai_compatible, base_url: ..., model: ..., stream: bool}
+tools:  / perf:                                   # 域段：functional/accuracy 用 tools，
+  datasets: [...]                                 #   perf 用 perf（dataset/prompt、
+  ...                                             #   mode/baseline/ramp/soak、duration、jitter…）
+```
+
+reliability **独立形态**（observe body，与 POST /chaos/observe 同构）：
+
+```json
+{"target": {"base_url": "...", "model": "..."}, "faults": [],
+ "interval": 1, "duration": 4, "prompt": "ping", "post_window": null}
+```
+
+### 输出（result，任务终态后可读）
+
+套件型三域统一概要（明细在公共 run 存储，reports 为相对路径引用）：
+
+```json
+{"run_id": "...", "run_name": "smoke-locust", "status": "passed",
+ "total_cases": 6, "error_cases": 0,
+ "reports": {"timeseries.json": "reports/tool/locust/...", "locust_u2_report.html": "...", "locust.log": "..."}}
+```
+
+functional 实测 reports = junit xml + 场景 log；accuracy 实测错误路径
+（evalscope 未装）→ `status: "error"` + CLI exit 1 + 显式 ModuleNotFoundError。
+
+reliability 内联（不落 run 存储）：
+
+```json
+{"events": [], "probes": [{"t": ..., "ok": 1, "ttft_ms": 313.5, "latency_ms": 759.3,
+  "content_len": 79, "error": null}],
+ "rto": {"affected": false, "fail_count": 0, "first_fail": null, "rto_seconds": null},
+ "summary": {"total": 3, "pass": 3, "fail": 0, "pass_rate": 1.0},
+ "probe": {"url": ".../chat/completions", "model": "qwen2.5:3b", "interval": 1.0, "duration": 4.0}}
+```
+
+### 对接公共能力的 I/O 清单（由此实录推导，见 §11 讨论）
+
+| 域 | 从公共拿（输入侧） | 给公共（输出侧） |
+|---|---|---|
+| functional | 数据集/用例集（cases.jsonl 语义）、target/模型配置 | suite 概要 + case 判定明细（test_run 系表）+ junit/log 文件 |
+| accuracy | benchmark 清单（外部工具 registry）、target | suite 概要 + 指标明细（metric_result）+ 评分报告 |
+| perf | 场景数据集（perf_dataset 产物）、target | suite 概要 + 时序/分位（metric_result + timeseries.json）+ html 报告 |
+| reliability | target（探针端点）、weapons 目录 | **内联观测结果——不进 run 存储** |

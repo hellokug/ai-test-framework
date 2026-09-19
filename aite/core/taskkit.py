@@ -32,6 +32,7 @@ from aite.utils.logging import get_logger
 logger = get_logger("taskkit")
 
 STOP_TIMEOUT_S = 60.0              # stop 协作等待上限，超时强转 cancelled
+STOP_POLL_INTERVAL_S = 2.0         # 跨进程停止桥的 DB 轮询间隔
 
 
 class TaskNotFoundError(LookupError):
@@ -100,8 +101,10 @@ class DomainTaskKit:
         self.executor = executor
         self.bus = bus
         self.stop_timeout = STOP_TIMEOUT_S
+        self.stop_poll_interval = STOP_POLL_INTERVAL_S
         self._handles: dict[str, asyncio.Task] = {}
         self._contexts: dict[str, TaskRunContext] = {}
+        self._watchers: dict[str, asyncio.Task] = {}
 
     # -------------------------------------------------------------- SSE 频道
     def channel(self, task_id: str) -> str:
@@ -152,6 +155,7 @@ class DomainTaskKit:
         ctx = TaskRunContext(self, task_id, dict(started["spec"]), repo)
         self._contexts[task_id] = ctx
         self._handles[task_id] = asyncio.create_task(self._drive(repo, ctx))
+        self._watchers[task_id] = asyncio.create_task(self._watch_stop(repo, ctx))
         self._publish(task_id, {"type": "started", "task_id": task_id})
         return started
 
@@ -181,15 +185,54 @@ class DomainTaskKit:
             # _drive 兜底吞了业务异常；此处仅吸收取消与极端情况下的漏网异常
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await handle
+        await self._finish_cancelled(
+            repo, task_id,
+            error="stop timed out; cancelled forcibly" if timed_out else None)
+        return await self._require(repo, task_id)
+
+    async def _watch_stop(self, repo: Any, ctx: TaskRunContext) -> None:
+        """跨进程停止桥：CLI/Web 各自独立进程，stop 请求落在 DB 的 stopping
+        状态上；执行进程轮询发现后触发协作式 cancel 并落 cancelled 终态。
+        子进程型引擎的进程组强杀由各域 executor.cancel 补强（C1-C4）。"""
+        task_id = ctx.task_id
+        try:
+            while True:
+                await asyncio.sleep(self.stop_poll_interval)
+                current = await repo.get_domain_task(self.table, task_id)
+                if current is None or current["status"] not in (TASK_RUNNING,
+                                                                TASK_STOPPING):
+                    return                      # 已易主/终态：出口归属在写入方
+                if current["status"] != TASK_STOPPING:
+                    continue
+                ctx.cancel_event.set()
+                try:
+                    await asyncio.wait_for(self.executor.cancel(ctx),
+                                           timeout=self.stop_timeout)
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning("跨进程 stop 的 cancel 超时: %s/%s",
+                                   self.domain, task_id)
+                handle = self._handles.get(task_id)
+                if handle is not None and not handle.done():
+                    handle.cancel()
+                await self._finish_cancelled(repo, task_id)
+                return
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._watchers.pop(task_id, None)
+
+    async def _finish_cancelled(self, repo: Any, task_id: str,
+                                *, error: str | None = None) -> None:
+        """stopping → cancelled 终态落库 + cancelled 帧 + 关频道（唯一出口）。
+        expect 守卫下多调用方（本进程 stop / 跨进程轮询桥）竞态安全。"""
         fields: dict[str, Any] = {"status": TASK_CANCELLED, "finished_at": utcnow()}
-        if timed_out:
-            fields["error"] = "stop timed out; cancelled forcibly"
+        if error:
+            fields["error"] = error
         finished = await repo.update_domain_task(
             self.table, task_id, expect_status=TASK_STOPPING, **fields)
         if finished is not None:
             self._publish(task_id, {"type": "cancelled"})
         self.bus.close(self.channel(task_id))
-        return finished or await self._require(repo, task_id)
 
     async def retry(self, repo: Any, task_id: str) -> dict:
         """重试 = 新任务实例（复制 spec，记 retry_of 链），不改原记录。"""
@@ -201,11 +244,12 @@ class DomainTaskKit:
             retry_of=task_id, retry_count=current["retry_count"] + 1)
 
     async def wait(self, repo: Any, task_id: str) -> dict | None:
-        """等待在途执行协程结束并返回最新任务态（CLI 同步形态用）。"""
-        handle = self._handles.get(task_id)
-        if handle is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await handle
+        """等待在途执行协程（及跨进程停止桥）结束并返回最新任务态（CLI 同步形态用）。"""
+        for bag in (self._handles, self._watchers):
+            t = bag.get(task_id)
+            if t is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
         return await repo.get_domain_task(self.table, task_id)
 
     async def mark_stale(self, repo: Any) -> int:
