@@ -22,9 +22,8 @@ class TestAgentTasksDataset:
     def test_dataset_covers_agent_capability_spectrum(self):
         """覆盖面：工具选择 / 参数抽取 / 拒答（no_tool）/ 多轮续作。"""
         path = SCENARIOS / "agent_tasks" / "cases.jsonl"
-        cases = [json.loads(l) for l in
-                 path.read_text(encoding="utf-8").splitlines() if l.strip()]
-        ids = {c["id"] for c in cases}
+        cases = [json.loads(line) for line in
+                 path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert any("no_tool" in c["expect"] for c in cases)          # 拒答类
         assert any("tool_args_contains" in c["expect"] for c in cases)  # 参数抽取
         assert any("finish_reason" in c["expect"] for c in cases)    # 结构域
@@ -34,8 +33,8 @@ class TestAgentTasksDataset:
 
     def test_case_ids_unique(self):
         path = SCENARIOS / "agent_tasks" / "cases.jsonl"
-        ids = [json.loads(l)["id"] for l in
-               path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ids = [json.loads(line)["id"] for line in
+               path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert len(ids) == len(set(ids))
 
     def test_scenario_discoverable_by_engine(self):

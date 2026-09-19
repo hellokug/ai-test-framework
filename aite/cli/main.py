@@ -495,3 +495,26 @@ def _dispatch_to_agent(raw: dict, node: str, log_level: str) -> None:
             raise SystemExit(1)
     err_console.print("[red]等待超时（24h）[/red]")
     raise SystemExit(1)
+
+
+# ----------------------------------------------------- 四域独立任务管理（C0.5）
+# docs/domain-backends.md：每域自带任务增删改查 / 运行·停止·重试 / 结果展示，
+# 公共框架 core/taskkit.py 一份实现、四张任务表各自演进；CLI 与 Web 各自装配。
+from aite.cli.task_cli import build_task_cli  # noqa: E402
+from aite.service.accuracy_tasks import build_accuracy_task_kit  # noqa: E402
+from aite.service.functional_tasks import build_functional_task_kit  # noqa: E402
+from aite.service.perf_tasks import build_perf_task_kit  # noqa: E402
+from aite.service.reliability_tasks import build_reliability_task_kit  # noqa: E402
+
+
+def _mount_domain_tasks(label: str, kit_builder) -> None:
+    """`aite {域} tasks …`：域组下挂 tasks 子组，给域内其他命令留空间。"""
+    domain_app = typer.Typer(help=f"{label} 域（任务管理等）", no_args_is_help=True)
+    domain_app.add_typer(build_task_cli(kit_builder()), name="tasks")
+    app.add_typer(domain_app, name=label)
+
+
+_mount_domain_tasks("functional", build_functional_task_kit)
+_mount_domain_tasks("accuracy", build_accuracy_task_kit)
+_mount_domain_tasks("perf", build_perf_task_kit)
+_mount_domain_tasks("reliability", build_reliability_task_kit)

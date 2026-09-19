@@ -220,6 +220,50 @@ class AgentTaskRow(Base):
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
 
 
+class TaskLifecycleMixin:
+    """四域任务表公共列（mixin 不建表；契约见 docs/domain-backends.md §6）。
+
+    任务框架代码一份（core/taskkit.py）、数据四份（下列四表）——每域独立任务表，
+    避免 models.py 成为四域并行开发的冲突面（原则 13/14：只增不改）。
+    """
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(sa.String(256), default="")
+    status: Mapped[str] = mapped_column(sa.String(32), default="pending", index=True)
+    spec: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    result: Mapped[dict | None] = mapped_column(sa.JSON(), nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    retry_of: Mapped[str | None] = mapped_column(GUID(), nullable=True, index=True)
+    retry_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
+
+
+class FunctionalTaskRow(TaskLifecycleMixin, Base):
+    """功能测试域任务（engine: pytest，spec=suite raw/用例集引用）。"""
+
+    __tablename__ = "functional_task"
+
+
+class AccuracyTaskRow(TaskLifecycleMixin, Base):
+    """精度评测域任务（engine: evalscope，spec=benchmark 清单/suite raw）。"""
+
+    __tablename__ = "accuracy_task"
+
+
+class PerfTaskRow(TaskLifecycleMixin, Base):
+    """性能压测域任务（engine: evalscope-perf/locust，spec=负载/时长/到达模型）。"""
+
+    __tablename__ = "perf_task"
+
+
+class ReliabilityTaskRow(TaskLifecycleMixin, Base):
+    """可靠性 chaos 域任务（spec=targets+weapons+observe 配置）。"""
+
+    __tablename__ = "reliability_task"
+
+
 def aware(dt: datetime | None) -> datetime | None:
     """SQLite returns naive datetimes; normalize to UTC-aware."""
     if dt is None:

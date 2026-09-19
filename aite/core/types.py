@@ -15,6 +15,19 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ------------------------------------------------------------- 四域任务状态机
+# 单一来源（原则 8）：core/taskkit.py、storage/repositories.py、域路由共用，
+# 禁止他处再定义副本。状态机与语义见 docs/domain-backends.md §3。
+TASK_PENDING = "pending"
+TASK_RUNNING = "running"
+TASK_STOPPING = "stopping"          # 协作式停止过渡态，超时兜底强转 cancelled
+TASK_SUCCEEDED = "succeeded"
+TASK_FAILED = "failed"
+TASK_CANCELLED = "cancelled"
+TASK_STALE = "stale"                # 进程死亡残留，startup 扫描收敛
+TASK_TERMINAL = frozenset({TASK_SUCCEEDED, TASK_FAILED, TASK_CANCELLED, TASK_STALE})
+
+
 class Timings(BaseModel):
     ttft_ms: float | None = None      # time to first token (streaming)
     total_ms: float | None = None

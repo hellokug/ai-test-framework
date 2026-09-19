@@ -550,6 +550,34 @@ run_metric_summary 汇总、timeseries 大屏端点、details 产出目录（mas
 `reports/agent/<run>/<stamp>/` 重建）全部可用。状态机闭合：心跳超 30s 的节点
 标 offline，其在跑任务标 error（agent offline）。
 
+## 四域独立任务管理（TaskKit）
+
+功能 / 精度 / 性能 / 可靠性四个域各自具备独立的任务管理：**增删改查、运行/停止/重试、
+结果展示**（契约见 `docs/domain-backends.md`）。公共框架一份实现（`aite/core/taskkit.py`），
+四张任务表（`functional/accuracy/perf/reliability_task`）各自演进；数据集管理、
+用例管理、结果公共存储由四域共享调用。
+
+**CLI**（`aite {functional|accuracy|perf|reliability} tasks <命令>`）：
+
+```bash
+aite perf tasks create --spec perf-suite.yaml --name 720s-long    # spec = suite YAML/JSON（不运行）
+aite perf tasks list                                              # [--status running] [--retry-of <id>]
+aite perf tasks get <id>                                          # 详情：spec / result / error
+aite perf tasks run <id>                                          # 运行并等待终态（exit 0=succeeded）
+aite perf tasks stop <id>                                         # 协作式停止；60s 兜底强转 cancelled
+aite perf tasks retry <id>                                        # 终态→新任务（retry_of 链，不改原记录）
+aite perf tasks rm <id>                                           # 删除（仅终态）
+```
+
+四个域命令同形；spec 与 `aite run -c` 的 suite YAML 完全同构（perf 域即
+engine=evalscope-perf/locust 的负载/时长/到达模型配置；reliability 域为
+`POST /chaos/observe` 的 body：target/faults/interval/duration）。
+
+**任务状态机**：`pending → running → stopping → cancelled` 或
+`running → succeeded/failed`；进程崩溃残留由启动扫描标 `stale` 收敛；
+`retry` 创建新任务并记 `retry_of` 链（审计可追）。SSE 进度频道为
+`{域}:tasks:{id}`，REST 任务端点在 C1-C4 接入（当前任务管理走 CLI）。
+
 ## Web 平台
 
 `aite serve`：Runs 列表/详情、SSE 实时进度、趋势折线+雷达、用例管理、套件 YAML 编辑、

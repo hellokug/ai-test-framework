@@ -8,19 +8,15 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from aite.chaos.discovery import discover_targets
 from aite.chaos.injectors.base import list_weapons
-from aite.chaos.model import validate_specs
-from aite.chaos.observer import ProbeConfig, observe_under_chaos
+from aite.service.reliability_tasks import run_observe
 
 router = APIRouter(tags=["chaos"])
-
-_MAX_OBSERVE_DURATION = 600.0     # 同步观测的时长上限（秒）
 
 
 @router.get("/chaos/targets")
@@ -44,32 +40,9 @@ async def chaos_observe(body: dict[str, Any]):
 
     body：{target: {base_url, model, api_key_env?}, faults: [FaultSpec...],
     interval?, duration?, prompt?, post_window?}
+    与 reliability 域任务 spec 同构（service/reliability_tasks.run_observe）。
     """
-    target = body.get("target") or {}
-    base_url = str(target.get("base_url") or "").strip().rstrip("/")
-    model = str(target.get("model") or "").strip()
-    if not base_url or not model:
-        raise HTTPException(400, "target.base_url 与 target.model 必填")
-    url = base_url if base_url.endswith("/chat/completions") \
-        else base_url + "/chat/completions"
     try:
-        specs = validate_specs(body.get("faults") or [])
+        return await run_observe(body)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    interval = float(body.get("interval") or 5.0)
-    duration = float(body.get("duration") or 60.0)
-    if interval <= 0 or duration <= 0 or duration > _MAX_OBSERVE_DURATION:
-        raise HTTPException(400, f"interval 须 >0；duration 须在 (0, "
-                                 f"{_MAX_OBSERVE_DURATION:.0f}] 秒内")
-    api_key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
-    cfg = ProbeConfig(url=url, model=model, api_key=api_key,
-                      interval=interval, duration=duration,
-                      prompt=str(body.get("prompt") or "ping"))
-    try:
-        result = await observe_under_chaos(
-            specs, cfg, post_window=body.get("post_window"))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    result["probe"] = {"url": url, "model": model, "interval": interval,
-                       "duration": duration}
-    return result

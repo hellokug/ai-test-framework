@@ -33,6 +33,8 @@ class EventBus:
         try:
             for event in list(self._history.get(channel, [])):
                 yield event
+                if event.get("type") == "end":
+                    return              # 已关闭频道的回放必须在 end 终止，否则永久挂起
             while True:
                 event = await q.get()
                 yield event

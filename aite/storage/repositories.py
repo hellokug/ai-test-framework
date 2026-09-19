@@ -10,7 +10,16 @@ from typing import Any
 from sqlalchemy import select, update
 
 from aite.core.interfaces import Repository
-from aite.core.types import MetricResult, TargetResponse, TestCase, utcnow
+from aite.core.types import (
+    TASK_RUNNING,
+    TASK_STALE,
+    TASK_STOPPING,
+    TASK_TERMINAL,
+    MetricResult,
+    TargetResponse,
+    TestCase,
+    utcnow,
+)
 from aite.storage.db import Database
 from aite.storage.models import (
     AgentNodeRow,
@@ -628,5 +637,90 @@ class SqlAlchemyRepository(Repository):
             "result": row.result, "error": row.error,
             "created_at": aware(row.created_at).isoformat(),
             "dispatched_at": aware(row.dispatched_at).isoformat() if row.dispatched_at else None,
+            "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
+        }
+
+    # ------------------------------------------------- domain tasks（四域任务表）
+    # 表类由调用方传入（FunctionalTaskRow / AccuracyTaskRow / PerfTaskRow /
+    # ReliabilityTaskRow，四表同构见 models.TaskLifecycleMixin），一份实现服务四域。
+    async def create_domain_task(self, table: type[Any], spec: dict[str, Any],
+                                 name: str = "", retry_of: str | None = None,
+                                 retry_count: int = 0) -> dict:
+        task_id = new_id()
+        async with self.db.sessions() as session:
+            session.add(table(id=task_id, name=name, spec=_json_safe(spec),
+                              retry_of=retry_of, retry_count=retry_count))
+            await session.commit()
+        return await self.get_domain_task(table, task_id)
+
+    async def update_domain_task(self, table: type[Any], task_id: str,
+                                 expect_status: str | None = None, **fields: Any) -> dict | None:
+        async with self.db.sessions() as session:
+            row = await session.get(table, task_id)
+            if row is None:
+                return None
+            if expect_status is not None and row.status != expect_status:
+                return None
+            for key, value in fields.items():
+                if key not in ("name", "spec", "status", "result", "error",
+                               "started_at", "finished_at"):
+                    raise ValueError(f"domain task 字段不可更新: {key}")
+                if key in ("spec", "result"):
+                    value = _json_safe(value)
+                setattr(row, key, value)
+            if fields.get("status") in TASK_TERMINAL and "finished_at" not in fields:
+                row.finished_at = utcnow()
+            await session.commit()
+        return await self.get_domain_task(table, task_id)
+
+    async def list_domain_tasks(self, table: type[Any], *, status: str | None = None,
+                                retry_of: str | None = None, limit: int = 50) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(table).order_by(table.created_at.desc())
+            if status:
+                stmt = stmt.where(table.status == status)
+            if retry_of:
+                stmt = stmt.where(table.retry_of == retry_of)
+            rows = (await session.execute(stmt.limit(limit))).scalars().all()
+            return [self._domain_task_dict(r) for r in rows]
+
+    async def get_domain_task(self, table: type[Any], task_id: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = await session.get(table, task_id)
+            return self._domain_task_dict(row) if row else None
+
+    async def delete_domain_task(self, table: type[Any], task_id: str) -> bool:
+        async with self.db.sessions() as session:
+            row = await session.get(table, task_id)
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    async def mark_stale_domain_tasks(self, table: type[Any]) -> int:
+        """startup 收敛（原则 8）：running/stopping 残留 → stale。
+
+        pending 是排队任务、未在执行，重启后保留仍可 run——与 bg_task 把
+        pending 一并标 error 的语义不同（域任务支持先建后跑）。
+        """
+        async with self.db.sessions() as session:
+            result = await session.execute(
+                update(table)
+                .where(table.status.in_((TASK_RUNNING, TASK_STOPPING)))
+                .values(status=TASK_STALE, error="server restarted before completion",
+                        finished_at=utcnow()))
+            await session.commit()
+            return result.rowcount or 0
+
+    @staticmethod
+    def _domain_task_dict(row: Any) -> dict:
+        return {
+            "id": str(row.id), "name": row.name, "status": row.status,
+            "spec": row.spec, "result": row.result, "error": row.error,
+            "retry_of": str(row.retry_of) if row.retry_of else None,
+            "retry_count": row.retry_count,
+            "created_at": aware(row.created_at).isoformat(),
+            "started_at": aware(row.started_at).isoformat() if row.started_at else None,
             "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
         }

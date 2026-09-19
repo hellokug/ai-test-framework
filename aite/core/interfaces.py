@@ -222,6 +222,34 @@ class Repository(ABC):
     @abstractmethod
     async def delete_model_config(self, model_id: str) -> bool: ...
 
+    # -- domain tasks（四域独立任务表，契约见 docs/domain-backends.md §4/§6）----
+    @abstractmethod
+    async def create_domain_task(self, table: type[Any], spec: dict[str, Any],
+                                 name: str = "", retry_of: str | None = None,
+                                 retry_count: int = 0) -> dict: ...
+
+    @abstractmethod
+    async def update_domain_task(self, table: type[Any], task_id: str,
+                                 expect_status: str | None = None, **fields: Any) -> dict | None:
+        """条件更新：expect_status 给定时仅当前状态匹配才写入（状态转移竞态收口）。
+
+        任务缺失或状态不匹配返回 None（调用方重读裁决）；终态自动补 finished_at。
+        """
+
+    @abstractmethod
+    async def list_domain_tasks(self, table: type[Any], *, status: str | None = None,
+                                retry_of: str | None = None, limit: int = 50) -> list[dict]: ...
+
+    @abstractmethod
+    async def get_domain_task(self, table: type[Any], task_id: str) -> dict | None: ...
+
+    @abstractmethod
+    async def delete_domain_task(self, table: type[Any], task_id: str) -> bool: ...
+
+    @abstractmethod
+    async def mark_stale_domain_tasks(self, table: type[Any]) -> int:
+        """startup 收敛：running/stopping 残留 → stale（pending 为排队任务，保留）。"""
+
 
 class NoopProgress(ProgressReporter):
     def start(self, total: int, description: str = "") -> None: pass
