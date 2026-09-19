@@ -318,3 +318,83 @@ reliability 内联（不落 run 存储）：
 4. 目录存储：统一 catalog（type 列）+ 分类型文件区？（建议：是，一张目录表）
 5. 兼容：suite `tools.datasets`（场景名语义）保留为内置场景快捷方式，受管数据集
    走新引用？（建议：是，内置场景名是合法的"隐式功能数据集"）
+
+> **2026-09-20 用户确认：五点均按建议执行。**落地契约见 §12。
+
+## 12. 数据集管理契约（D 系列，2026-09-20 定稿待开工）
+
+### 12.1 Catalog 表（models.py 增量，additive-only）
+
+```python
+class DatasetCatalogRow(Base):
+    __tablename__ = "dataset_catalog"
+    id: GUID pk
+    type: str(16)              # functional | accuracy | perf（索引；可靠性引用 perf 型）
+    name: str(256)             # 引用名，同 type 内唯一（索引）
+    version: str(64) = ""      # 版本凭证：perf 型 = 生成 seed（逐字节可复现），其余=导入版本
+    source: str(32)            # builtin | hf | local | generated
+    schema_version: str(16) = "1"
+    stats: JSON                # 类型相关元数据：case 数/断言键分布/科目分布/长度分桶
+    path: str                  # 相对数据集根（./data/datasets/<type>/…）的路径
+    notes: Text = ""
+    created_at / updated_at
+```
+
+文件区（决策 4：统一 catalog 表 + 分类型文件区）：`./data/datasets/<type>/<name>/`。
+精度型外部注册表 `./data/aite_datasets.json` 保留读取兼容，新登记一律走 catalog。
+
+### 12.2 校验器与摄取（代码一份，按类型分派）
+
+- **functional**：逐行过 `harness.Case` 真实校验器（断言词表封闭，坏行显式报错）；
+  stats 记 case 数 + 断言键分布。粒度：一个功能数据集 = 一个场景的 cases.jsonl。
+- **accuracy**：schema 预检（input/expected 可映射）+ 抽样预览；沿用 add-hf/local 通道。
+- **perf**：`generate_perf_dataset` 参数校验（已有）+ 产物登记（stats.json → stats 列，
+  seed → version 列）。
+
+### 12.3 API/CLI（双形态；REST 随 D3）
+
+```
+aite dataset list [--type functional|accuracy|perf]   # catalog 权威，builtin 合并显示
+aite dataset import-functional <cases.jsonl> --name n # 校验→落盘→登记
+aite dataset show <id|name> / rm <id>
+aite dataset add-hf …（已有 → 登记为 accuracy 型）
+perf 生成入口 → 自动登记（generated 型）
+```
+
+REST（D3）：`GET /datasets?type=`、`GET /datasets/{id}`、`DELETE /datasets/{id}`、
+按类型摄取端点。
+
+### 12.4 任务 spec 引用（DatasetConfig 增 `ref` 字段）
+
+```yaml
+datasets:
+  - ref: gsm8k-v1          # catalog 引用：解析出 type/path/fields/sample
+  - type: builtin
+    id: api_limits          # 内置场景名 = 隐式功能数据集（决策 5，保留快捷方式）
+```
+
+- loader 解析 `ref` → 查 catalog → 按 type 装配（functional→场景目录进 pytest 适配器、
+  accuracy→TestCase 流、perf→perf 载荷）；`ref` 与 `type+path` 互斥。
+- 可靠性 spec（决策 3：引用 + 内嵌参数并存）：
+
+```json
+{"target": {...}, "faults": [...], "probe": {...},
+ "background": {"dataset_ref": "<perf 型 id>", "perf": {"mode": "baseline", "parallel": 4, "duration": 120}}}
+```
+
+### 12.5 精度基线劣化判定（决策 2）
+
+- accuracy 任务 spec 可选 `baseline_ref`（基线 run_id 或任务 id；缺省回退同名任务
+  最近一次 succeeded 且 result.status=passed）。
+- 执行完成取基线 run 同名指标汇总 → result 增：
+  `{"baseline": {"ref": "...", "deltas": {"<metric>": {"base": x, "now": y, "delta_pct": z}}, "degraded": bool}}`。
+- 劣化方向复用 LOWER_IS_BETTER 单一来源（原则 8）；容差 `baseline_tolerance` 可配，
+  缺省 0（任何方向性劣化即 degraded）。
+
+### 12.6 实施股道
+
+- **D0（串行契约 PR）**：catalog 表 + repository CRUD + 三类型摄取校验器 +
+  dataset CLI（list/import-functional/show/rm 升级）+ DatasetConfig.ref 解析 + 测试。
+- **D1（精度流）**：baseline_ref 判定（accuracy 域执行器后处理）。
+- **D2（可靠性流）**：复合任务 background（背景流量在注入窗内运行 + 探针观测）。
+- **D3（平台流）**：REST 端点 + 前端数据集页。
