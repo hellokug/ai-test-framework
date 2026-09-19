@@ -264,3 +264,57 @@ reliability 内联（不落 run 存储）：
 | accuracy | benchmark 清单（外部工具 registry）、target | suite 概要 + 指标明细（metric_result）+ 评分报告 |
 | perf | 场景数据集（perf_dataset 产物）、target | suite 概要 + 时序/分位（metric_result + timeseries.json）+ html 报告 |
 | reliability | target（探针端点）、weapons 目录 | **内联观测结果——不进 run 存储** |
+
+## 11. 数据集分类与四域任务 I/O 梳理（2026-09-20 讨论稿，待共同评审）
+
+### 11.1 三类数据集的本质差异
+
+| | 功能型 | 精度型 | 性能型 |
+|---|---|---|---|
+| **本体** | 行为规约：请求 + 可观测断言 | 评测题库：问题 + 标准答案 + 分组元数据 | 流量特征：载荷分布（长度/权重/前缀共享） |
+| **一行 schema** | `id/desc/messages/params/tools/expect(16键断言)` | `id/question/choices/answer/subject`（或 fields 映射的 input/expected） | 载荷 prompt + 长度桶/前缀组标记 |
+| **内容语义** | 刺激 + 期望行为（答案不存，断言代替） | 答案必须正确（输出内容对照校验） | **内容语义无关**，分布特征是本体 |
+| **来源/生命周期** | 人工编写（加用例只加行） | 开源导入（HF）+ 私有领域构建 + 离线化 | **生成器产物**（语料池+参数+seed，逐字节可复现） |
+| **校验时机/器** | 导入时 harness.Case 校验 | 导入时 schema+字段映射校验 | 生成时参数校验 + stats.json |
+| **现状** | 只在包内 scenarios，**未入数据集管理** | `datasets/` 体系完整（builtin/hf_hub/local/userstore） | `perf_dataset.py` 生成器完整，产物散在 perfdata 目录 |
+
+结论：**三类区分开（schema/校验器/生命周期不同），共用一个管理外壳**（目录/注册表/引用/版本）。
+可靠性**不设自有数据集**：引用性能型做背景流量，叠加故障场景（weapons/faults）与探针。
+
+### 11.2 四种任务的输入输出差异
+
+| 域 | 输入（spec 组成） | 执行语义 | 输出/判定语义 |
+|---|---|---|---|
+| functional | 功能型数据集引用（或内置场景名） | 逐 case 请求 → 断言 | **二元判定**：逐 case pass/fail → pass_rate vs 阈值 |
+| accuracy | 精度型数据集引用 + 指标阈值 + **基线引用** | 请求 → **对照标准答案评分** | **分数 + 劣化判定**：绝对阈值 + vs 基线 delta（新能力） |
+| perf | 性能型数据集引用 + 负载模型（mode/duration/并发） | 压测流量 | **性能指标 vs SLA**：方向性阈值（TTFT/TPOT/QPS/error_rate） |
+| reliability | 性能型数据集引用（背景流量）+ 故障场景 + 探针配置 | **复合**：背景流量 → 注入 → 观测 → 恢复 | **RTO 判定**：注入窗 fail → 恢复后首个 pass 的时间；探针通过率 |
+
+由表推导的两个新能力点：
+1. **精度基线对比**：任务 spec 增 `baseline_ref`（基线 run/任务），result 增 vs 基线
+   delta 与劣化判定——当前只有绝对阈值。
+2. **可靠性复合任务**：当前 observe 只有探针流量；需组合「背景流量（性能语义） +
+   注入 + 观测」。`run_with_chaos` 包裹业务执行已有组合先例（perf suite chaos_raw）。
+
+### 11.3 公共数据集管理需要的形态（推导）
+
+- **统一目录（catalog）**：一行一个数据集条目 `{id, type: functional|accuracy|perf,
+  name, version/seed, source, schema_version, stats/元数据, path}`——type 是一等属性；
+  payload 格式各异本就在文件层，目录统一即可（引用/检索/版本收敛一处）。
+- **分类型校验器**：导入/生成时各自校验（功能=Case 校验器、精度=schema+字段映射
+  预览、性能=参数+stats）。
+- **分类型摄取入口**：functional 导入 cases.jsonl；accuracy add-hf/local（已有）；
+  perf generate（已有）——产物与注册都收进目录。
+- **引用方式升级**：任务 spec 用 `dataset id` 引用（替代场景名/裸路径散引）；
+  reliability spec 引用 perf 型 id。
+
+### 11.4 待共同拍板的决策点
+
+1. 功能型数据集：独立 type + cases.jsonl 原生格式入目录？（建议：是）
+2. 精度劣化判定的基线来源：spec 显式 `baseline_ref` vs 自动取最近 passed？（建议：
+   显式引用，缺省回退最近 passed 同名任务）
+3. 可靠性 spec 的背景流量：内嵌 perf 参数段 vs 直接引用 perf 数据集 id？（建议：
+   引用数据集 id + 内嵌负载参数，两者都要——流量形态与语料分布是两个自变量）
+4. 目录存储：统一 catalog（type 列）+ 分类型文件区？（建议：是，一张目录表）
+5. 兼容：suite `tools.datasets`（场景名语义）保留为内置场景快捷方式，受管数据集
+   走新引用？（建议：是，内置场景名是合法的"隐式功能数据集"）
