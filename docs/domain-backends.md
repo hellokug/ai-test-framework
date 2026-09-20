@@ -375,12 +375,20 @@ datasets:
 
 - loader 解析 `ref` → 查 catalog → 按 type 装配（functional→场景目录进 pytest 适配器、
   accuracy→TestCase 流、perf→perf 载荷）；`ref` 与 `type+path` 互斥。
-- 可靠性 spec（决策 3：引用 + 内嵌参数并存）：
+- 可靠性 spec（决策 3：引用 + 内嵌参数并存；`engine` 缺省 locust，注入窗 =
+  `background.perf.duration`，探针窗口自动对齐，时长上限 3600s）：
 
 ```json
-{"target": {...}, "faults": [...], "probe": {...},
- "background": {"dataset_ref": "<perf 型 id>", "perf": {"mode": "baseline", "parallel": 4, "duration": 120}}}
+{"target": {...}, "faults": [...], "interval": 3, "prompt": "ping",
+ "background": {"engine": "locust", "dataset_ref": "<perf 型 id>", "run_name": "bg-1",
+                "perf": {"mode": "baseline", "parallel": 4, "duration": 120}}}
 ```
+
+复合任务 result = 纯观测形态（events/probes/rto/summary/probe，probe 带
+`background: true` 与对齐后的 duration）+ `background` 键（套件概要
+run_id/status/reports——背景流量落公共 run 存储）。编排实现：
+`service/reliability_tasks.run_composite`（run_with_chaos 业务槽 = 背景流量与
+探针并发跑满注入窗，恢复后补测窗口捕捉首个 pass → RTO）。
 
 ### 12.5 精度基线劣化判定（决策 2）
 
@@ -402,5 +410,10 @@ datasets:
   （engine._load_cases 解析为 local 文件数据集）。实机验证：受管功能数据集经
   `tests_dir` 零改动被 pytest 适配器消费（2 case 真实模型运行，逐 case 判定）。
 - **D1（精度流，待做）**：baseline_ref 判定（accuracy 域执行器后处理）。
-- **D2（可靠性流，待做）**：复合任务 background（背景流量在注入窗内运行 + 探针观测）。
+- **D2（可靠性流，框架完成 2026-09-20）**：`run_composite` 编排（run_with_chaos
+  业务槽 = 背景流量与探针并发，注入窗 = 背景时长，恢复后补测）+
+  `build_background_suite`（dataset_ref→perf 型解析/target 继承/时长上限 3600s）+
+  observer.`summarize_probes` 转公开（原则 6）+ suite_task.`suite_summary` 抽取
+  （原则 3）。实机 E2E：locust 20s 背景 + 探针同窗，背景 run passed 落公共存储。
+  待补：故障注入实弹（对真实进程注入的复合场景）、注入窗内探针失败→RTO 的实战样本。
 - **D3（平台流，待做）**：REST 端点 + 前端数据集页。

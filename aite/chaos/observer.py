@@ -127,7 +127,8 @@ def compute_rto(probes: list[dict], events: list[dict]) -> dict:
             "rto_seconds": round(recovered - last_fail, 3) if recovered else None}
 
 
-def _summary(probes: list[dict]) -> dict:
+def summarize_probes(probes: list[dict]) -> dict:
+    """探针时间线 → 通过概要（复合任务跨模块复用，原则 6 转公开）。"""
     n = len(probes)
     passed = sum(p["ok"] for p in probes)
     return {"total": n, "pass": passed, "fail": n - passed,
@@ -147,4 +148,4 @@ async def observe_under_chaos(specs_raw, cfg: ProbeConfig,
     post = await run_observation(post_cfg)
     probes = obs + post
     return {"events": events, "probes": probes, "rto": compute_rto(probes, events),
-            "summary": _summary(probes)}
+            "summary": summarize_probes(probes)}
