@@ -726,3 +726,85 @@ expected: "<=30", actual, passed}]}`；套件 verdict = 全部用例 passed。
 - E5 verdict 断言（✅ result.cases[].verdict/checks + 套件 verdict）；前端故障窗
   标注待做（D3）。
 - E4 custom 注入器（环境白名单门禁，待做，随 R 系列环境纳管）。
+
+## 15. 用例管理系统（T 系列，2026-09-21 讨论稿，待共同评审）
+
+> 概念分层：**文字用例**（what，人写人读：测什么/预期/风险）↔ **脚本**（how，
+> 已有的可执行层：实验套件/perf 套件/功能场景/精度套件）→ **执行结果回填** →
+> **版本测试报告 + 风险清单**。现有 test_case 表是 run 内执行快照（保留不动），
+> 文字用例库是新增的独立一层。
+
+### 15.1 表结构（契约级，additive）
+
+```python
+class TestCaseDocRow(Base):        # 文字用例库
+    __tablename__ = "test_case_doc"
+    id: GUID pk
+    case_no: str(32) unique        # 人工编号 TC-REL-001 / TC-PERF-014 …
+    domain: str(16) index          # functional | accuracy | perf | reliability
+    title: str(512)
+    purpose: Text                  # 测什么/为什么（文字）
+    steps: Text                    # 文字步骤
+    expected: Text                 # 文字预期（业务语义，如"故障恢复 ≤30s"）
+    priority: str(8)               # P0 | P1 | P2 | P3
+    risk: str(8)                   # 高 | 中 | 低
+    status: str(16) = "draft"      # draft | active | deprecated
+    script: JSON                   # 脚本绑定（§15.3 定位键）
+    dataset_refs: JSON = []        # 关联数据集（catalog 引用）
+    tags: JSON = []
+    owner: str(64) = ""
+    created_at / updated_at
+
+class CaseRunRow(Base):            # 执行回填
+    __tablename__ = "case_run"
+    id: GUID pk
+    case_id: GUID index            # → test_case_doc
+    version: str(64) index         # 被测版本号（v2.3.0-rc1）
+    task_id: GUID                  # 执行任务（reliability 套件任务等）
+    run_id: GUID | None            # 公共 run 存储（有则填）
+    verdict: str(16) index         # passed | failed | error | blocked | not_run
+    key_metrics: JSON              # {rto_seconds: 3.2} / {mean_acc: 0.81} / {ttft_p95_ms: 812}
+    evidence: JSON                 # 报告/日志/时序引用
+    executed_at / notes
+```
+
+### 15.2 脚本绑定与回填规则（逐域定位键）
+
+| 域 | script 绑定 | 回填抽取 |
+|---|---|---|
+| functional | `{kind: scenario_case, scenario: api_stream, case_id: basic_stream}` | 该 case 的 pass/fail + 失败详情 |
+| accuracy | `{kind: suite_metric, engine: evalscope, metric: mean_acc, baseline?}` | 指标值 + vs 基线 delta |
+| perf | `{kind: suite_metric, metric: ttft_p95_ms, threshold: 2000}` | 指标值 vs SLA（方向取 LOWER_IS_BETTER） |
+| reliability | `{kind: suite_case, case_name: suspend-worker}` | rto_seconds + verdict |
+
+回填时机：脚本任务终态时按绑定抽取 key_metrics/verdict → 写 case_run
+（version 取任务 spec 的 version 字段）。一个文字用例在同一版本可有多条
+case_run（重试/多轮），报告取最新。
+
+### 15.3 版本测试报告与风险清单
+
+- **版本测试报告**：按 version 聚合 case_run → 每域统计（通过率/关键指标分布）
+  + 用例明细 + **vs 上一版本对比**（新增失败/劣化项）；导出 Markdown/HTML
+  （renderers 注册，报告落 reports/version/<version>/）。
+- **风险清单**：规则推导——①failed 且 P0/P1；②P0 用例该版本 not_run；
+  ③精度劣化/性能超 SLA/RTO 超标（expectations 类断言 failed）。条目 =
+  {风险等级, 用例, 证据链接, 建议}；导出 JSON/Markdown。
+- 报告与风险清单为**聚合视图**（动态计算），不建快照表；需要归档时导出件即快照。
+
+### 15.4 API/CLI（双形态）
+
+```
+REST: POST/GET/PATCH /test-cases（文字用例 CRUD）
+      POST /test-plans/run {version, case_ids|filters} → 生成并排队脚本任务
+      GET  /reports/version/{version}、GET /risks/version/{version}
+CLI:  aite case-doc add/list/show/rm；aite case-doc link <id> <脚本绑定>
+      aite version report <version> / aite version risks <version>
+```
+
+### 15.5 股道
+
+- T1 契约+表：两表 + repository + CLI/REST CRUD。
+- T2 回填器：任务终态钩子按域抽取 → case_run（reliability/functional 先行）。
+- T3 版本报告聚合 + 导出。
+- T4 风险清单规则 + 导出。
+- T5 前端：用例库页 / 版本报告页 / 风险清单页。
