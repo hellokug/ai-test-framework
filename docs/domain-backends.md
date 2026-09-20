@@ -509,3 +509,97 @@ target:
 - R4 注入路由：RemoteInjector 按 env.chaos_channel 分派 + /chaos/targets 按环境
   聚合 + target.environment 参数解析。
 - R5 双机实弹：环境绑定被测侧 agent，suspend 远端进程 → 探针 fail → RTO。
+
+## 14. 故障实验用例（chaos experiment case，E 系列，2026-09-20 讨论稿 v1）
+
+> 一条可靠性用例 = 五段式：**对象选择 → 故障定义 → 观测（探针/背景流量）→
+> 断言（预期 RTO 等）→ 报告**。逐点回应用户清单，标注已有/需新增。
+
+### 14.1 对象筛选与多对象选择策略
+
+发现筛选（发现阶段只返回命中的对象）：
+
+```json
+"target_selection": {
+  "kind": "process",                       // process | pod | container（随环境 kind）
+  "match": {"name": "vllm", "mode": "contains"},   // contains | exact | prefix | regex
+  "exclude": [{"name": "vllm-router"}, {"system": true}],
+  "select": {"mode": "percent", "value": 50}       // first | all | random(k) | percent(p%) | count(n)
+}
+```
+
+| 项 | 现状 | 需新增 |
+|---|---|---|
+| 发现阶段筛选 | ✅ discovery filters 子串模糊（node/container/process） | match.mode 四种（exact/prefix/regex）；pod 名称/label 匹配（kube 通道） |
+| 排除非目标 | 进程注入器排除自身（硬编码） | 显式 exclude 清单 + 系统进程黑名单（可配） |
+| 多对象选择策略 | ❌（name 命中多个取 pid 最小，文档级警示） | **select 五模式**：first / all / random(k) / percent(p%) / count(n)；random 带 seed 可复现（同 perf_dataset 哲学） |
+
+解析为具体 pid/pod 列表发生在**注入前的 resolve 阶段**，选中的对象（pid 清单）
+写入实验 result——操作了哪些对象审计可追。注入器从"单对象"升级为"对象集"
+（一 spec → N handle，事件时间线逐条记录）。
+
+### 14.2 故障定义（持续时间是核心新增）
+
+```json
+"fault": {"injector": "process", "kind": "suspend",
+          "fault_duration": 30}            // 缺省 = 业务时长（现行为）
+```
+
+| 项 | 现状 | 需新增 |
+|---|---|---|
+| 注入确认 | ✅ verify（注入失败/无效应区分，ChaosVerifyError 回滚） | 远端确认（§13 chaos.op 阻塞等待） |
+| **持续时间** | ❌ 故障窗=业务全程（finally 才恢复） | **fault_duration 定时恢复**：注入后 N 秒自动 recover，**业务（背景流量）继续跑**——真恢复语义：RTO 在持续负载下测得，而非业务结束才见分晓。controller 增恢复定时器，恢复事件落在业务中途 |
+| 恢复 | ✅ injector.recover + finally 兜底 + recover_failed 显式告警 | 不变（定时恢复与 finally 兜底并存，幂等） |
+
+### 14.3 谁注入与自定义故障
+
+- 谁注入：按 target.environment 的 chaos_channel 路由（§13.3——agent 通道
+  chaos.op / toxiproxy API 直连 / kube 占位）。
+- **自定义故障**：新增 `custom` 注入器（命令式契约）：
+
+```json
+{"injector": "custom", "kind": "<自定义名>",
+ "inject_cmd": "...", "verify_cmd": "...", "recover_cmd": "...", "timeout": 10}
+```
+
+  命令在目标环境内执行（经 agent 通道），退出码 0=成功；verify_cmd 缺省
+  信任 inject_cmd 退出码。安全：自定义注入器须在**环境 params 白名单**中
+  显式登记（远端任意命令执行是最高危面，不接受 spec 内裸传未登记命令）。
+
+### 14.4 断言（从"实验"变"用例"的关键）
+
+```json
+"expectations": {
+  "rto_max_seconds": 30,
+  "max_probe_failures": 2,
+  "background_error_rate_max": 0.05
+}
+```
+
+result 增 `verdict`：`{"status": "passed|failed", "checks": [{"name": "rto",
+"expected": "<=30", "actual": 3.264, "passed": true}, ...]}`。无 expectations
+= 观测实验（不判定）；有 = 用例（判定落 result.status，CLI/前端语义与全域
+对齐：任务执行 succeeded、业务判定看 result.status）。
+
+### 14.5 RTO 计算与结果呈现
+
+- RTO 口径不变：last_fail → 恢复后首个 pass（精度 ±探针间隔，单一探针时钟域）；
+  fault_duration 语义落地后 recovered 即定时恢复点附近，口径自然成立。
+- **报告关键指标**（前端大屏按此优先级呈现，故障窗口在时间线上着色标注）：
+
+| 指标 | 来源 | 重要性 |
+|---|---|---|
+| RTO（vs 预期） | compute_rto | ★★★ 判定核心 |
+| 注入窗内可用性（pass_rate） | probes | ★★★ |
+| 探针延迟劣化幅度（故障窗 TTFT/latency vs 恢复后基线） | probes | ★★ 劣化深度 |
+| 故障时间线（injected/verified/recovered 时点） | events | ★★ 窗口标注与审计 |
+| 背景流量错误率/QPS 恢复曲线 | background 套件 timeseries | ★★ 复合任务 |
+| 选中对象清单（pid/pod + 选择策略回放） | resolve 阶段 | ★ 审计 |
+
+### 14.6 股道
+
+- E1 契约：target_selection/fault_duration/expectations/custom 注入器 schema。
+- E2 发现筛选增强（match.mode + exclude + resolve 阶段对象集）。
+- E3 controller fault_duration 定时恢复 + 注入器对象集化（多 handle）。
+- E4 custom 注入器（环境白名单门禁）。
+- E5 verdict 断言 + 报告指标 + 前端故障窗标注。
