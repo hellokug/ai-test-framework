@@ -36,12 +36,19 @@ class TestDiscovery:
         assert tree["processes"] == [] and tree["containers"] == []
 
     def test_container_layer_degrades_gracefully(self):
-        """docker 缺失/可用都不炸：要么容器列表，要么 note 说明。"""
+        """docker 缺失/可用都不炸：容器层要么有清单，要么为空（可用性优先）。"""
         tree = discover_targets({"container": "whatever"})
         assert isinstance(tree["containers"], list)
         assert isinstance(tree["notes"], list)
-        if not tree["containers"]:
-            assert tree["notes"], "无容器时必须有降级说明"
+
+    def test_container_layer_notes_when_docker_missing(self, monkeypatch):
+        """docker CLI 不可用 → 容器层空 + note 显式说明（不抛错）。"""
+        from aite.chaos import discovery
+
+        monkeypatch.setattr(discovery, "_docker", lambda args: None)
+        tree = discovery.discover_targets({"container": "x"})
+        assert tree["containers"] == []
+        assert any("docker" in n for n in tree["notes"])
 
 
 class TestWeapons:
@@ -51,3 +58,11 @@ class TestWeapons:
         assert set(weapons["process"]) == {"kill", "suspend"}
         if "toxiproxy" in weapons:      # toxiproxy 模块导入即注册
             assert set(weapons["toxiproxy"]) == {"latency", "timeout", "bandwidth"}
+
+    def test_weapon_catalog_schemas_self_describing(self):
+        """逐 kind 参数 schema（§14.2）：toxiproxy latency 必填 latency_ms。"""
+        weapons = {w["injector"]: w for w in list_weapons()}
+        schema = weapons["toxiproxy"]["schemas"]["latency"]
+        assert schema["latency_ms"]["required"] is True
+        assert schema["latency_ms"]["type"] == "int"
+        assert weapons["process"]["schemas"]["suspend"] == {}

@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import httpx
 
-from aite.chaos.injectors.base import Injector, register_injector
+from aite.chaos.injectors.base import (
+    Injector,
+    register_injector,
+    validate_params,
+)
 from aite.chaos.model import FaultHandle, FaultSpec
 from aite.utils.logging import get_logger
 
@@ -30,13 +34,25 @@ _TOXIC_TYPES = {
     "bandwidth": lambda p: {"rate": int(p.get("rate_kb", 64)) * 1024},
 }
 
+_PARAM_SCHEMAS = {
+    "latency": {"latency_ms": {"type": "int", "required": True, "min": 0},
+                "jitter_ms": {"type": "int", "min": 0, "default": 0}},
+    "timeout": {"timeout_ms": {"type": "int", "min": 0, "default": 0}},
+    "bandwidth": {"rate_kb": {"type": "int", "required": True, "min": 1}},
+}
+
 
 @register_injector("toxiproxy")
 class ToxiproxyInjector(Injector):
     kinds = ["latency", "timeout", "bandwidth"]
     name = "toxiproxy"
+    param_schemas = _PARAM_SCHEMAS
 
     async def inject(self, spec: FaultSpec) -> FaultHandle:
+        if spec.kind not in _TOXIC_TYPES:
+            raise ValueError(f"toxiproxy 不支持故障类型 {spec.kind!r}"
+                             f"（可用: {sorted(_TOXIC_TYPES)}）")
+        validate_params(self.name, spec.kind, self.param_schemas, spec.params)
         api, proxy_name, listen, upstream = self._resolve(spec)
         async with httpx.AsyncClient(timeout=10) as client:
             # 代理名复用：同 fault 名重复注入先清理旧代理（幂等起步）

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from aite.chaos.model import FaultHandle, FaultSpec
 from aite.utils.logging import get_logger
@@ -40,9 +40,51 @@ def list_injectors() -> list[str]:
 
 
 def list_weapons() -> list[dict]:
-    """武器目录：注入器名 + 支持的故障类型（发现层/前端选择器数据源）。"""
-    return [{"injector": name, "kinds": sorted(_INJECTORS[name].kinds)}
-            for name in sorted(_INJECTORS)]
+    """武器目录（自描述）：注入器 + kinds 字符串表（既有消费方兼容）+ 逐 kind
+    参数 schema（§14.2，用例 params 填写依据）。"""
+    out = []
+    for name in sorted(_INJECTORS):
+        cls = _INJECTORS[name]
+        out.append({"injector": name, "kinds": sorted(cls.kinds),
+                    "schemas": {kind: cls.param_schemas.get(kind, {})
+                                for kind in sorted(cls.kinds)}})
+    return out
+
+
+_TYPES = {"str": str, "int": int, "float": (int, float), "bool": bool}
+
+
+def validate_params(injector: str, kind: str,
+                    schemas: dict[str, dict], params: dict[str, Any]) -> None:
+    """params → schema 校验（§14.2）：未知/缺失/类型/范围 fail-fast 显式报错。"""
+    schema = schemas.get(kind)
+    if schema is None:
+        if params:
+            raise ValueError(f"{injector}.{kind} 不接受 params: {sorted(params)}")
+        return
+    for key, value in (params or {}).items():
+        if key not in schema:
+            raise ValueError(f"{injector}.{kind} 未知参数 {key!r}"
+                             f"（可用: {sorted(schema)}）")
+        spec = schema[key]
+        type_name = spec.get("type", "str")
+        if type_name != "bool" and isinstance(value, bool):
+            raise ValueError(f"{injector}.{kind}.{key} 期望类型 {type_name}, "
+                             f"实际 bool")
+        py_type = _TYPES.get(type_name)
+        if py_type and not isinstance(value, py_type):
+            raise ValueError(f"{injector}.{kind}.{key} 期望类型 {type_name}, "
+                             f"实际 {type(value).__name__}")
+        if "min" in spec and value < spec["min"]:
+            raise ValueError(f"{injector}.{kind}.{key} 低于下限 "
+                             f"{spec['min']}: {value}")
+        if "max" in spec and value > spec["max"]:
+            raise ValueError(f"{injector}.{kind}.{key} 超过上限 "
+                             f"{spec['max']}: {value}")
+    for key, spec in schema.items():
+        if spec.get("required") and key not in (params or {}):
+            raise ValueError(f"{injector}.{kind} 缺必填参数 {key!r}"
+                             f"（可用: {sorted(schema)}）")
 
 
 class Injector(ABC):
@@ -53,11 +95,14 @@ class Injector(ABC):
     - verify 必须区分「注入动作失败」与「故障无效应」（返回 False）
     - recover 必须幂等（controller 的兜底恢复可能重复调用）
     - 全部实现为 async（网络型注入器走 REST；本地型亦统一签名）
-    - kinds: 注入器支持的故障类型清单（武器目录 /chaos/weapons 数据源）
+    - kinds: 注入器支持的故障类型清单（武器目录数据源）
+    - param_schemas: kind → {参数名: {type/required/min/max/default}}（§14.2，
+      inject 入口须调用 validate_params 校验）
     """
 
     name: ClassVar[str]
     kinds: ClassVar[list[str]] = []
+    param_schemas: ClassVar[dict[str, dict]] = {}
 
     @abstractmethod
     async def inject(self, spec: FaultSpec) -> FaultHandle: ...

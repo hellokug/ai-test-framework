@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import os
 
-from aite.chaos.injectors.base import Injector, register_injector
+from aite.chaos.injectors.base import (
+    Injector,
+    register_injector,
+    validate_params,
+)
 from aite.chaos.model import FaultHandle, FaultSpec
 from aite.utils.logging import get_logger
 
@@ -29,11 +33,13 @@ def _psutil():
 class ProcessInjector(Injector):
     name = "process"
     kinds = ["kill", "suspend"]
+    param_schemas = {"kill": {}, "suspend": {}}
 
     async def inject(self, spec: FaultSpec) -> FaultHandle:
         if spec.kind not in ("kill", "suspend"):
             raise ValueError(f"process 不支持故障类型 {spec.kind!r}"
                              "（可用: kill / suspend）")
+        validate_params(self.name, spec.kind, self.param_schemas, spec.params)
         psutil = _psutil()
         proc = self._resolve_process(psutil, spec.target)
         pid = proc.pid

@@ -708,10 +708,21 @@ expected: "<=30", actual, passed}]}`；套件 verdict = 全部用例 passed。
 
 ### 14.6 股道
 
+### 14.6 股道（E1/E2/E3/E5 已实现 2026-09-21；E4 与前端标注待做）
+
 - E1 契约：两层 target（发现层对象声明 / 注入层 inject：match+exclude+select）/
   fault_duration/expect_rto/custom 注入器 schema。
-- E2 两层对象选择：发现层筛选（match.mode + pod 匹配，与树视图同源）+ 注入层
-  活体确认（match/exclude/select 在注入时刻解析，审计清单落 result）。
-- E3 controller fault_duration 定时恢复 + 注入器对象集化（多 handle）。
-- E4 custom 注入器（环境白名单门禁）。
-- E5 verdict 断言 + 报告指标 + 前端故障窗标注。
+- E2 两层对象选择（✅ `chaos/selectors.py`）：发现层筛选（match.mode + pod 匹配，
+  与树视图同源）+ 注入层活体确认（match/exclude/select 注入时刻解析，审计清单
+  落 result.cases.targets）。match 四模式（contains/exact/prefix/regex，前两者
+  匹配进程名+命令行，后两者仅进程名）；exclude 支持匹配键清单与 {system: true}；
+  select 五策略（first/all/random(k) seed 可复现/percent(p) 至少 1/count(n)）；
+  解析为空显式报错（静默空注入=没做实验）。
+- E3 定时恢复 + 对象集注入（✅ controller fault_duration + recovered 集合双路
+  互斥；注入器升级为对象集：resolve 逐 pid 展开多 FaultSpec，事件逐条带用例名）。
+  实弹：mock 服务 suspend 6s，注入窗 2 探针 fail → 恢复 → 4 pass →
+  RTO=3.018s ≤ expect_rto 4 → passed（首跑命中 bash 包装进程、verdict 如实
+  failed——exclude 筛除非目标进程的价值实证）。
+- E5 verdict 断言（✅ result.cases[].verdict/checks + 套件 verdict）；前端故障窗
+  标注待做（D3）。
+- E4 custom 注入器（环境白名单门禁，待做，随 R 系列环境纳管）。
