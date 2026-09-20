@@ -515,28 +515,44 @@ target:
 > 一条可靠性用例 = 五段式：**对象选择 → 故障定义 → 观测（探针/背景流量）→
 > 断言（预期 RTO 等）→ 报告**。逐点回应用户清单，标注已有/需新增。
 
-### 14.1 对象筛选与多对象选择策略
+### 14.1 对象选择：两级漏斗（筛选 ≠ 注入确认，v2 按用户澄清重写）
 
-发现筛选（发现阶段只返回命中的对象）：
+**Stage A —— 对象筛选（发现/树视图，粒度 = 承载对象）**：按关键字定位"承载故障
+的容器类对象"。k8s 环境 = pod（按 pod 名称关键字匹配，命中的 pod 进树）；host
+环境 = 节点本身（环境即节点）。**本阶段不做 exclude**——pod 内多个进程都带
+vllm 关键字时，排除任何一个都可能让 pod 失配或隐藏事实；树里如实展示命中对象
+的全部子进程供浏览。
+
+**Stage B —— 注入确认（注入时刻，粒度 = 注入单元）**：对每个 Stage A 对象，
+**在注入时刻对活体状态再确认一遍**（发现快照的 pid 到注入时可能已变，活体解析
+是正确性要求）：对注入单元做 match + exclude + select。
 
 ```json
-"target_selection": {
-  "kind": "process",                       // process | pod | container（随环境 kind）
-  "match": {"name": "vllm", "mode": "contains"},   // contains | exact | prefix | regex
-  "exclude": [{"name": "vllm-router"}, {"system": true}],
-  "select": {"mode": "percent", "value": 50}       // first | all | random(k) | percent(p%) | count(n)
+"target": {
+  "environment": "prod-1",
+  "kind": "pod",
+  "select": {                                    // Stage A：pod 级筛选（发现/树）
+    "match": {"name": {"contains": "vllm"}},
+    "mode": "all"}                               // 命中多 pod：all | first | random(k) | percent(p%)
+  "process": {                                   // Stage B：pod 内注入确认（注入时执行）
+    "match":   {"name": {"contains": "vllm", "mode": "contains"}},
+    "exclude": [{"name": {"contains": "router"}}, {"system": true}],
+    "select":  {"mode": "first"}}                // 每个 pod 内：first | all | random(k) | percent(p%)
 }
 ```
 
+（host 环境：Stage A 退化为环境节点本身，Stage B 即节点内进程匹配。）
+
 | 项 | 现状 | 需新增 |
 |---|---|---|
-| 发现阶段筛选 | ✅ discovery filters 子串模糊（node/container/process） | match.mode 四种（exact/prefix/regex）；pod 名称/label 匹配（kube 通道） |
-| 排除非目标 | 进程注入器排除自身（硬编码） | 显式 exclude 清单 + 系统进程黑名单（可配） |
-| 多对象选择策略 | ❌（name 命中多个取 pid 最小，文档级警示） | **select 五模式**：first / all / random(k) / percent(p%) / count(n)；random 带 seed 可复现（同 perf_dataset 哲学） |
+| Stage A 筛选 | ✅ discovery filters 子串模糊 | pod 名称/label 匹配（kube 通道）；match.mode（exact/prefix/regex） |
+| Stage B 注入时确认 | ❌（进程注入器发现态取首个匹配） | 注入时刻活体解析：match + **exclude 清单**（router 等非目标在此排除）+ 系统进程黑名单 |
+| 多对象选择策略 | ❌ | 两级各带 select：Stage A 选 pod（all/first/random/percent），Stage B 选 pod 内注入单元（first/all/random/percent/count）；random 带 seed 可复现（同 perf_dataset 哲学） |
 
-解析为具体 pid/pod 列表发生在**注入前的 resolve 阶段**，选中的对象（pid 清单）
-写入实验 result——操作了哪些对象审计可追。注入器从"单对象"升级为"对象集"
-（一 spec → N handle，事件时间线逐条记录）。
+两级 resolve 后的选中清单（pod → pid 列表）写入实验 result——操作了哪些对象
+审计可追。注入器从"单对象"升级为"对象集"（一 spec → N handle，事件时间线
+逐条记录）。**exclude 只存在于 Stage B**：它是"注入哪些"的操作规则，不是
+"发现哪些"的视图规则——这是本次修正的核心。
 
 ### 14.2 故障定义（持续时间是核心新增）
 
@@ -598,8 +614,10 @@ result 增 `verdict`：`{"status": "passed|failed", "checks": [{"name": "rto",
 
 ### 14.6 股道
 
-- E1 契约：target_selection/fault_duration/expectations/custom 注入器 schema。
-- E2 发现筛选增强（match.mode + exclude + resolve 阶段对象集）。
+- E1 契约：两级 target（Stage A select / Stage B process：match+exclude+select）/
+  fault_duration/expectations/custom 注入器 schema。
+- E2 两级对象选择：Stage A 发现筛选（match.mode + pod 匹配）+ Stage B 注入时
+  活体确认（match/exclude/select 在注入时刻解析，审计清单落 result）。
 - E3 controller fault_duration 定时恢复 + 注入器对象集化（多 handle）。
 - E4 custom 注入器（环境白名单门禁）。
 - E5 verdict 断言 + 报告指标 + 前端故障窗标注。
