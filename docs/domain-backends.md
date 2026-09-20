@@ -548,13 +548,18 @@ cases:                                 # ── 用例：只有三件事 ──
       pod: {contains: vllm}            #   pod 名称关键字 → 命中 pod = 实验对象集
     inject:                            # 注入层：注入时在实验对象内解析注入单元
       process: {contains: vllm, exclude: [{contains: router}]}
-    fault: {kind: suspend}             # 打什么（injector 缺省 process）
+    fault:                             # 打什么：武器 + 故障类型 + 武器参数（§14.2）
+      injector: process                #   injector 缺省 process
+      kind: suspend
+      params: {}                       # 逐武器参数（suspend 无参；网络武器如
+                                       #   {latency_ms: 500, jitter_ms: 100}）
     expect_rto: 30                     # RTO 判多少
-  - name: kill-router
-    target: {pod: {contains: vllm-router}}
-    inject: null                       # 未指定 = 对象整体注入（pod 级故障时）或
-                                       #   对象内唯一进程（无歧义时免写）
-    fault: {kind: kill}
+  - name: nic-latency
+    target: {pod: {contains: vllm}}
+    fault:
+      injector: netem                  # 网卡故障武器（规划中，§14.2 schema 示例）
+      kind: degrade
+      params: {interface: eth0, loss_pct: 10, delay_ms: 200}
     expect_rto: 60
 ```
 
@@ -621,15 +626,40 @@ target 对象，**在注入时刻对活体状态再确认一遍**（发现快照
 逐条记录）。**exclude 只存在于注入层**：它是"注入哪些"的操作规则，不是
 "发现哪些"的视图规则——这是本次修正的核心。
 
-### 14.2 故障定义（持续时间是核心新增）
+### 14.2 故障定义：武器 + 参数 + 持续时间
+
+`fault` 声明**用什么武器、打什么故障、带什么参数、持续多久**。不同武器参数
+不同（网卡故障要填网卡名称/丢包率/时延），`params` 是一等透传字段，且**按
+武器声明参数 schema、解析期校验**：
+
+```yaml
+fault:
+  injector: toxiproxy            # 武器（注入器）
+  kind: latency                  # 故障类型（武器内语义）
+  params:                        # 武器参数——逐武器 schema 校验（fail-fast）
+    latency_ms: 500
+    jitter_ms: 100
+  fault_duration: 60             # 定时恢复（缺省=业务时长）
+```
+
+**参数 schema 与武器目录**（自描述，用户照目录填 params）：
+
+- 每个注入器声明 `param_schemas: {kind → {参数名: {type, required, default?,
+  min/max?}}}`（封闭词表，同 harness expect 键纪律——未知/缺失/越界参数在
+  解析期显式报错，不透传到注入时才炸）。
+- `GET /chaos/weapons` 升级为返回逐 kind 参数 schema；新增 `aite chaos weapons`
+  CLI 同源输出。示例（网卡故障武器 `netem`，Linux tc/netem 实现，规划中）：
 
 ```json
-"fault": {"injector": "process", "kind": "suspend",
-          "fault_duration": 30}            // 缺省 = 业务时长（现行为）
+{"injector": "netem", "kinds": [{"kind": "degrade",
+  "params": {"interface": {"type": "str", "required": true},
+             "loss_pct":  {"type": "float", "min": 0, "max": 100},
+             "delay_ms":  {"type": "int", "min": 0}}}]}
 ```
 
 | 项 | 现状 | 需新增 |
 |---|---|---|
+| params 透传 | ✅ FaultSpec.params 底层已有（toxiproxy latency_ms 在用） | 用例写法显式化 + **逐武器 param_schemas** + 解析期校验 + 武器目录自描述 |
 | 注入确认 | ✅ verify（注入失败/无效应区分，ChaosVerifyError 回滚） | 远端确认（§13 chaos.op 阻塞等待） |
 | **持续时间** | ❌ 故障窗=业务全程（finally 才恢复） | **fault_duration 定时恢复**：注入后 N 秒自动 recover，**业务（背景流量）继续跑**——真恢复语义：RTO 在持续负载下测得，而非业务结束才见分晓。controller 增恢复定时器，恢复事件落在业务中途 |
 | 恢复 | ✅ injector.recover + finally 兜底 + recover_failed 显式告警 | 不变（定时恢复与 finally 兜底并存，幂等） |
