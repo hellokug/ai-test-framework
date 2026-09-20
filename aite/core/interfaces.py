@@ -268,6 +268,45 @@ class Repository(ABC):
     @abstractmethod
     async def delete_dataset_catalog(self, dataset_id: str) -> bool: ...
 
+    # -- test case docs（用例管理系统，§15：文字用例库 + 执行回填）--------------
+    @abstractmethod
+    async def create_case_doc(self, entry: dict[str, Any]) -> dict: ...
+
+    @abstractmethod
+    async def update_case_doc(self, case_id: str, **fields: Any) -> dict | None: ...
+
+    @abstractmethod
+    async def get_case_doc(self, case_id: str) -> dict | None: ...
+
+    @abstractmethod
+    async def find_case_doc_by_no(self, case_no: str) -> dict | None: ...
+
+    @abstractmethod
+    async def list_case_docs(self, *, domain: str | None = None,
+                             status: str | None = None,
+                             priority: str | None = None,
+                             limit: int = 200) -> list[dict]: ...
+
+    @abstractmethod
+    async def delete_case_doc(self, case_id: str) -> bool:
+        """删除文字用例并级联删除其执行回填记录。"""
+
+    @abstractmethod
+    async def create_case_run(self, entry: dict[str, Any]) -> dict: ...
+
+    @abstractmethod
+    async def list_case_runs(self, *, case_id: str | None = None,
+                             version: str | None = None,
+                             verdict: str | None = None,
+                             limit: int = 200) -> list[dict]: ...
+
+    @abstractmethod
+    async def latest_case_run(self, case_id: str,
+                              version: str | None = None) -> dict | None: ...
+
+    @abstractmethod
+    async def delete_case_runs_for_case(self, case_id: str) -> int: ...
+
 
 class NoopProgress(ProgressReporter):
     def start(self, total: int, description: str = "") -> None: pass

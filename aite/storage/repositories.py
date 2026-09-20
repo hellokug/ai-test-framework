@@ -7,6 +7,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
 
 from aite.core.interfaces import Repository
@@ -25,12 +26,14 @@ from aite.storage.models import (
     AgentNodeRow,
     AgentTaskRow,
     BgTaskRow,
+    CaseRunRow,
     DatasetCatalogRow,
     ManualEvalScoreRow,
     ManualEvalTaskRow,
     MetricResultRow,
     ModelConfigRow,
     RunMetricSummaryRow,
+    TestCaseDocRow,
     TestCaseResultRow,
     TestCaseRow,
     TestRunRow,
@@ -787,4 +790,136 @@ class SqlAlchemyRepository(Repository):
             "path": row.path, "notes": row.notes,
             "created_at": aware(row.created_at).isoformat(),
             "updated_at": aware(row.updated_at).isoformat(),
+        }
+
+    # ------------------------------------------------- test case docs（§15）
+    async def create_case_doc(self, entry: dict[str, Any]) -> dict:
+        async with self.db.sessions() as session:
+            row = TestCaseDocRow(id=new_id(), **{
+                k: _json_safe(v) if k in ("script", "dataset_refs", "tags")
+                else v
+                for k, v in entry.items()
+                if k in ("case_no", "domain", "title", "purpose", "steps",
+                         "expected", "priority", "risk", "status", "script",
+                         "dataset_refs", "tags", "owner")})
+            session.add(row)
+            await session.commit()
+            return await self.get_case_doc(str(row.id))
+
+    async def update_case_doc(self, case_id: str, **fields: Any) -> dict | None:
+        allowed = ("title", "purpose", "steps", "expected", "priority",
+                   "risk", "status", "script", "dataset_refs", "tags", "owner")
+        async with self.db.sessions() as session:
+            row = await session.get(TestCaseDocRow, case_id)
+            if row is None:
+                return None
+            for key, value in fields.items():
+                if key not in allowed:
+                    raise ValueError(f"用例字段不可更新: {key}")
+                setattr(row, key,
+                        _json_safe(value) if key in ("script", "dataset_refs",
+                                                     "tags") else value)
+            await session.commit()
+        return await self.get_case_doc(case_id)
+
+    async def get_case_doc(self, case_id: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = await session.get(TestCaseDocRow, case_id)
+            return self._case_doc_dict(row) if row else None
+
+    async def find_case_doc_by_no(self, case_no: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(TestCaseDocRow).where(TestCaseDocRow.case_no == case_no)
+            )).scalar_one_or_none()
+            return self._case_doc_dict(row) if row else None
+
+    async def list_case_docs(self, *, domain: str | None = None,
+                             status: str | None = None,
+                             priority: str | None = None,
+                             limit: int = 200) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(TestCaseDocRow).order_by(TestCaseDocRow.case_no)
+            if domain:
+                stmt = stmt.where(TestCaseDocRow.domain == domain)
+            if status:
+                stmt = stmt.where(TestCaseDocRow.status == status)
+            if priority:
+                stmt = stmt.where(TestCaseDocRow.priority == priority)
+            rows = (await session.execute(stmt.limit(limit))).scalars().all()
+            return [self._case_doc_dict(r) for r in rows]
+
+    async def delete_case_doc(self, case_id: str) -> bool:
+        async with self.db.sessions() as session:
+            row = await session.get(TestCaseDocRow, case_id)
+            if row is None:
+                return False
+            await session.execute(
+                sa_delete(CaseRunRow).where(CaseRunRow.case_id == case_id))
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    async def create_case_run(self, entry: dict[str, Any]) -> dict:
+        run_id = new_id()
+        async with self.db.sessions() as session:
+            session.add(CaseRunRow(id=run_id, **{
+                k: _json_safe(v) if k in ("key_metrics", "evidence") else v
+                for k, v in entry.items()
+                if k in ("case_id", "version", "task_id", "run_id", "verdict",
+                         "key_metrics", "evidence", "notes")}))
+            await session.commit()
+        runs = await self.list_case_runs(case_id=entry["case_id"], limit=1)
+        return runs[0] if runs else {"id": run_id}
+
+    async def list_case_runs(self, *, case_id: str | None = None,
+                             version: str | None = None,
+                             verdict: str | None = None,
+                             limit: int = 200) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(CaseRunRow).order_by(CaseRunRow.executed_at.desc())
+            if case_id:
+                stmt = stmt.where(CaseRunRow.case_id == case_id)
+            if version:
+                stmt = stmt.where(CaseRunRow.version == version)
+            if verdict:
+                stmt = stmt.where(CaseRunRow.verdict == verdict)
+            rows = (await session.execute(stmt.limit(limit))).scalars().all()
+            return [self._case_run_dict(r) for r in rows]
+
+    async def latest_case_run(self, case_id: str,
+                              version: str | None = None) -> dict | None:
+        runs = await self.list_case_runs(case_id=case_id, version=version,
+                                         limit=1)
+        return runs[0] if runs else None
+
+    async def delete_case_runs_for_case(self, case_id: str) -> int:
+        async with self.db.sessions() as session:
+            result = await session.execute(
+                sa_delete(CaseRunRow).where(CaseRunRow.case_id == case_id))
+            await session.commit()
+            return result.rowcount or 0
+
+    @staticmethod
+    def _case_doc_dict(row: TestCaseDocRow) -> dict:
+        return {
+            "id": str(row.id), "case_no": row.case_no, "domain": row.domain,
+            "title": row.title, "purpose": row.purpose, "steps": row.steps,
+            "expected": row.expected, "priority": row.priority,
+            "risk": row.risk, "status": row.status, "script": row.script,
+            "dataset_refs": row.dataset_refs or [], "tags": row.tags or [],
+            "owner": row.owner,
+            "created_at": aware(row.created_at).isoformat(),
+            "updated_at": aware(row.updated_at).isoformat(),
+        }
+
+    @staticmethod
+    def _case_run_dict(row: CaseRunRow) -> dict:
+        return {
+            "id": str(row.id), "case_id": str(row.case_id),
+            "version": row.version, "task_id": str(row.task_id) if row.task_id else "",
+            "run_id": str(row.run_id) if row.run_id else None,
+            "verdict": row.verdict, "key_metrics": row.key_metrics,
+            "evidence": row.evidence, "notes": row.notes,
+            "executed_at": aware(row.executed_at).isoformat(),
         }

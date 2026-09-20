@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -608,3 +609,163 @@ _mount_domain_tasks("functional", build_functional_task_kit)
 _mount_domain_tasks("accuracy", build_accuracy_task_kit)
 _mount_domain_tasks("perf", build_perf_task_kit)
 _mount_domain_tasks("reliability", build_reliability_task_kit)
+
+
+# ------------------------------------------------------- 用例管理（§15，T1）
+# 文字用例库（测什么）与脚本绑定（怎么测）；执行回填/版本报告见 §15.3。
+case_doc_app = typer.Typer(help="文字用例库（功能/性能/精度/可靠性）")
+app.add_typer(case_doc_app, name="case-doc")
+
+
+def _load_case_fields(file: Path | None, options: dict) -> dict:
+    import yaml
+
+    fields = {}
+    if file is not None:
+        loaded = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise typer.BadParameter(f"{file} 须为字段映射")
+        fields.update(loaded)
+    fields.update({k: v for k, v in options.items() if v})
+    return fields
+
+
+@case_doc_app.command("add")
+def case_doc_add(
+    file: Path = typer.Option(None, "--file", help="用例 YAML（全部字段）"),
+    domain: str = typer.Option(None, "--domain",
+                               help="functional/accuracy/perf/reliability"),
+    title: str = typer.Option(None, "--title"),
+    purpose: str = typer.Option(None, "--purpose"),
+    expected: str = typer.Option(None, "--expected"),
+    priority: str = typer.Option(None, "--priority", help="P0-P3"),
+    risk: str = typer.Option(None, "--risk", help="高/中/低"),
+    owner: str = typer.Option(None, "--owner"),
+    case_no: str = typer.Option(None, "--case-no", help="人工编号（缺省自动）"),
+    script: Path = typer.Option(None, "--script", help="脚本绑定 YAML/JSON 文件"),
+) -> None:
+    """新增文字用例（--file 整档或逐选项）。"""
+    from aite.service.case_docs import create_case_doc
+
+    options = {"domain": domain, "title": title, "purpose": purpose,
+               "expected": expected, "priority": priority, "risk": risk,
+               "owner": owner, "case_no": case_no}
+    if script is not None:
+        import yaml
+
+        options["script"] = yaml.safe_load(script.read_text(encoding="utf-8"))
+    fields = _load_case_fields(file, options)
+    try:
+        async def _go():
+            async with repo_session(aite_config.db_url_from_env()) as repo:
+                return await create_case_doc(repo, fields)
+
+        row = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]add failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]created[/green] {row['case_no']} "
+                  f"({row['domain']}) {row['title']}")
+
+
+@case_doc_app.command("list")
+def case_doc_list(
+    domain: str | None = typer.Option(None, "--domain"),
+    status: str | None = typer.Option(None, "--status"),
+    priority: str | None = typer.Option(None, "--priority"),
+) -> None:
+    """列出文字用例。"""
+    from aite.service.case_docs import create_case_doc  # noqa: F401
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await repo.list_case_docs(domain=domain, status=status,
+                                             priority=priority)
+
+    rows = asyncio.run(_go())
+    table = Table(title=f"test cases ({len(rows)})")
+    for col in ("case_no", "domain", "title", "priority", "risk", "status",
+                "owner"):
+        table.add_column(col, overflow="fold")
+    for r in rows:
+        table.add_row(r["case_no"], r["domain"], r["title"][:40],
+                      r["priority"], r["risk"], r["status"], r["owner"])
+    console.print(table)
+
+
+@case_doc_app.command("show")
+def case_doc_show(ref: str = typer.Argument(..., help="case_no 或 id")) -> None:
+    """查看用例详情 + 最近执行回填。"""
+    from aite.service.case_docs import resolve_case_ref
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            row = await resolve_case_ref(repo, ref)
+            runs = await repo.list_case_runs(case_id=row["id"], limit=5)
+            return row, runs
+
+    try:
+        row, runs = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    for key in ("case_no", "domain", "title", "priority", "risk", "status",
+                "owner", "created_at"):
+        console.print(f"[bold]{key}[/bold]: {row[key]}")
+    for key in ("purpose", "steps", "expected"):
+        if row[key]:
+            console.print(f"[bold]{key}[/bold]: {row[key]}")
+    if row["script"]:
+        console.print("[bold]script[/bold]:")
+        console.print_json(json.dumps(row["script"], ensure_ascii=False))
+    for run in runs:
+        console.print(f"  ↳ [{run['executed_at']}] v={run['version'] or '-'} "
+                      f"verdict={run['verdict']} metrics={run['key_metrics']}")
+
+
+@case_doc_app.command("link")
+def case_doc_link(
+    ref: str = typer.Argument(..., help="case_no 或 id"),
+    script: Path = typer.Option(..., "--script", help="脚本绑定 YAML/JSON 文件"),
+) -> None:
+    """更新用例的脚本绑定（怎么测）。"""
+    import yaml
+
+    from aite.service.case_docs import update_case_doc
+
+    binding = yaml.safe_load(Path(script).read_text(encoding="utf-8")) or {}
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await update_case_doc(repo, ref, {"script": binding})
+
+    try:
+        row = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]link failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]linked[/green] {row['case_no']} -> "
+                  f"{json.dumps(row['script'], ensure_ascii=False)}")
+
+
+@case_doc_app.command("rm")
+def case_doc_rm(
+    ref: str = typer.Argument(..., help="case_no 或 id"),
+    force: bool = typer.Option(False, "--force", help="跳过确认"),
+) -> None:
+    """删除用例（级联删除执行回填记录）。"""
+    from aite.service.case_docs import resolve_case_ref
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            row = await resolve_case_ref(repo, ref)
+            deleted = await repo.delete_case_doc(row["id"])
+            return row, deleted
+
+    if not force and not typer.confirm(f"删除用例 {ref}?（回填记录级联删除）"):
+        raise typer.Abort()
+    row, deleted = asyncio.run(_go())
+    if not deleted:
+        err_console.print(f"[red]unknown case:[/red] {ref}")
+        raise SystemExit(1)
+    console.print(f"[green]removed[/green] {row['case_no']}")

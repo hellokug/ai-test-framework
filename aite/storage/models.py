@@ -288,6 +288,49 @@ class DatasetCatalogRow(Base):
                                                  onupdate=utcnow)
 
 
+class TestCaseDocRow(Base):
+    """文字用例库（§15，T 系列）：人写人读的"测什么"层——目的/步骤/业务预期/
+    优先级/风险，经 script 绑定定位到可执行层（实验套件用例/场景 case/指标），
+    执行结果由回填器写入 case_run。与 test_case（run 内执行快照）是两层。"""
+
+    __tablename__ = "test_case_doc"
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    case_no: Mapped[str] = mapped_column(sa.String(32), unique=True)
+    domain: Mapped[str] = mapped_column(sa.String(16), index=True)
+    title: Mapped[str] = mapped_column(sa.String(512))
+    purpose: Mapped[str] = mapped_column(sa.Text(), default="")
+    steps: Mapped[str] = mapped_column(sa.Text(), default="")
+    expected: Mapped[str] = mapped_column(sa.Text(), default="")
+    priority: Mapped[str] = mapped_column(sa.String(8), default="P2")
+    risk: Mapped[str] = mapped_column(sa.String(8), default="中")
+    status: Mapped[str] = mapped_column(sa.String(16), default="draft", index=True)
+    script: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    dataset_refs: Mapped[list] = mapped_column(sa.JSON(), default=list)
+    tags: Mapped[list] = mapped_column(sa.JSON(), default=list)
+    owner: Mapped[str] = mapped_column(sa.String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class CaseRunRow(Base):
+    """文字用例执行回填（§15）：脚本任务终态 → 按绑定抽取 verdict/key_metrics，
+    挂被测版本号——版本报告与风险清单的聚合数据源。"""
+
+    __tablename__ = "case_run"
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    case_id: Mapped[str] = mapped_column(GUID(), index=True)
+    version: Mapped[str] = mapped_column(sa.String(64), default="", index=True)
+    task_id: Mapped[str] = mapped_column(GUID(), default="")
+    run_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
+    verdict: Mapped[str] = mapped_column(sa.String(16), default="not_run",
+                                         index=True)
+    key_metrics: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    evidence: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    notes: Mapped[str] = mapped_column(sa.Text(), default="")
+    executed_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+
+
 def aware(dt: datetime | None) -> datetime | None:
     """SQLite returns naive datetimes; normalize to UTC-aware."""
     if dt is None:
