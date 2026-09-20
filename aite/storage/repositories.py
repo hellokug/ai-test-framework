@@ -25,6 +25,7 @@ from aite.storage.models import (
     AgentNodeRow,
     AgentTaskRow,
     BgTaskRow,
+    DatasetCatalogRow,
     ManualEvalScoreRow,
     ManualEvalTaskRow,
     MetricResultRow,
@@ -723,4 +724,67 @@ class SqlAlchemyRepository(Repository):
             "created_at": aware(row.created_at).isoformat(),
             "started_at": aware(row.started_at).isoformat() if row.started_at else None,
             "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
+        }
+
+    # ------------------------------------------------- dataset catalog（§12.1）
+    async def upsert_dataset_catalog(self, entry: dict[str, Any]) -> dict:
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(DatasetCatalogRow).where(
+                    DatasetCatalogRow.type == entry["type"],
+                    DatasetCatalogRow.name == entry["name"])
+            )).scalar_one_or_none()
+            if row is None:
+                row = DatasetCatalogRow(id=new_id())
+                session.add(row)
+            for key in ("type", "name", "version", "source", "schema_version",
+                        "stats", "path", "notes"):
+                if key in entry and entry[key] is not None:
+                    setattr(row, key, _json_safe(entry[key]) if key == "stats"
+                            else entry[key])
+            await session.commit()
+            return await self.get_dataset_catalog(str(row.id))
+
+    async def get_dataset_catalog(self, dataset_id: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = await session.get(DatasetCatalogRow, dataset_id)
+            return self._catalog_dict(row) if row else None
+
+    async def find_dataset_catalog(self, type_: str, name: str) -> dict | None:
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(DatasetCatalogRow).where(
+                    DatasetCatalogRow.type == type_,
+                    DatasetCatalogRow.name == name)
+            )).scalar_one_or_none()
+            return self._catalog_dict(row) if row else None
+
+    async def list_dataset_catalog(self, *, type_: str | None = None,
+                                   limit: int = 200) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(DatasetCatalogRow).order_by(
+                DatasetCatalogRow.type, DatasetCatalogRow.name)
+            if type_:
+                stmt = stmt.where(DatasetCatalogRow.type == type_)
+            rows = (await session.execute(stmt.limit(limit))).scalars().all()
+            return [self._catalog_dict(r) for r in rows]
+
+    async def delete_dataset_catalog(self, dataset_id: str) -> bool:
+        async with self.db.sessions() as session:
+            row = await session.get(DatasetCatalogRow, dataset_id)
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    @staticmethod
+    def _catalog_dict(row: DatasetCatalogRow) -> dict:
+        return {
+            "id": str(row.id), "type": row.type, "name": row.name,
+            "version": row.version, "source": row.source,
+            "schema_version": row.schema_version, "stats": row.stats,
+            "path": row.path, "notes": row.notes,
+            "created_at": aware(row.created_at).isoformat(),
+            "updated_at": aware(row.updated_at).isoformat(),
         }

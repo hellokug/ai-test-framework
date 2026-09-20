@@ -81,6 +81,20 @@ aite run -c suite.yaml                           # 之后 {type: builtin, id: gs
 Python API 同名函数 `aite.datasets.add_hf.add_hf_dataset()`。字段自动识别
 （question/answer/choices 等），生僻字段名用 `--fields input=xxx,expected=yyy` 映射。
 
+**统一数据集目录（functional / accuracy / perf 三类，`docs/domain-backends.md` §12）**：
+
+```bash
+aite dataset list [--type functional|accuracy|perf]              # 受管目录 + builtin 合并
+aite dataset import-functional cases.jsonl --name my-scene       # 逐行断言校验→落盘→登记
+aite dataset show functional:my-scene / aite dataset rm <ref>
+```
+
+受管功能数据集落 `data/datasets/functional/<名>/cases.jsonl`，套件经
+`tools: {tests_dir: ./data/datasets/functional, datasets: [<名>]}` 零改动消费；
+自研引擎套件用 catalog 引用 `datasets: [{ref: <名>}]`；`add-hf` 自动登记为
+accuracy 型，perf 场景生成（REST）自动登记为 perf 型。契约：功能性=行为规约
+（请求+断言）、精度=题库（含标准答案）、性能=流量特征（分布语义无关，生成产物）。
+
 ## 外部评测工具（平台化：精度跑分委托专业工具）
 
 suite 带 `engine` 字段即路由到工具适配层（无 engine 走自研引擎，行为不变）。

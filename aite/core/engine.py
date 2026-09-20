@@ -152,6 +152,12 @@ class ExecutionEngine:
         for dc in config.datasets:
             if dataset_ids and not ({dc.id, dc.path, dc.type} & set(dataset_ids)):
                 continue
+            if dc.ref:      # catalog 引用（§12.4）→ 解析为本地文件数据集
+                from aite.datasets.catalog import resolve_dataset_ref
+
+                row = await resolve_dataset_ref(self.repo, dc.ref)
+                dc = dc.model_copy(update={"type": "local", "path": row["path"],
+                                           "id": row["name"], "ref": None})
             loader = resolve_dataset(dc.type)()
             raw: list[TestCase] = [c async for c in loader.load(dc)]
             if limit:

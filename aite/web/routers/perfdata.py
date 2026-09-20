@@ -8,27 +8,38 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from aite import config
+from aite.datasets.catalog import register_entry
 from aite.service import web_service
 from aite.tools.perf_dataset import generate_perf_dataset, validate_scenario
+from aite.web.deps import get_state
 
 router = APIRouter(tags=["perfdata"])
 
 
 @router.post("/perf/datasets")
-async def create_perf_dataset(body: dict):
+async def create_perf_dataset(body: dict, state: Any = Depends(get_state)):
     """生成压测场景数据集（语料池 + 长度分桶 + 前缀共享率，确定性可复现）。
 
     body：{corpus, count, input_lengths, input_weights?, prefix_sharing?,
     prefix_groups?, output_tokens?, seed?, name?}；产物落
-    ``perf_datasets/<name>-<时间戳>.jsonl``（+ .stats.json）。
+    ``perf_datasets/<name>-<时间戳>.jsonl``（+ .stats.json），并登记
+    dataset catalog（perf 型，name=场景名指向最新产物，seed=version）。
     """
     try:
-        return generate_perf_dataset(body, dest_dir=config.DEFAULT_PERFDATA_DIR)
+        result = generate_perf_dataset(body, dest_dir=config.DEFAULT_PERFDATA_DIR)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    await register_entry(
+        state.repo, dataset_type="perf", name=str(body.get("name") or "perf-scene"),
+        source="generated", path=str(result.get("path") or result.get("file") or ""),
+        version=f"seed{body.get('seed', 42)}", stats=result.get("stats") or {},
+        notes="perf 场景数据集（生成产物，同名单场景名指向最新产物）")
+    return result
 
 
 @router.get("/perf/datasets")

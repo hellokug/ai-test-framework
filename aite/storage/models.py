@@ -264,6 +264,30 @@ class ReliabilityTaskRow(TaskLifecycleMixin, Base):
     __tablename__ = "reliability_task"
 
 
+class DatasetCatalogRow(Base):
+    """数据集管理统一目录（§12.1）：一条登记 = 一个受管数据集。
+
+    type 是一等属性（functional | accuracy | perf；可靠性引用 perf 型不设自有
+    类型），类型区分、外壳共用——payload 格式各异在文件层，目录统一引用/检索/版本。
+    """
+
+    __tablename__ = "dataset_catalog"
+    __table_args__ = (sa.UniqueConstraint("type", "name"),)
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    type: Mapped[str] = mapped_column(sa.String(16), index=True)
+    name: Mapped[str] = mapped_column(sa.String(256), index=True)
+    version: Mapped[str] = mapped_column(sa.String(64), default="")
+    source: Mapped[str] = mapped_column(sa.String(32), default="local")
+    schema_version: Mapped[str] = mapped_column(sa.String(16), default="1")
+    stats: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    path: Mapped[str] = mapped_column(sa.String(512))
+    notes: Mapped[str] = mapped_column(sa.Text(), default="")
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow,
+                                                 onupdate=utcnow)
+
+
 def aware(dt: datetime | None) -> datetime | None:
     """SQLite returns naive datetimes; normalize to UTC-aware."""
     if dt is None:

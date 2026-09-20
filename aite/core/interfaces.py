@@ -250,6 +250,24 @@ class Repository(ABC):
     async def mark_stale_domain_tasks(self, table: type[Any]) -> int:
         """startup 收敛：running/stopping 残留 → stale（pending 为排队任务，保留）。"""
 
+    # -- dataset catalog（数据集管理统一目录，docs/domain-backends.md §12）------
+    @abstractmethod
+    async def upsert_dataset_catalog(self, entry: dict[str, Any]) -> dict:
+        """按 (type, name) 幂等登记；存在则更新其余字段。返回最新条目。"""
+
+    @abstractmethod
+    async def get_dataset_catalog(self, dataset_id: str) -> dict | None: ...
+
+    @abstractmethod
+    async def find_dataset_catalog(self, type_: str, name: str) -> dict | None: ...
+
+    @abstractmethod
+    async def list_dataset_catalog(self, *, type_: str | None = None,
+                                   limit: int = 200) -> list[dict]: ...
+
+    @abstractmethod
+    async def delete_dataset_catalog(self, dataset_id: str) -> bool: ...
+
 
 class NoopProgress(ProgressReporter):
     def start(self, total: int, description: str = "") -> None: pass

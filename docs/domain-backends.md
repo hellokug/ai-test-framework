@@ -393,8 +393,14 @@ datasets:
 
 ### 12.6 实施股道
 
-- **D0（串行契约 PR）**：catalog 表 + repository CRUD + 三类型摄取校验器 +
-  dataset CLI（list/import-functional/show/rm 升级）+ DatasetConfig.ref 解析 + 测试。
-- **D1（精度流）**：baseline_ref 判定（accuracy 域执行器后处理）。
-- **D2（可靠性流）**：复合任务 background（背景流量在注入窗内运行 + 探针观测）。
-- **D3（平台流）**：REST 端点 + 前端数据集页。
+- **D0（串行契约 PR，2026-09-20 完成）**：DatasetCatalogRow 表（type/name 唯一约束）
+  + repository CRUD（接口同步演进）+ `datasets/catalog.py`（登记/引用解析：id →
+  type:name → 唯一 name，跨类型重名显式报错）+ `functional/ingest.py`（逐行
+  harness.Case 校验 → `./data/datasets/functional/<名>/cases.jsonl` → 登记）+
+  dataset CLI（list[--type] 合并 builtin / import-functional / show / rm，add-hf
+  自动登记 accuracy 型）+ perfdata REST 生成自动登记 perf 型 + DatasetConfig.ref
+  （engine._load_cases 解析为 local 文件数据集）。实机验证：受管功能数据集经
+  `tests_dir` 零改动被 pytest 适配器消费（2 case 真实模型运行，逐 case 判定）。
+- **D1（精度流，待做）**：baseline_ref 判定（accuracy 域执行器后处理）。
+- **D2（可靠性流，待做）**：复合任务 background（背景流量在注入窗内运行 + 探针观测）。
+- **D3（平台流，待做）**：REST 端点 + 前端数据集页。

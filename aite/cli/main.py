@@ -266,42 +266,118 @@ def case_list(
     asyncio.run(_go())
 
 
-dataset_app = typer.Typer(help="builtin dataset catalog")
+dataset_app = typer.Typer(help="数据集管理（统一 catalog：functional/accuracy/perf）")
 app.add_typer(dataset_app, name="dataset")
 
 
 @dataset_app.command("list")
-def dataset_list() -> None:
-    """List builtin (packaged, sample-edition) benchmarks."""
+def dataset_list(
+    type_: str | None = typer.Option(
+        None, "--type", help="按类型过滤（functional/accuracy/perf）"),
+) -> None:
+    """列出受管数据集（catalog）+ 内置基准（builtin 合并显示）。"""
     from aite.datasets import builtin_ids, builtin_info, try_register_hf
 
-    table = Table(title="builtin datasets")
-    for col in ("id", "task", "recommended metrics", "full-scale source"):
-        table.add_column(col)
-    for ds_id in builtin_ids():
-        info = builtin_info(ds_id)
-        recs = ", ".join(
-            f"{r.get('name')}"
-            + (f" ({', '.join(f'{k}={v}' for k, v in r['params'].items())})" if r.get("params") else "")
-            + (f" >={r.get('threshold')}" if r.get("threshold") is not None else "")
-            for r in info.get("recommend") or [])
-        table.add_row(ds_id, info.get("task", ""), recs, info.get("upstream", ""))
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await repo.list_dataset_catalog(type_=type_)
+
+    rows = asyncio.run(_go())
+    table = Table(title=f"datasets ({len(rows)} managed)")
+    for col in ("id", "type", "name", "version", "source", "path"):
+        table.add_column(col, overflow="fold")
+    for r in rows:
+        table.add_row(r["id"][:8], r["type"], r["name"], r["version"],
+                      r["source"], r["path"])
     console.print(table)
+    if type_ in (None, "accuracy"):
+        table2 = Table(title="builtin benchmark datasets (accuracy, packaged)")
+        for col in ("id", "task", "recommended metrics", "full-scale source"):
+            table2.add_column(col)
+        for ds_id in builtin_ids():
+            info = builtin_info(ds_id)
+            recs = ", ".join(
+                f"{r.get('name')}"
+                + (f" ({', '.join(f'{k}={v}' for k, v in r['params'].items())})" if r.get("params") else "")
+                + (f" >={r.get('threshold')}" if r.get("threshold") is not None else "")
+                for r in info.get("recommend") or [])
+            table2.add_row(ds_id, info.get("task", ""), recs, info.get("upstream", ""))
+        console.print(table2)
     extra = try_register_hf()
     if not extra:
         console.print("[dim]hf_hub loader available with: pip install 'aite[bench]'[/dim]")
 
 
 @dataset_app.command("show")
-def dataset_show(builtin_id: str = typer.Argument(...)) -> None:
+def dataset_show(ref: str = typer.Argument(..., help="id / name / type:name")) -> None:
+    """查看数据集：catalog 引用优先，回退 builtin。"""
     from aite.datasets import builtin_info
+    from aite.datasets.catalog import resolve_dataset_ref
 
-    info = builtin_info(builtin_id)
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            try:
+                return await resolve_dataset_ref(repo, ref)
+            except ValueError:
+                return None
+
+    row = asyncio.run(_go())
+    if row is not None:
+        for k, v in row.items():
+            console.print(f"[bold]{k}[/bold]: {v}")
+        return
+    info = builtin_info(ref)
     if not info:
-        err_console.print(f"[red]unknown builtin id:[/red] {builtin_id}")
+        err_console.print(f"[red]unknown dataset:[/red] {ref}")
         raise SystemExit(1)
     for k, v in info.items():
         console.print(f"[bold]{k}[/bold]: {v}")
+
+
+@dataset_app.command("import-functional")
+def dataset_import_functional(
+    file: Path = typer.Argument(..., help="cases.jsonl 文件"),
+    name: str = typer.Option(..., "--name", help="数据集名（=场景名）"),
+    notes: str = typer.Option("", "--notes"),
+    force: bool = typer.Option(False, "--force", help="覆盖同名"),
+) -> None:
+    """导入功能数据集：逐行 harness.Case 校验 → 落盘 → 登记 catalog。"""
+    from aite.functional.ingest import ingest_functional
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await ingest_functional(repo, file, name, notes=notes, force=force)
+
+    try:
+        row = asyncio.run(_go())
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[red]import failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]imported[/green] {row['type']}/{row['name']} "
+                  f"({row['stats'].get('count')} cases) -> {row['path']}")
+
+
+@dataset_app.command("rm")
+def dataset_rm(
+    ref: str = typer.Argument(..., help="id / name / type:name"),
+    force: bool = typer.Option(False, "--force", help="跳过确认"),
+) -> None:
+    """删除 catalog 登记条目（数据文件保留）。"""
+    from aite.datasets.catalog import resolve_dataset_ref
+
+    async def _go() -> dict | None:
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            row = await resolve_dataset_ref(repo, ref)
+            deleted = await repo.delete_dataset_catalog(row["id"])
+            return row if deleted else None
+
+    if not force and not typer.confirm(f"删除数据集登记 {ref}?（文件保留）"):
+        raise typer.Abort()
+    row = asyncio.run(_go())
+    if row is None:
+        err_console.print(f"[red]unknown dataset:[/red] {ref}")
+        raise SystemExit(1)
+    console.print(f"[green]removed[/green] {row['type']}/{row['name']}（文件保留: {row['path']}）")
 
 
 @dataset_app.command("add-hf")
@@ -320,6 +396,7 @@ def dataset_add_hf(
     Requires network + 'aite[bench]'; result is fully offline afterwards.
     """
     from aite.datasets.add_hf import add_hf_dataset
+    from aite.datasets.catalog import register_entry
 
     fmap: dict[str, str] = {}
     if fields:
@@ -335,6 +412,19 @@ def dataset_add_hf(
         raise SystemExit(1) from exc
     console.print(f"[green]wrote[/green] {path}")
     console.print(f"usable offline as: {{type: builtin, id: {path.stem}}}")
+
+    count = sum(1 for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip())
+
+    async def _reg():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await register_entry(
+                repo, dataset_type="accuracy", name=path.stem, source="hf",
+                path=str(path).replace("\\", "/"), version=f"{split}@{seed}",
+                stats={"count": count}, notes=f"hf:{hf_id}")
+
+    row = asyncio.run(_reg())
+    console.print(f"[green]registered[/green] accuracy/{row['name']} ({count} records)")
 
 
 bench_app = typer.Typer(help="evalscope / lm-eval compatibility tools")

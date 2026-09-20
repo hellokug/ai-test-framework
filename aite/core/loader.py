@@ -65,6 +65,7 @@ class DatasetConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str = "local"
     id: str | None = None                       # builtin benchmark id (mmlu / gsm8k / ...)
+    ref: str | None = None                      # 数据集 catalog 引用（§12.4；与 type+path 互斥）
     path: str | None = None
     split: str | None = None
     fields: dict[str, str] = Field(default_factory=dict)   # input/expected/metadata field mapping
