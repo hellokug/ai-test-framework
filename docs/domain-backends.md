@@ -410,10 +410,16 @@ run_id/status/reports——背景流量落公共 run 存储）。编排实现：
   （engine._load_cases 解析为 local 文件数据集）。实机验证：受管功能数据集经
   `tests_dir` 零改动被 pytest 适配器消费（2 case 真实模型运行，逐 case 判定）。
 - **D1（精度流，待做）**：baseline_ref 判定（accuracy 域执行器后处理）。
-- **D2（可靠性流，框架完成 2026-09-20）**：`run_composite` 编排（run_with_chaos
+- **D2（可靠性流，框架完成 2026-09-20；真实注入实弹打通）**：`run_composite` 编排（run_with_chaos
   业务槽 = 背景流量与探针并发，注入窗 = 背景时长，恢复后补测）+
   `build_background_suite`（dataset_ref→perf 型解析/target 继承/时长上限 3600s）+
   observer.`summarize_probes` 转公开（原则 6）+ suite_task.`suite_summary` 抽取
   （原则 3）。实机 E2E：locust 20s 背景 + 探针同窗，背景 run passed 落公共存储。
-  待补：故障注入实弹（对真实进程注入的复合场景）、注入窗内探针失败→RTO 的实战样本。
+  **真实注入实弹**（process:suspend 对真实服务进程，10s 注入窗/timeout 3s）：注入→验证
+  8ms→窗内 2 探针 ReadTimeout fail→恢复→连续 pass（延迟 3000ms→10ms）→
+  **RTO=3.264s 实测**（affected/fail_count/first_fail/last_fail/recovered_at 全齐）。
+  实弹揭出两修：validate_specs 幂等（FaultSpec 透传，双重校验曾炸 not subscriptable）；
+  process 注入器改用 Process.suspend()/resume()（psutil 无模块级 suspend，此前单测
+  全 mock 未暴露）；injector 实弹单测 +3（真子进程 suspend/kill/recover 往返）；
+  observe body 增可选 `timeout`（探针超时秒数，缺省 30）。
 - **D3（平台流，待做）**：REST 端点 + 前端数据集页。

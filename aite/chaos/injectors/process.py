@@ -45,7 +45,7 @@ class ProcessInjector(Injector):
                 proc.kill()
             logger.info("chaos[process] kill pid=%s", pid)
         else:
-            psutil.suspend(pid)
+            proc.suspend()               # 挂起/恢复是 Process 方法（psutil 无模块级 suspend）
             logger.info("chaos[process] suspend pid=%s", pid)
         return FaultHandle(spec=spec, ref={"pid": pid, "kind": spec.kind},
                            injected_at=self.now())
@@ -68,7 +68,7 @@ class ProcessInjector(Injector):
         psutil = _psutil()
         pid = handle.ref["pid"]
         if psutil.pid_exists(pid):
-            psutil.resume(pid)
+            psutil.Process(pid).resume()
             logger.info("chaos[process] resume pid=%s", pid)
 
     @staticmethod

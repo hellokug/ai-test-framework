@@ -55,9 +55,12 @@ def build_observe_cfg(body: dict) -> tuple[list, ProbeConfig]:
         raise ValueError(f"interval 须 >0；duration 须在 (0, "
                          f"{_MAX_OBSERVE_DURATION:.0f}] 秒内")
     api_key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
+    timeout = float(body.get("timeout") or 30.0)
+    if timeout <= 0:
+        raise ValueError("timeout 须 >0")
     cfg = ProbeConfig(url=url, model=model, api_key=api_key,
                       interval=interval, duration=duration,
-                      prompt=str(body.get("prompt") or "ping"))
+                      prompt=str(body.get("prompt") or "ping"), timeout=timeout)
     return specs, cfg
 
 

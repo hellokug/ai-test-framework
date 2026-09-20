@@ -67,9 +67,15 @@ class FaultEvent:
 
 
 def validate_specs(raw: Any) -> list[FaultSpec]:
-    """chaos 段 → FaultSpec 列表（fail-fast；空/缺省返回空列表）。"""
+    """chaos 段 → FaultSpec 列表（fail-fast；空/缺省返回空列表）。
+
+    幂等：已是 FaultSpec 的条目直接透传——observe_under_chaos 校验后把
+    FaultSpec 列表传给 run_with_chaos，controller 入口会再校验一次
+    （教训：不透传则二次校验对 FaultSpec 取下标炸 'not subscriptable'）。
+    """
     if raw is None:
         return []
     if not isinstance(raw, list):
         raise ValueError("chaos 段须为 fault 声明数组")
-    return [FaultSpec.from_dict(item) for item in raw]
+    return [item if isinstance(item, FaultSpec) else FaultSpec.from_dict(item)
+            for item in raw]
