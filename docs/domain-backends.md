@@ -515,11 +515,15 @@ target:
 > 一条可靠性用例 = 五段式：**对象选择 → 故障定义 → 观测（探针/背景流量）→
 > 断言（预期 RTO 等）→ 报告**。逐点回应用户清单，标注已有/需新增。
 
-### 14.0 完整写法（v2 三层配置：环境 → 实验套件 → 用例，2026-09-20 对齐）
+### 14.0 完整写法（v3 两层分离：发现层 target / 注入层 inject，2026-09-21 对齐）
 
-> 维度分离：**环境**（§13）管目标接入信息，定义一次；**实验套件**管背景流量与
-> 观测，定义一次、套内用例连跑；**用例只关注三件事——往哪打、打什么、RTO 判
-> 多少**。可靠性场景业务必定受损，成功率断言无意义，已删除；只判 RTO。
+> 维度分离三层递进：**环境**（§13）管目标接入信息，定义一次；**实验套件**管
+> 背景流量与观测，定义一次、套内用例连跑；**用例只关注三件事——往哪打、打
+> 什么、RTO 判多少**。可靠性场景业务必定受损，成功率断言无意义，已删除；只
+> 判 RTO。用例内部再分两层：**target = 发现层**（实验对象是谁，声明性，与
+> /chaos/targets 树过滤同源同语义）；**inject = 注入层**（注入时刻在实验对象
+> 内解析注入单元，操作语义）。两者不混——发现层没有 exclude，注入层不重新
+> 选对象。
 
 **实验套件 spec（一条 reliability 任务 = 背景流量一次拉起 + 用例顺序连跑）**：
 
@@ -536,20 +540,20 @@ probe:                                 # 套件级：观测定义一次，全程
   prompt: ping
   post_window: 15
 defaults:                              # 套件级默认值；用例未指定则继承
-  select: {mode: first}                # 注入对象选择策略
+  inject: {select: {mode: first}}      # 注入单元选择策略
   fault_duration: 30                   # 故障持续时间
 cases:                                 # ── 用例：只有三件事 ──
   - name: suspend-worker
-    inject:                            # 往哪打（两级：pod 筛选 → 进程确认）
-      pod: {contains: vllm}            # Stage A：pod 名称关键字
-      process:                         # Stage B：注入时活体确认
-        contains: vllm
-        exclude: [{contains: router}]
+    target:                            # 发现层：实验对象声明（与树视图过滤同源）
+      pod: {contains: vllm}            #   pod 名称关键字 → 命中 pod = 实验对象集
+    inject:                            # 注入层：注入时在实验对象内解析注入单元
+      process: {contains: vllm, exclude: [{contains: router}]}
     fault: {kind: suspend}             # 打什么（injector 缺省 process）
     expect_rto: 30                     # RTO 判多少
   - name: kill-router
-    inject:
-      pod: {contains: vllm-router}
+    target: {pod: {contains: vllm-router}}
+    inject: null                       # 未指定 = 对象整体注入（pod 级故障时）或
+                                       #   对象内唯一进程（无歧义时免写）
     fault: {kind: kill}
     expect_rto: 60
 ```
@@ -573,48 +577,48 @@ select 策略 / fault_duration / fault.injector / probe 各键 / background.engi
  "verdict": {"status": "passed"}}
 ```
 
-**字段状态**：background/probe 平铺键已实现；套件-cases 结构、inject 两级、
-defaults 覆盖链、expect_rto 判定为 E 系列待实现。运行：`aite reliability
+**字段状态**：background/probe 平铺键已实现；套件-cases 结构、target/inject
+两层、defaults 覆盖链、expect_rto 判定为 E 系列待实现。运行：`aite reliability
 tasks create --spec <套件.yaml> && aite reliability tasks run <id>`。
 
 
-### 14.1 对象选择：两级漏斗（筛选 ≠ 注入确认，v2 按用户澄清重写）
+### 14.1 对象选择：两层漏斗（发现层 target ≠ 注入层 inject，v3 与 §14.0 对齐）
 
-**Stage A —— 对象筛选（发现/树视图，粒度 = 承载对象）**：按关键字定位"承载故障
+**发现层 `target` —— 实验对象声明（粒度 = 承载对象）**：按关键字定位"承载故障
 的容器类对象"。k8s 环境 = pod（按 pod 名称关键字匹配，命中的 pod 进树）；host
-环境 = 节点本身（环境即节点）。**本阶段不做 exclude**——pod 内多个进程都带
+环境 = 节点本身（环境即节点）。**本层不做 exclude**——pod 内多个进程都带
 vllm 关键字时，排除任何一个都可能让 pod 失配或隐藏事实；树里如实展示命中对象
-的全部子进程供浏览。
+的全部子进程供浏览。声明与 `/chaos/targets` 树过滤同源同语义——target 写完
+可以先单独"发现"看命中了什么，再决定注入。
 
-**Stage B —— 注入确认（注入时刻，粒度 = 注入单元）**：对每个 Stage A 对象，
-**在注入时刻对活体状态再确认一遍**（发现快照的 pid 到注入时可能已变，活体解析
-是正确性要求）：对注入单元做 match + exclude + select。
+**注入层 `inject` —— 注入单元确认（注入时刻，粒度 = 注入单元）**：对每个
+target 对象，**在注入时刻对活体状态再确认一遍**（发现快照的 pid 到注入时可能
+已变，活体解析是正确性要求）：对注入单元做 match + exclude + select。
 
 ```json
-"target": {
+"target": {                                       // 发现层：实验对象声明
   "environment": "prod-1",
-  "kind": "pod",
-  "select": {                                    // Stage A：pod 级筛选（发现/树）
-    "match": {"name": {"contains": "vllm"}},
-    "mode": "all"}                               // 命中多 pod：all | first | random(k) | percent(p%)
-  "process": {                                   // Stage B：pod 内注入确认（注入时执行）
-    "match":   {"name": {"contains": "vllm", "mode": "contains"}},
-    "exclude": [{"name": {"contains": "router"}}, {"system": true}],
-    "select":  {"mode": "first"}}                // 每个 pod 内：first | all | random(k) | percent(p%)
+  "pod": {"contains": "vllm"}                     // pod 名称关键字（host 环境=节点本身，无此键）
+},
+"inject": {                                       // 注入层：注入时刻活体解析
+  "process": {"contains": "vllm", "exclude": [{"contains": "router"}],
+              "select": {"mode": "first"}}        // 每个 pod 内：first|all|random(k)|percent(p%)
 }
 ```
 
-（host 环境：Stage A 退化为环境节点本身，Stage B 即节点内进程匹配。）
+（host 环境：发现层即环境节点本身，注入层即节点内进程匹配。inject 未指定 =
+对象整体注入（pod 级故障）或对象内唯一进程（无歧义时免写）；命中注入单元有
+歧义而无 inject → 显式报错要求补写，不静默取首个。）
 
 | 项 | 现状 | 需新增 |
 |---|---|---|
-| Stage A 筛选 | ✅ discovery filters 子串模糊 | pod 名称/label 匹配（kube 通道）；match.mode（exact/prefix/regex） |
-| Stage B 注入时确认 | ❌（进程注入器发现态取首个匹配） | 注入时刻活体解析：match + **exclude 清单**（router 等非目标在此排除）+ 系统进程黑名单 |
-| 多对象选择策略 | ❌ | 两级各带 select：Stage A 选 pod（all/first/random/percent），Stage B 选 pod 内注入单元（first/all/random/percent/count）；random 带 seed 可复现（同 perf_dataset 哲学） |
+| 发现层 target 筛选 | ✅ discovery filters 子串模糊 | pod 名称/label 匹配（kube 通道）；match.mode（exact/prefix/regex） |
+| 注入层 inject 活体确认 | ❌（进程注入器发现态取首个匹配） | 注入时刻活体解析：match + **exclude 清单**（router 等非目标在此排除）+ 系统进程黑名单 |
+| 多对象选择策略 | ❌ | 两层各带 select：发现层选 pod（all/first/random/percent），注入层选 pod 内注入单元（first/all/random/percent/count）；random 带 seed 可复现（同 perf_dataset 哲学） |
 
-两级 resolve 后的选中清单（pod → pid 列表）写入实验 result——操作了哪些对象
+两层 resolve 后的选中清单（pod → pid 列表）写入实验 result——操作了哪些对象
 审计可追。注入器从"单对象"升级为"对象集"（一 spec → N handle，事件时间线
-逐条记录）。**exclude 只存在于 Stage B**：它是"注入哪些"的操作规则，不是
+逐条记录）。**exclude 只存在于注入层**：它是"注入哪些"的操作规则，不是
 "发现哪些"的视图规则——这是本次修正的核心。
 
 ### 14.2 故障定义（持续时间是核心新增）
