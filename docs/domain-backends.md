@@ -390,6 +390,57 @@ run_id/status/reports——背景流量落公共 run 存储）。编排实现：
 `service/reliability_tasks.run_composite`（run_with_chaos 业务槽 = 背景流量与
 探针并发跑满注入窗，恢复后补测窗口捕捉首个 pass → RTO）。
 
+## 13. 远端故障注入（R 系列，2026-09-20 讨论稿，待共同评审）
+
+> 边界：process 注入器 = psutil **本机**执行；toxiproxy = 经 HTTP API **已天然远程**
+> （toxiproxy server 部署在被测侧，`target.api` 指向它，调用方 base_url 指向代理
+> 端口）；discovery = 本机 psutil+docker。被测系统与测试框架不同机时，
+> 进程类故障需要远端通道——**复用模块 G 拉取式执行机**（心跳响应携带任务的
+> 下行命令通道已存在，现只跑压测引擎）。
+
+### 13.1 感知：目标树由执行机上报
+
+- agent 新增 `chaos.discover` 任务类型：本地跑 `discover_targets()` 回传目标树；
+  master 聚合多执行机（每棵树挂 `node = 执行机名`），`GET /chaos/targets` 升级为
+  聚合视图（按 node 路由；本机树保留）。按需下发而非随心跳全量上报（树可能大）。
+- FaultSpec.target 增 `node`（执行机名）维度 → 决定故障路由到哪台执行机。
+
+### 13.2 注入：故障命令走执行机通道（RemoteInjector）
+
+- 新 agent 任务类型 `chaos.op`：`{op: inject|recover, spec | handle}`。agent 本地
+  复用现有注入器执行（零新注入逻辑），回传 FaultHandle.ref（pid 等）与事件
+  时间戳（**取 agent 侧时钟**，事件时间线标注时钟域）。
+- master 侧 `RemoteInjector`：与本地注入器同接口（inject/verify/recover），把 op
+  经 agent 通道发给目标执行机并**阻塞等待确认**——注入确认先于探针启动、恢复
+  确认先于补测，时序语义与本机一致。
+- 时延与精度：注入延迟 = 心跳间隔（缺省 5s）；等待中的 chaos_op 可让 agent 短轮询
+  （1s）压缩延迟。RTO 口径不受影响（first_fail→recovered 全取探针侧 master 时钟，
+  单一时钟域）；故障注入点由 agent 事件戳单独记录。
+- handle 持久化：ref 随 op 结果存 master（agent_task.result），恢复命令携带 ref——
+  注入与恢复可跨 master 重启闭合。
+
+### 13.3 安全（高危能力显式化）
+
+- agent 启动须 `--chaos-enabled` 显式开启；未开启时 chaos 任务直接回 error。
+- agent 侧注入白名单/黑名单（禁 agent 自身 pid、系统进程名黑名单）——与本地
+  注入器"排除自身"纪律一致，远端更须防误杀。
+
+### 13.4 备选路线（评估过，不作主线）
+
+- **SSH 直执行**：免 agent 部署，但要管凭据/跨平台命令差异（Windows 需
+  pssuspend 等）/验证弱——作轻量备选不作主线。
+- **K8s 注入器**（k8s exec / NetworkChaos）：目标在容器编排环境时的演进方向，
+  出现真实需求再立项（原则 7）。
+
+### 13.5 股道
+
+- R1 契约：FaultSpec.target.node 维度 + chaos.op 任务 schema + agent
+  `--chaos-enabled` + handle 序列化格式（roadmap 记录）。
+- R2 agent 侧：chaos.discover / chaos.op 两类任务执行器（复用本地注入器）。
+- R3 master 侧：RemoteInjector 路由 + /chaos/targets 聚合 + 可靠性任务 faults
+  带 node 自动走远端。
+- R4 双机实弹：master + 一台执行机 suspend 远端进程 → 探针 fail → RTO。
+
 ### 12.5 精度基线劣化判定（决策 2）
 
 - accuracy 任务 spec 可选 `baseline_ref`（基线 run_id 或任务 id；缺省回退同名任务
