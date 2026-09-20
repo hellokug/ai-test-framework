@@ -678,9 +678,9 @@ expected: "<=30", actual, passed}]}`；套件 verdict = 全部用例 passed。
 
 ### 14.6 股道
 
-- E1 契约：两级 target（Stage A select / Stage B process：match+exclude+select）/
-  fault_duration/expectations/custom 注入器 schema。
-- E2 两级对象选择：Stage A 发现筛选（match.mode + pod 匹配）+ Stage B 注入时
+- E1 契约：两层 target（发现层对象声明 / 注入层 inject：match+exclude+select）/
+  fault_duration/expect_rto/custom 注入器 schema。
+- E2 两层对象选择：发现层筛选（match.mode + pod 匹配，与树视图同源）+ 注入层
   活体确认（match/exclude/select 在注入时刻解析，审计清单落 result）。
 - E3 controller fault_duration 定时恢复 + 注入器对象集化（多 handle）。
 - E4 custom 注入器（环境白名单门禁）。
