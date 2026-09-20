@@ -515,73 +515,68 @@ target:
 > 一条可靠性用例 = 五段式：**对象选择 → 故障定义 → 观测（探针/背景流量）→
 > 断言（预期 RTO 等）→ 报告**。逐点回应用户清单，标注已有/需新增。
 
-### 14.0 完整用例写法（对齐版，2026-09-20）
+### 14.0 完整写法（v2 三层配置：环境 → 实验套件 → 用例，2026-09-20 对齐）
+
+> 维度分离：**环境**（§13）管目标接入信息，定义一次；**实验套件**管背景流量与
+> 观测，定义一次、套内用例连跑；**用例只关注三件事——往哪打、打什么、RTO 判
+> 多少**。可靠性场景业务必定受损，成功率断言无意义，已删除；只判 RTO。
+
+**实验套件 spec（一条 reliability 任务 = 背景流量一次拉起 + 用例顺序连跑）**：
 
 ```yaml
-# ═══ 0. 元信息 ═══
-name: vllm-suspend-rto                # 实验名 = 可靠性任务名
-
-# ═══ 1. 目标：环境 + 两级漏斗（Stage A 筛选 ≠ Stage B 注入确认）═══
-target:
-  environment: prod-1                 # [E] base_url/api_key_env 从环境解析，显式值覆盖
-  kind: pod                           # [E] host 环境 = node（Stage A 退化为节点本身）
-  select:                             # [E] Stage A：pod 筛选（发现/树，不做 exclude）
-    match: {name: {contains: vllm}}
-    mode: all                         # 命中多 pod：all|first|random(k)|percent(p%)
-  process:                            # [E] Stage B：注入时刻活体确认
-    match: {name: {contains: vllm}}
-    exclude:                          # 排除非目标进程（router 等）——只属于这一级
-      - {name: {contains: router}}
-      - {system: true}
-    select: {mode: first}             # pod 内注入几个：first|all|random(k)|percent(p%)
-
-# ═══ 2. 故障 ═══
-fault:
-  injector: process                   # process | toxiproxy | custom（环境白名单登记）[custom=E]
-  kind: suspend
-  params: {}                          # 注入器参数（toxiproxy: latency_ms 等）
-  fault_duration: 30                  # [E] 定时恢复；缺省=业务时长（现行为）。
-                                      #     真 RTO 语义：恢复发生在背景流量持续中
-
-# ═══ 3. 观测（键为现行已实现形态）═══
-interval: 3                           # 探针间隔
-timeout: 5                            # 单探针超时（挂起类故障需短超时）
-prompt: ping
-post_window: 15                       # 业务结束后补测窗口（捕捉恢复后首个 pass）
-duration: 120                         # 仅无 background 时必配（观测窗）；
-                                      #   有 background 时自动=背景时长
-background:                           # 可选；有 = 复合任务
+name: vllm-chaos-suite
+environment: prod-1                    # 目标接入信息（base_url/api_key_env）从环境解析
+background:                            # 套件级：背景流量定义一次，全程持续
   engine: locust
-  dataset_ref: vllm-traffic-v1        # perf 型数据集（catalog 引用）
-  perf: {mode: baseline, parallel: 8, duration: 120, max_tokens: 256}
-
-# ═══ 4. 断言（有 = 用例判定；无 = 观测实验）═══
-expectations:                         # [E]
-  rto_max_seconds: 30
-  max_probe_failures: 2               # 注入窗内允许的失败探针数
-  background_error_rate_max: 0.05     # 仅复合任务有效
+  dataset_ref: vllm-traffic-v1
+  perf: {mode: baseline, parallel: 8, duration: 600, max_tokens: 256}
+probe:                                 # 套件级：观测定义一次，全程在线
+  interval: 3
+  timeout: 5
+  prompt: ping
+  post_window: 15
+defaults:                              # 套件级默认值；用例未指定则继承
+  select: {mode: first}                # 注入对象选择策略
+  fault_duration: 30                   # 故障持续时间
+cases:                                 # ── 用例：只有三件事 ──
+  - name: suspend-worker
+    inject:                            # 往哪打（两级：pod 筛选 → 进程确认）
+      pod: {contains: vllm}            # Stage A：pod 名称关键字
+      process:                         # Stage B：注入时活体确认
+        contains: vllm
+        exclude: [{contains: router}]
+    fault: {kind: suspend}             # 打什么（injector 缺省 process）
+    expect_rto: 30                     # RTO 判多少
+  - name: kill-router
+    inject:
+      pod: {contains: vllm-router}
+    fault: {kind: kill}
+    expect_rto: 60
 ```
 
-**时间线语义**：t=0 注入并确认生效 → 探针/背景流量并发（故障窗内探针 fail、
-背景报错率抬升）→ t=30 `fault_duration` 到点自动恢复（背景流量继续）→ 探针
-捕捉恢复点 → RTO = last_fail → 恢复后首个 pass → 业务窗结束 → post_window
-补测 → verdict 逐条断言。
+**覆盖链**：用例显式值 > 套件 defaults > 内置缺省。可下沉到 defaults 的键：
+select 策略 / fault_duration / fault.injector / probe 各键 / background.engine。
 
-**result 形态**（任务 result 内）：
+**套件时间线**：背景流量拉起 → 探针全程在线 → 逐用例：注入并确认 →
+`fault_duration` 到点恢复（背景持续）→ 探针捕捉恢复点 → RTO = last_fail →
+恢复后首个 pass → 冷却（post_window）→ 下一用例。单用例 RTO 不可判定（恢复后
+无 pass）= 该用例 failed；套件 verdict = 全部用例 passed。
+
+**result 形态**（套件任务 result）：
 
 ```json
-{"events": [...], "probes": [...], "rto": {"rto_seconds": 3.264, "...": "..."},
- "summary": {}, "probe": {"duration": 120, "background": true},
- "background": {"run_id": "...", "status": "passed", "reports": {}},
- "verdict": {"status": "passed",                     // [E]
-             "checks": [{"name": "rto", "expected": "<=30",
-                         "actual": 3.264, "passed": true}]}}
+{"background": {"run_id": "...", "status": "passed", "reports": {}},
+ "probes": [...], "events": [...],
+ "cases": [{"name": "suspend-worker", "targets": ["pid:123", "pid:456"],
+            "rto_seconds": 3.264, "verdict": "passed",
+            "checks": [{"name": "rto", "expected": "<=30", "passed": true}]}],
+ "verdict": {"status": "passed"}}
 ```
 
-**字段状态**：interval/timeout/prompt/post_window/background/fault.injector·kind·
-params 已实现；target 两级/fault_duration/expectations·verdict/custom 注入器/
-environment 引用为 E 系列待实现。任务运行：`aite reliability tasks create
---spec <用例.yaml> && aite reliability tasks run <id>`。
+**字段状态**：background/probe 平铺键已实现；套件-cases 结构、inject 两级、
+defaults 覆盖链、expect_rto 判定为 E 系列待实现。运行：`aite reliability
+tasks create --spec <套件.yaml> && aite reliability tasks run <id>`。
+
 
 ### 14.1 对象选择：两级漏斗（筛选 ≠ 注入确认，v2 按用户澄清重写）
 
@@ -650,20 +645,17 @@ vllm 关键字时，排除任何一个都可能让 pod 失配或隐藏事实；�
   信任 inject_cmd 退出码。安全：自定义注入器须在**环境 params 白名单**中
   显式登记（远端任意命令执行是最高危面，不接受 spec 内裸传未登记命令）。
 
-### 14.4 断言（从"实验"变"用例"的关键）
+### 14.4 断言（v2：只判 RTO）
 
-```json
-"expectations": {
-  "rto_max_seconds": 30,
-  "max_probe_failures": 2,
-  "background_error_rate_max": 0.05
-}
-```
+每用例一个断言键 `expect_rto`（秒）——可靠性场景业务必定受损，观测窗内成功率
+无意义（v1 的 max_probe_failures/background_error_rate_max 删除）。判定：
 
-result 增 `verdict`：`{"status": "passed|failed", "checks": [{"name": "rto",
-"expected": "<=30", "actual": 3.264, "passed": true}, ...]}`。无 expectations
-= 观测实验（不判定）；有 = 用例（判定落 result.status，CLI/前端语义与全域
-对齐：任务执行 succeeded、业务判定看 result.status）。
+- `rto_seconds <= expect_rto` → passed；恢复后无 pass（RTO 不可判定）→ failed；
+- 未写 `expect_rto` = 观测实验，不判定（verdict 置 null）。
+
+套件 result.cases[] 每用例 `{rto_seconds, verdict, checks:[{name: "rto",
+expected: "<=30", actual, passed}]}`；套件 verdict = 全部用例 passed。
+任务执行语义与全域对齐不变：任务 succeeded（跑完没崩）、业务判定看 result。
 
 ### 14.5 RTO 计算与结果呈现
 
