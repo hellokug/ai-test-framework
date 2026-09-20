@@ -515,6 +515,74 @@ target:
 > 一条可靠性用例 = 五段式：**对象选择 → 故障定义 → 观测（探针/背景流量）→
 > 断言（预期 RTO 等）→ 报告**。逐点回应用户清单，标注已有/需新增。
 
+### 14.0 完整用例写法（对齐版，2026-09-20）
+
+```yaml
+# ═══ 0. 元信息 ═══
+name: vllm-suspend-rto                # 实验名 = 可靠性任务名
+
+# ═══ 1. 目标：环境 + 两级漏斗（Stage A 筛选 ≠ Stage B 注入确认）═══
+target:
+  environment: prod-1                 # [E] base_url/api_key_env 从环境解析，显式值覆盖
+  kind: pod                           # [E] host 环境 = node（Stage A 退化为节点本身）
+  select:                             # [E] Stage A：pod 筛选（发现/树，不做 exclude）
+    match: {name: {contains: vllm}}
+    mode: all                         # 命中多 pod：all|first|random(k)|percent(p%)
+  process:                            # [E] Stage B：注入时刻活体确认
+    match: {name: {contains: vllm}}
+    exclude:                          # 排除非目标进程（router 等）——只属于这一级
+      - {name: {contains: router}}
+      - {system: true}
+    select: {mode: first}             # pod 内注入几个：first|all|random(k)|percent(p%)
+
+# ═══ 2. 故障 ═══
+fault:
+  injector: process                   # process | toxiproxy | custom（环境白名单登记）[custom=E]
+  kind: suspend
+  params: {}                          # 注入器参数（toxiproxy: latency_ms 等）
+  fault_duration: 30                  # [E] 定时恢复；缺省=业务时长（现行为）。
+                                      #     真 RTO 语义：恢复发生在背景流量持续中
+
+# ═══ 3. 观测（键为现行已实现形态）═══
+interval: 3                           # 探针间隔
+timeout: 5                            # 单探针超时（挂起类故障需短超时）
+prompt: ping
+post_window: 15                       # 业务结束后补测窗口（捕捉恢复后首个 pass）
+duration: 120                         # 仅无 background 时必配（观测窗）；
+                                      #   有 background 时自动=背景时长
+background:                           # 可选；有 = 复合任务
+  engine: locust
+  dataset_ref: vllm-traffic-v1        # perf 型数据集（catalog 引用）
+  perf: {mode: baseline, parallel: 8, duration: 120, max_tokens: 256}
+
+# ═══ 4. 断言（有 = 用例判定；无 = 观测实验）═══
+expectations:                         # [E]
+  rto_max_seconds: 30
+  max_probe_failures: 2               # 注入窗内允许的失败探针数
+  background_error_rate_max: 0.05     # 仅复合任务有效
+```
+
+**时间线语义**：t=0 注入并确认生效 → 探针/背景流量并发（故障窗内探针 fail、
+背景报错率抬升）→ t=30 `fault_duration` 到点自动恢复（背景流量继续）→ 探针
+捕捉恢复点 → RTO = last_fail → 恢复后首个 pass → 业务窗结束 → post_window
+补测 → verdict 逐条断言。
+
+**result 形态**（任务 result 内）：
+
+```json
+{"events": [...], "probes": [...], "rto": {"rto_seconds": 3.264, "...": "..."},
+ "summary": {}, "probe": {"duration": 120, "background": true},
+ "background": {"run_id": "...", "status": "passed", "reports": {}},
+ "verdict": {"status": "passed",                     // [E]
+             "checks": [{"name": "rto", "expected": "<=30",
+                         "actual": 3.264, "passed": true}]}}
+```
+
+**字段状态**：interval/timeout/prompt/post_window/background/fault.injector·kind·
+params 已实现；target 两级/fault_duration/expectations·verdict/custom 注入器/
+environment 引用为 E 系列待实现。任务运行：`aite reliability tasks create
+--spec <用例.yaml> && aite reliability tasks run <id>`。
+
 ### 14.1 对象选择：两级漏斗（筛选 ≠ 注入确认，v2 按用户澄清重写）
 
 **Stage A —— 对象筛选（发现/树视图，粒度 = 承载对象）**：按关键字定位"承载故障
