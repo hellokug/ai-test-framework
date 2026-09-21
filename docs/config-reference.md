@@ -87,10 +87,17 @@ metrics:
   - token_f1
   - bleu
   - embedding_similarity: {threshold: 0.6}
-  # 性能（lower-is-better 自动处理方向）
-  - ttft_ms
-  - latency_p95_ms: {threshold: 5000}   # 计划中的 perf.p95_latency_ms 等价物
+  # 性能（时延族多档位：均值 + p50/p90/p95/p99/max；lower-is-better 自动处理方向）
+  - ttft_ms            # 均值；ttft_p50_ms / ttft_p90_ms / ttft_p95_ms /
+                       #   ttft_p99_ms / ttft_max_ms 同源换档
+  - latency_ms: {threshold: 5000}   # 端到端，缺省聚合 p95
+  - latency_avg_ms     # 均值档（与压测工具域 latency_avg_ms 同名同义）
+  - latency_p50_ms / latency_p90_ms / latency_p99_ms / latency_max_ms
+  - tpot_ms            # (端到端−TTFT)/(tokens−1)；tpot_p50/…/max_ms 同族
+  - itl_ms             # 逐 token 间隔；itl_p50/…/max_ms 同族（需流式）
   - tokens_per_sec
+  - cache_hit_rate: {threshold: 0.3}   # 缓存命中率 cached/prompt（端点回传
+                       #   cached_tokens 才产出；未回传跳过不算 0）
   - error_rate: {threshold: 0.05}
   - cost_usd
   # 可靠性（需 datasets 配 repeats/perturbations）

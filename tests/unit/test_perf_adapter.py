@@ -516,8 +516,12 @@ SUMMARY = {
 PERCENTILE = [
     {"Percentiles": "50%", "Latency (s)": 10.92, "TTFT (ms)": 7405.51,
      "TPOT (ms)": 100.0, "ITL (ms)": 95.0},
+    {"Percentiles": "90%", "Latency (s)": 13.01, "TTFT (ms)": 9000.0,
+     "TPOT (ms)": 150.0, "ITL (ms)": 130.0},
     {"Percentiles": "95%", "Latency (s)": 14.55, "TTFT (ms)": 11042.56,
      "TPOT (ms)": 180.0, "ITL (ms)": 150.0},
+    {"Percentiles": "99%", "Latency (s)": 15.5, "TTFT (ms)": 12000.0,
+     "TPOT (ms)": 200.0, "ITL (ms)": 170.0},
 ]  # noqa: E501
 
 
@@ -589,6 +593,13 @@ class TestCollect:
         assert by_metric["ttft_p95_ms"].value == pytest.approx(11042.56)
         assert by_metric["tpot_p95_ms"].value == pytest.approx(180.0)
         assert by_metric["itl_p95_ms"].value == pytest.approx(150.0)
+        # 多档位（分位行直接映射；秒→毫秒仅 Latency）
+        assert by_metric["ttft_p50_ms"].value == pytest.approx(7405.51)
+        assert by_metric["latency_p90_ms"].value == pytest.approx(13010)
+        assert by_metric["latency_p99_ms"].value == pytest.approx(15500)
+        assert by_metric["tpot_p90_ms"].value == pytest.approx(150.0)
+        assert by_metric["itl_p99_ms"].value == pytest.approx(170.0)
+        assert "latency_max_ms" not in by_metric   # 无逐请求 db → max 档跳过
         assert by_metric["qps"].value == pytest.approx(0.55)
         assert by_metric["output_tps"].value == pytest.approx(8.8)
         assert by_metric["avg_input_tokens"].value == pytest.approx(43.0)
@@ -628,6 +639,31 @@ class TestCollect:
         result = PerfAdapter().collect(make_request(work_dir=tmp_path))
         names = {r.metric for r in result.rows}
         assert "ttft_p95_ms" not in names and "ttft_ms" in names
+
+    def test_max_metrics_from_per_request_db(self, tmp_path):
+        """max 档从逐请求 benchmark_data.db 取（分位文件无 max 行，秒→毫秒）。"""
+        import sqlite3
+
+        self._write_level(tmp_path, "parallel_1_number_8", SUMMARY, PERCENTILE)
+        d = tmp_path / "perf_raw" / "m" / "parallel_1_number_8"
+        conn = sqlite3.connect(d / "benchmark_data.db")
+        conn.execute(
+            "CREATE TABLE result (completed_time REAL, latency REAL,"
+            " first_chunk_latency REAL, success INT, completion_tokens INT,"
+            " time_per_output_token REAL, inter_token_latencies TEXT)")
+        conn.executemany("INSERT INTO result VALUES (?,?,?,?,?,?,?)", [
+            (0.0, 1.0, 0.1, 1, 40, 0.02, json.dumps([0.02, 0.03])),
+            (1.0, 2.5, 0.4, 1, 40, 0.05, json.dumps([0.05, 0.04])),
+            (2.0, 9.0, 0.8, 1, 40, 0.09, json.dumps([0.09, 0.06])),
+        ])
+        conn.commit()
+        conn.close()
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path))
+        by_metric = {r.metric: r for r in result.rows}
+        assert by_metric["latency_max_ms"].value == pytest.approx(9000.0)
+        assert by_metric["ttft_max_ms"].value == pytest.approx(800.0)
+        assert by_metric["tpot_max_ms"].value == pytest.approx(90.0)
+        assert by_metric["itl_max_ms"].value == pytest.approx(90.0)
 
     def test_no_output_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="压测产出"):

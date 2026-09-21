@@ -31,8 +31,9 @@ def _percentile(values: list[float], pct: float) -> float:
 def aggregate_value(values: list[float], aggregation: str) -> float:
     if not values:
         return 0.0
-    if aggregation in ("p50", "p95", "p99"):
-        return _percentile(values, {"p50": 0.50, "p95": 0.95, "p99": 0.99}[aggregation])
+    if aggregation in ("p50", "p90", "p95", "p99"):
+        return _percentile(values, {"p50": 0.50, "p90": 0.90,
+                                    "p95": 0.95, "p99": 0.99}[aggregation])
     if aggregation == "max":
         return max(values)
     if aggregation == "min":
@@ -75,9 +76,13 @@ def aggregate(
             bucket["passed"].append(bool(rec.passed))
         if bucket["threshold"] is None:
             bucket["threshold"] = threshold
-        # fold into the overall bucket as well (dataset=None, group=None)
+        # fold into the overall bucket as well (dataset=None, group=None)；
+        # 无数据集标签的记录其分桶即 overall——跳过折叠避免重复入桶（count 翻倍）
+        overall_key = (rec.metric, None, None)
+        if key == overall_key:
+            continue
         overall = buckets.setdefault(
-            (rec.metric, None, None),
+            overall_key,
             {"values": [], "passed": [], "threshold": threshold,
              "agg": agg, "higher": higher},
         )

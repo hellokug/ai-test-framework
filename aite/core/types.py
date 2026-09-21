@@ -32,12 +32,18 @@ class Timings(BaseModel):
     ttft_ms: float | None = None      # time to first token (streaming)
     total_ms: float | None = None
     tokens_per_sec: float | None = None
+    # 逐 token 到达间隔样本（ms，流式；档级 ITL 指标的数据源）
+    itl_samples_ms: list[float] = Field(default_factory=list)
 
 
 class TokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    # 命中缓存的输入 token 数（None = 端点未回传，区别于 0 = 明确全 miss）。
+    # 口径：OpenAI/vLLM prompt_tokens_details.cached_tokens、Anthropic
+    # cache_read_input_tokens、DeepSeek prompt_cache_hit_tokens
+    cached_tokens: int | None = None
 
 
 class AgentTraceStep(BaseModel):
@@ -117,7 +123,7 @@ class InvokeOptions(BaseModel):
 
 class MetricResult(BaseModel):
     metric: str
-    value: float                      # normalized 0~1, higher is better
+    value: float | None = None        # None + error = 本次不可测（聚合跳过，宁缺毋错）
     raw: dict[str, Any] = Field(default_factory=dict)
     passed: bool | None = None
     error: str | None = None

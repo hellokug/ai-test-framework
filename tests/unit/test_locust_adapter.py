@@ -253,8 +253,10 @@ def _write_metrics(path: Path, recs: list[dict]) -> None:
 
 def _ok_rec(**kw):
     base = {"t": 100.0, "ok": 1, "latency_ms": 900.0, "ttft_ms": 560.0,
-            "tpot_ms": 30.0, "itl_avg": 28.0, "itl_p95": 45.0, "itl_n": 40,
-            "tokens": 85.0, "gen_ms": 2500.0, "prompt_tokens": 35.0}
+            "tpot_ms": 30.0, "itl_avg": 28.0, "itl_p50": 20.0, "itl_p90": 40.0,
+            "itl_p95": 45.0, "itl_p99": 48.0, "itl_max": 50.0, "itl_n": 40,
+            "tokens": 85.0, "gen_ms": 2500.0, "prompt_tokens": 35.0,
+            "cached_tokens": None}
     base.update(kw)
     return base
 
@@ -267,7 +269,9 @@ class TestCollect:
     def test_full_metrics_from_jsonl(self, tmp_path):
         recs = [_ok_rec(t=100.0 + i, tokens=85 + i, latency_ms=900 + i * 10,
                         ttft_ms=560 + i * 5, tpot_ms=30 + i, itl_avg=28 + i,
-                        itl_p95=45 + i) for i in range(5)]
+                        itl_p50=20 + i, itl_p90=40 + i, itl_p95=45 + i,
+                        itl_p99=48 + i, itl_max=50 + i,
+                        cached_tokens=10 + i) for i in range(5)]
         self._one_level(tmp_path, recs)
         result = LocustAdapter().collect(make_request(
             work_dir=tmp_path, metric_thresholds={"error_rate": 0.01,
@@ -279,6 +283,20 @@ class TestCollect:
         assert by_metric["tpot_ms"].value == pytest.approx(32.0)
         assert by_metric["itl_ms"].value == pytest.approx(30.0)
         assert by_metric["qps"].value == pytest.approx(1.25)     # 5 / 4s
+        # 多档位（保守上取整分位：pos = int(q·(n−1)) + 1 封顶 n−1）
+        assert by_metric["latency_p50_ms"].value == pytest.approx(930.0)
+        assert by_metric["latency_p90_ms"].value == pytest.approx(940.0)
+        assert by_metric["latency_p95_ms"].value == pytest.approx(940.0)
+        assert by_metric["latency_p99_ms"].value == pytest.approx(940.0)
+        assert by_metric["latency_max_ms"].value == pytest.approx(940.0)
+        assert by_metric["ttft_p50_ms"].value == pytest.approx(575.0)
+        assert by_metric["ttft_max_ms"].value == pytest.approx(580.0)
+        assert by_metric["tpot_p90_ms"].value == pytest.approx(34.0)
+        assert by_metric["itl_p50_ms"].value == pytest.approx(23.0)
+        assert by_metric["itl_p99_ms"].value == pytest.approx(52.0)
+        assert by_metric["itl_max_ms"].value == pytest.approx(54.0)
+        # 缓存命中率 = Σcached / Σprompt = 60 / 175（token 加权）
+        assert by_metric["cache_hit_rate"].value == pytest.approx(60 / 175, abs=1e-4)
         # output_tps 与 evalscope 同口径：Σtokens ÷ 墙钟时长
         # （start=100-0.9=99.1, end=104 → wall=4.9s; Σtokens=435）
         assert by_metric["output_tps"].value == pytest.approx(88.8, abs=0.1)
@@ -291,6 +309,25 @@ class TestCollect:
         assert overall["qps"]["value"] == pytest.approx(1.25)
         assert overall["qps"]["count"] == 5
         assert {"locust:u4"} <= {s["dataset"] for s in ts["summaries"]}
+
+    def test_cache_metric_absent_when_unreported(self, tmp_path):
+        """端点不回传 cached_tokens → 不产出 cache_hit_rate（未知 ≠ 0）。"""
+        self._one_level(tmp_path, [_ok_rec(t=10.0 + i) for i in range(3)])
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        names = {r.metric for r in result.rows}
+        assert "cache_hit_rate" not in names
+
+    def test_legacy_records_without_itl_tiers_tolerated(self, tmp_path):
+        """旧版 jsonl（无 itl_p50 等新键）→ 对应档位跳过，既有指标不受影响。"""
+        recs = [{"t": 10.0 + i, "ok": 1, "latency_ms": 900.0, "ttft_ms": 560.0,
+                 "tpot_ms": 30.0, "itl_avg": 28.0, "itl_p95": 45.0, "itl_n": 40,
+                 "tokens": 85.0, "gen_ms": 2500.0, "prompt_tokens": 35.0}
+                for i in range(3)]
+        self._one_level(tmp_path, recs)
+        result = LocustAdapter().collect(make_request(work_dir=tmp_path))
+        by_metric = {r.metric: r for r in result.rows}
+        assert by_metric["itl_p95_ms"].value == pytest.approx(45.0)
+        assert "itl_p50_ms" not in by_metric and "itl_max_ms" not in by_metric
 
     def test_error_aggregation(self, tmp_path):
         recs = [_ok_rec(t=1.0, tokens=50), {"t": 2.0, "ok": 0, "tokens": 0,
@@ -335,7 +372,8 @@ class TestCollect:
         self._one_level(tmp_path, recs)
         result = LocustAdapter().collect(make_request(work_dir=tmp_path))
         by_metric = {r.metric: r for r in result.rows}
-        assert {"tpot_ms", "itl_ms"}.isdisjoint(by_metric)
+        assert {"tpot_ms", "itl_ms", "tpot_p50_ms", "tpot_max_ms",
+                "itl_p50_ms", "itl_max_ms"}.isdisjoint(by_metric)
         # output_tps 墙钟聚合口径对缓冲端点仍可测（token 按墙钟到达，只是不流式）
         assert "output_tps" in by_metric
         assert {"ttft_ms", "latency_avg_ms", "qps"} <= set(by_metric)

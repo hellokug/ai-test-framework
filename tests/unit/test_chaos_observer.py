@@ -8,7 +8,14 @@ import pytest
 
 from aite.chaos.injectors.base import Injector, register_injector, unregister_injector
 from aite.chaos.model import FaultHandle, FaultSpec
-from aite.chaos.observer import ProbeConfig, compute_rto, observe_under_chaos, probe_once, run_observation
+from aite.chaos.observer import (
+    ProbeConfig,
+    compute_rto,
+    observe_under_chaos,
+    probe_once,
+    run_observation,
+    summarize_probes,
+)
 
 SSE_BODY = (
     'data: {"choices":[{"delta":{"content":"he"}}]}\n\n'
@@ -71,6 +78,23 @@ class TestProbe:
         assert len(probes) >= 2
         assert [p["ok"] for p in probes[:2]] == [0, 0]      # 故障窗口 fail
         assert probes[-1]["ok"] == 1                        # 恢复后 pass
+
+    def test_summarize_probes_percentiles(self):
+        """时延多档位概要：仅成功探针入分布（fail 的错误路径耗时不混入）。"""
+        probes = [
+            {"t": 1.0, "ok": 1, "ttft_ms": 100.0, "latency_ms": 900.0},
+            {"t": 2.0, "ok": 1, "ttft_ms": 200.0, "latency_ms": 1000.0},
+            {"t": 3.0, "ok": 1, "ttft_ms": 300.0, "latency_ms": 1100.0},
+            {"t": 4.0, "ok": 0, "ttft_ms": None, "latency_ms": 5000.0},
+        ]
+        s = summarize_probes(probes)
+        assert s["total"] == 4 and s["pass"] == 3 and s["fail"] == 1
+        assert s["ttft_avg_ms"] == 200.0
+        assert s["ttft_p50_ms"] == 200.0
+        assert s["ttft_p95_ms"] == pytest.approx(290.0)   # 线性插值
+        assert s["ttft_max_ms"] == 300.0
+        assert s["latency_max_ms"] == 1100.0              # 5000 不入分布
+        assert s["latency_p50_ms"] == 1000.0
 
 
 class TestRto:

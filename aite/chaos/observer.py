@@ -127,12 +127,38 @@ def compute_rto(probes: list[dict], events: list[dict]) -> dict:
             "rto_seconds": round(recovered - last_fail, 3) if recovered else None}
 
 
+def _pct(sorted_vals: list[float], q: float) -> float:
+    """线性插值分位数（与聚合层 _percentile 同式）。"""
+    if not sorted_vals:
+        return 0.0
+    pos = q * (len(sorted_vals) - 1)
+    lo, hi = int(pos), min(int(pos) + 1, len(sorted_vals) - 1)
+    frac = pos - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
 def summarize_probes(probes: list[dict]) -> dict:
-    """探针时间线 → 通过概要（复合任务跨模块复用，原则 6 转公开）。"""
+    """探针时间线 → 通过概要 + 时延多档位（均值/p50/p90/p95/p99/max）。
+
+    复合任务跨模块复用（原则 6 转公开）；时延统计仅成功探针（fail 的
+    ttft/latency 是错误路径耗时，混入会污染分布）。
+    """
     n = len(probes)
     passed = sum(p["ok"] for p in probes)
-    return {"total": n, "pass": passed, "fail": n - passed,
-            "pass_rate": round(passed / n, 4) if n else None}
+    out: dict = {"total": n, "pass": passed, "fail": n - passed,
+                 "pass_rate": round(passed / n, 4) if n else None}
+    for key in ("ttft_ms", "latency_ms"):
+        vals = sorted(p[key] for p in probes
+                      if p["ok"] and p.get(key) is not None)
+        if not vals:
+            continue
+        prefix = key[: -len("_ms")]   # ttft / latency
+        out[f"{prefix}_avg_ms"] = round(sum(vals) / len(vals), 1)
+        for tier, q in (("p50", 0.50), ("p90", 0.90),
+                        ("p95", 0.95), ("p99", 0.99)):
+            out[f"{prefix}_{tier}_ms"] = round(_pct(vals, q), 1)
+        out[f"{prefix}_max_ms"] = round(vals[-1], 1)
+    return out
 
 
 async def observe_under_chaos(specs_raw, cfg: ProbeConfig,

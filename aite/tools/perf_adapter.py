@@ -96,11 +96,15 @@ _SUMMARY_METRICS = {
     "avg_input_tokens": "Avg Input Tokens",
     "avg_output_tokens": "Avg Output Tokens",
 }
-_PERCENTILE_METRICS = {   # benchmark_percentile.json（取 95% 行，秒→毫秒）
-    "ttft_p95_ms": ("TTFT (ms)", 1.0),
-    "latency_p95_ms": ("Latency (s)", 1000.0),
-    "tpot_p95_ms": ("TPOT (ms)", 1.0),
-    "itl_p95_ms": ("ITL (ms)", 1.0),
+# benchmark_percentile.json 分位行 → 入库多档位指标（秒→毫秒仅 Latency）；
+# 行缺失（上游版本无该分位）→ None 跳过（宁缺毋错）
+_PERCENTILE_METRICS = {
+    f"{base}_{tier}_ms": (row, column, scale)
+    for base, (column, scale) in {
+        "ttft": ("TTFT (ms)", 1.0), "latency": ("Latency (s)", 1000.0),
+        "tpot": ("TPOT (ms)", 1.0), "itl": ("ITL (ms)", 1.0)}.items()
+    for tier, row in {"p50": "50%", "p90": "90%", "p95": "95%",
+                      "p99": "99%"}.items()
 }
 
 
@@ -138,6 +142,44 @@ def _quantile(sorted_vals: list[float], q: float) -> float | None:
     hi = min(lo + 1, len(sorted_vals) - 1)
     frac = pos - lo
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def _db_level_max(db_path: Path) -> dict[str, float] | None:
+    """单档 benchmark_data.db 逐请求记录 → 各时延指标最大值（毫秒）。
+
+    分位文件无 max 档，最大值只能从逐请求记录取（成功请求；秒→毫秒）。
+    db 缺失/列缺失（上游版本差异）→ None（宁缺毋错）。
+    """
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT latency, first_chunk_latency, time_per_output_token,"
+            " inter_token_latencies FROM result WHERE success").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    maxes = {"latency": 0.0, "ttft": 0.0, "tpot": 0.0, "itl": 0.0}
+    for latency, ttft, tpot, itl_json in rows:
+        if latency is not None:
+            maxes["latency"] = max(maxes["latency"], float(latency) * 1000.0)
+        if ttft is not None:
+            maxes["ttft"] = max(maxes["ttft"], float(ttft) * 1000.0)
+        if tpot is not None:
+            maxes["tpot"] = max(maxes["tpot"], float(tpot) * 1000.0)
+        if itl_json:
+            try:
+                for iv in json.loads(itl_json):
+                    maxes["itl"] = max(maxes["itl"], float(iv) * 1000.0)
+            except ValueError:
+                pass
+    return maxes
 
 
 def _aggregate_level_db(db_path: Path, bucket: float) -> tuple[list[dict], float] | None:
@@ -345,21 +387,23 @@ def _group_summaries(output_dir: Path) -> dict[int, list[tuple[dict, dict, Path]
         except ValueError:
             logger.warning("跳过损坏/截断的压测产出 %s", summary_path)
             continue
-        p95: dict = {}
+        pct_rows: dict[str, dict] = {}
         pct_path = summary_path.parent / "benchmark_percentile.json"
         if pct_path.is_file():
             try:
                 rows = json.loads(pct_path.read_text(encoding="utf-8"))
             except ValueError:
                 rows = []
-            p95 = next((r for r in rows if r.get("Percentiles") == "95%"), {})
+            pct_rows = {r.get("Percentiles"): r for r in rows
+                        if r.get("Percentiles") in
+                        {row for _n, (row, _c, _s) in _PERCENTILE_METRICS.items()}}
         concurrency = int(data.get("Concurrency") or 0)
         # 开环 QPS 档（Concurrency=-1/INF）按 rate 值区分档位
         if concurrency < 0:
             label = f"perf:q{float(data.get('Request Rate (req/s)') or 0):g}"
         else:
             label = f"perf:c{concurrency}"
-        grouped.setdefault(label, []).append((data, p95, summary_path, concurrency))
+        grouped.setdefault(label, []).append((data, pct_rows, summary_path, concurrency))
     return grouped
 
 
@@ -374,12 +418,17 @@ def _resolve_bucket(cfg: dict) -> float:
     return DEFAULT_BUCKET_SECONDS
 
 
-def _level_metrics(items: list[tuple[dict, dict, Path]]) -> tuple[dict, int]:
-    """同并发多 run 均值聚合 → (指标名→值, 总请求数)。"""
+def _level_metrics(items: list[tuple[dict, dict, Path, int]]) -> tuple[dict, int]:
+    """同并发多 run 聚合 → (指标名→值, 总请求数)。
+
+    均值/分位档跨 run 取均值；max 档从逐请求 db 取并跨 run 取最大（均值会
+    低估尾部）。db 无缓存明细列 → cache_hit_rate 不产出（locust/自研引擎可测）。
+    """
     def mean(display_key: str, source: str = "summary") -> float | None:
         vals = []
-        for data, p95, _path, _users in items:
-            v = data.get(display_key) if source == "summary" else p95.get(display_key)
+        for data, pct_rows, _path, _users in items:
+            v = (data.get(display_key) if source == "summary"
+                 else pct_rows.get(source, {}).get(display_key))
             if v is not None:
                 vals.append(float(v))
         return sum(vals) / len(vals) if vals else None
@@ -389,18 +438,29 @@ def _level_metrics(items: list[tuple[dict, dict, Path]]) -> tuple[dict, int]:
     }
     avg_latency = mean("Avg Latency (s)")
     metrics["latency_avg_ms"] = avg_latency * 1000 if avg_latency is not None else None
-    for name, (key, scale) in _PERCENTILE_METRICS.items():
-        v = mean(key, source="p95")
+    for name, (row, key, scale) in _PERCENTILE_METRICS.items():
+        v = mean(key, source=row)
         metrics[name] = v * scale if v is not None else None
+    # 最大值：分位文件无 max 档，逐请求 db 取（多 run 取最大；无 db 跳过）
+    for _data, _pct, summary_path, _users in items:
+        db_max = _db_level_max(summary_path.parent / "benchmark_data.db")
+        if not db_max:
+            continue
+        for base, value in db_max.items():
+            key = f"{base}_max_ms"
+            metrics[key] = (value if metrics.get(key) is None
+                            else max(metrics[key], value))
     total = sum(int(d.get("Total Requests") or 0)
                 for d, _p, _path, _users in items)
     failed = sum(int(d.get("Failed Requests") or 0)
                  for d, _p, _path, _users in items)
     if total:
         metrics["error_rate"] = failed / total
-    # ITL/TPOT 失真门槛：高并发读缓冲批量到达时 ≈0（宁缺毋错）
-    for name in ("itl_ms", "tpot_ms"):
-        if metrics.get(name) is not None and metrics[name] < _TOKEN_TIMING_FLOOR_MS:
+    # ITL/TPOT 失真门槛（含全部档位与 max）：高并发读缓冲批量到达时 ≈0
+    # （宁缺毋错）
+    for name in list(metrics):
+        if (name.startswith(("tpot", "itl")) and metrics.get(name) is not None
+                and metrics[name] < _TOKEN_TIMING_FLOOR_MS):
             metrics[name] = None
     return metrics, total
 
@@ -589,8 +649,15 @@ class PerfAdapter(ToolAdapter):
         return [{
             "name": "chat",
             "pretty_name": "Chat 压测（OpenAI 兼容端点）",
-            "metrics": ["ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
-                        "tpot_ms", "itl_ms", "qps", "output_tps",
+            "metrics": ["ttft_ms", "ttft_p50_ms", "ttft_p90_ms", "ttft_p95_ms",
+                        "ttft_p99_ms", "ttft_max_ms",
+                        "latency_avg_ms", "latency_p50_ms", "latency_p90_ms",
+                        "latency_p95_ms", "latency_p99_ms", "latency_max_ms",
+                        "tpot_ms", "tpot_p50_ms", "tpot_p90_ms", "tpot_p95_ms",
+                        "tpot_p99_ms", "tpot_max_ms",
+                        "itl_ms", "itl_p50_ms", "itl_p90_ms", "itl_p95_ms",
+                        "itl_p99_ms", "itl_max_ms",
+                        "qps", "output_tps",
                         "avg_input_tokens", "avg_output_tokens", "error_rate"],
             "tags": ["perf"],
             "few_shot_num": None,

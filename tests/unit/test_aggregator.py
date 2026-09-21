@@ -58,9 +58,28 @@ def test_percentile_aggregation():
     assert overall.passed is True
 
 
+def test_percentile_p90_and_none_values_skipped():
+    """p90 档可用；value None（不可测记录）跳过聚合而非按 0 计。"""
+    n[0] = 0
+    records = [rec(float(v)) for v in range(1, 101)]
+    records.append(CaseMetricRecord(case_id="cx", metric="exact_match", value=None))
+    infos = {"exact_match": (P90Metric(), None, 91.0)}
+    summaries = aggregate(records, infos)
+    overall = [s for s in summaries if s.dataset is None][0]
+    assert overall.aggregation == "p90"
+    assert overall.value == pytest.approx(90.1)   # p90 of 1..100
+    assert overall.count == 100                    # None 记录不入桶
+
+
 class P95Metric:
     name = "exact_match"
     aggregation = "p95"
+    higher_is_better = True
+
+
+class P90Metric:
+    name = "exact_match"
+    aggregation = "p90"
     higher_is_better = True
 
 

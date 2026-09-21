@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from aite.connectors.base import Stopwatch, parse_usage
 from aite.connectors.custom_http import CustomHttpConnector, extract_path
 from aite.connectors.openai_compatible import OpenAICompatibleConnector
 from aite.core.loader import TargetConfig
@@ -54,6 +55,24 @@ class TestOpenAICompatible:
         assert resp.timings.ttft_ms is not None
         assert resp.usage.completion_tokens == 2
         assert resp.timings.tokens_per_sec is not None
+        # 逐内容块 mark_token：2 块 → 1 个 ITL 样本（控制事件不入样）
+        assert len(resp.timings.itl_samples_ms) == 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_usage_cached_tokens(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            lines = [
+                b'data: {"choices":[{"delta":{"content":"hi"}}]}',
+                b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101,"prompt_tokens_details":{"cached_tokens":40}}}',
+                b"data: [DONE]",
+            ]
+            return httpx.Response(200, content=b"\n".join(lines) + b"\n",
+                                  headers={"content-type": "text/event-stream"})
+
+        conn, _ = make_connector(handler, stream=True)
+        resp = await conn.invoke(TestCase(id="c", input="hi"), InvokeOptions())
+        await conn.close()
+        assert resp.usage.cached_tokens == 40
 
     @pytest.mark.asyncio
     async def test_retry_on_500_then_success(self):
@@ -136,3 +155,34 @@ class TestCustomHttp:
         assert extract_path({"a": {"b": [1, 2]}}, "a.b.1") == 2
         assert extract_path({"a": 1}, "x") is None
         assert extract_path({"a": 1}, None) == {"a": 1}
+
+
+@pytest.mark.parametrize("usage,expected", [
+    # OpenAI / vLLM / SGLang
+    ({"prompt_tokens": 100, "completion_tokens": 5,
+      "prompt_tokens_details": {"cached_tokens": 60}}, 60),
+    # Anthropic
+    ({"input_tokens": 100, "output_tokens": 5,
+      "cache_read_input_tokens": 70}, 70),
+    # DeepSeek
+    ({"prompt_tokens": 100, "completion_tokens": 5,
+      "prompt_cache_hit_tokens": 80}, 80),
+    # 未回传 → None（区别于 0 = 明确全 miss）
+    ({"prompt_tokens": 100, "completion_tokens": 5}, None),
+])
+def test_parse_usage_cached_tokens(usage, expected):
+    parsed = parse_usage({"usage": usage})
+    assert parsed.cached_tokens == expected
+
+
+def test_stopwatch_mark_token_itl():
+    watch = Stopwatch()
+    watch.mark_token()                     # 首块 = TTFT，不入 ITL 样本
+    watch.mark_token()
+    watch.mark_token()
+    timings = watch.finish(completion_tokens=3)
+    assert timings.ttft_ms is not None
+    assert len(timings.itl_samples_ms) == 2   # 后续块各累计一个间隔
+    assert all(v >= 0 for v in timings.itl_samples_ms)
+    empty = Stopwatch().finish()               # 无打点 → 空样本不报错
+    assert empty.itl_samples_ms == []

@@ -22,12 +22,16 @@ from aite.tools.base import ToolMetricRow
 DEFAULT_TIMEOUT = 3600                 # 整场压测总超时（秒），extra.timeout 可覆盖
 DURATION_DRIVEN_NUMBER_CAP = 1_000_000  # 时长驱动安全上限（先到为准，防默认条数提前结束）
 MODES = ("baseline", "ramp", "probe", "soak")
+# 时延族指标（ttft/latency/tpot/itl）：均值档 + p50/p90/p95/p99/max 五档位。
+# 两压测适配器同名产出（locust 逐请求样本现算，evalscope 读分位文件/逐请求 db）。
+LATENCY_TIERS = ("p50", "p90", "p95", "p99", "max")
 # 阈值方向单一来源：越低越好（<=）；qps/output_tps/avg_* 越高越好（>=）。
 # 两压测适配器共用——此前双份定义曾漂移（perf 缺 *_p95_ms 致方向误判）。
-LOWER_IS_BETTER = frozenset({
-    "ttft_ms", "ttft_p95_ms", "latency_avg_ms", "latency_p95_ms",
-    "itl_ms", "itl_p95_ms", "tpot_ms", "tpot_p95_ms", "error_rate",
-})
+LOWER_IS_BETTER = frozenset(
+    {"ttft_ms", "latency_avg_ms", "itl_ms", "tpot_ms"}        # 均值档
+    | {f"{base}_{tier}_ms" for base in ("ttft", "latency", "tpot", "itl")
+       for tier in LATENCY_TIERS}
+    | {"error_rate"})
 # 平台数据集输入键约定（与 aite/datasets/local 一致，自包含避免深 import）
 INPUT_KEYS = ("input", "question", "instruction", "prompt", "query", "user")
 

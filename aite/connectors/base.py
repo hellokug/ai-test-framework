@@ -39,15 +39,32 @@ async def retry_async(fn, *, max_retries: int = 2, base_delay: float = 1.0):
 
 
 class Stopwatch:
-    """Elapsed-time helper producing Timings (ttft recorded on first mark)."""
+    """Elapsed-time helper producing Timings (ttft recorded on first mark).
+
+    ``mark_token`` 在每个内容块上调用：首块记 TTFT，后续块累计逐 token 到达
+    间隔（ITL 样本，间隔只在内容块间度量——usage/[DONE] 等控制事件不打点）。
+    """
 
     def __init__(self) -> None:
         self._start = time.perf_counter()
         self._ttft: float | None = None
+        self._last_ms: float | None = None
+        self._itl_samples: list[float] = []
 
     def mark_first_token(self) -> None:
         if self._ttft is None:
-            self._ttft = (time.perf_counter() - self._start) * 1000
+            now = (time.perf_counter() - self._start) * 1000
+            self._ttft = now
+            self._last_ms = now
+
+    def mark_token(self) -> None:
+        """逐内容块打点：首块 = TTFT，其余累计与上一块的间隔（ITL 样本）。"""
+        now = (time.perf_counter() - self._start) * 1000
+        if self._ttft is None:
+            self._ttft = now
+        elif self._last_ms is not None:
+            self._itl_samples.append(now - self._last_ms)
+        self._last_ms = now
 
     def finish(self, *, completion_tokens: int | None = None) -> Timings:
         total_ms = (time.perf_counter() - self._start) * 1000
@@ -58,7 +75,9 @@ class Stopwatch:
         elif completion_tokens and total_ms > 0:
             tps = completion_tokens / (total_ms / 1000)
         return Timings(ttft_ms=round(self._ttft, 3) if self._ttft is not None else None,
-                       total_ms=round(total_ms, 3), tokens_per_sec=round(tps, 3) if tps else None)
+                       total_ms=round(total_ms, 3),
+                       tokens_per_sec=round(tps, 3) if tps else None,
+                       itl_samples_ms=[round(v, 3) for v in self._itl_samples])
 
 
 def case_to_messages(case: TestCase, options: InvokeOptions | None = None) -> list[dict[str, str]]:
@@ -81,6 +100,23 @@ def case_to_messages(case: TestCase, options: InvokeOptions | None = None) -> li
     return [{"role": "user", "content": str(data)}]
 
 
+def _cached_tokens(usage: dict[str, Any]) -> int | None:
+    """各家 usage 回传的缓存命中 token 口径（None = 未回传）。
+
+    OpenAI / vLLM / SGLang：usage.prompt_tokens_details.cached_tokens；
+    Anthropic：usage.cache_read_input_tokens；DeepSeek：usage.prompt_cache_hit_tokens。
+    """
+    details = usage.get("prompt_tokens_details")
+    for value in (
+        details.get("cached_tokens") if isinstance(details, dict) else None,
+        usage.get("cache_read_input_tokens"),
+        usage.get("prompt_cache_hit_tokens"),
+    ):
+        if value is not None:
+            return int(value)
+    return None
+
+
 def parse_usage(payload: dict[str, Any] | None) -> TokenUsage | None:
     if not payload:
         return None
@@ -90,7 +126,8 @@ def parse_usage(payload: dict[str, Any] | None) -> TokenUsage | None:
     pt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
     ct = usage.get("completion_tokens") or usage.get("output_tokens") or 0
     tt = usage.get("total_tokens") or (pt + ct)
-    return TokenUsage(prompt_tokens=int(pt), completion_tokens=int(ct), total_tokens=int(tt))
+    return TokenUsage(prompt_tokens=int(pt), completion_tokens=int(ct),
+                      total_tokens=int(tt), cached_tokens=_cached_tokens(usage))
 
 
 def truncate_error(exc: Exception) -> str:

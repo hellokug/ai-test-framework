@@ -132,7 +132,7 @@ class OpenAICompatibleConnector(TargetSystem):
                 delta = event["choices"][0].get("delta") or {}
                 piece = delta.get("content")
                 if piece:
-                    watch.mark_first_token()
+                    watch.mark_token()   # 首块记 TTFT，后续块累计 ITL 样本
                     chunks.append(piece)
                 if event["choices"][0].get("finish_reason"):
                     finish_reason = event["choices"][0]["finish_reason"]
