@@ -241,3 +241,9 @@ skill-audit/
 
 # 压测大屏预览产物（scripts/preview_perf_dashboard.py 生成，不入库）
 perf_dashboard_*.html
+
+# 大屏预览产物（scripts/preview_perf_dashboard.py 生成）
+perf_dashboard_*.html
+demo_preview.html
+real_preview.html
+_schema_check_locust_raw/

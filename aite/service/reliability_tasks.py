@@ -36,9 +36,9 @@ from aite.chaos.observer import (
 from aite.chaos.selectors import parse_process_spec, resolve_processes
 from aite.core.taskkit import DomainTaskKit, EventSink, TaskExecutor, TaskRunContext
 from aite.datasets.catalog import resolve_dataset_ref
+from aite.events import EventBus
 from aite.service.suite_task import suite_summary
 from aite.storage.models import ReliabilityTaskRow
-from aite.web.events import EventBus
 
 _MAX_OBSERVE_DURATION = 600.0      # 纯观测时长上限（秒），与同步 REST 端点同口径
 _MAX_BACKGROUND_DURATION = 3600.0  # 复合任务背景流量时长上限（秒）
