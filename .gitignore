@@ -222,6 +222,9 @@ data/
 # Ruff stuff:
 .ruff_cache/
 
+# import-linter 依赖图缓存（lint-imports 运行时生成）
+.import_linter_cache/
+
 # PyPI configuration file
 .pypirc
 

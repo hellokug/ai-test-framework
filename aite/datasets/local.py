@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from aite.core.interfaces import Dataset
 from aite.core.registry import register_dataset
 from aite.core.types import TestCase
 
@@ -30,7 +31,7 @@ _CONTEXT_KEYS = ("retrieval_context", "contexts", "context", "documents")
 
 
 @register_dataset("local")
-class LocalFileDataset:
+class LocalFileDataset(Dataset):
     name: ClassVar[str] = "local"
 
     def load(self, config: DatasetConfig) -> AsyncIterator[TestCase]:

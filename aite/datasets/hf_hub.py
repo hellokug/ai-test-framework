@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from aite.core.interfaces import Dataset
 from aite.core.registry import register_dataset
 from aite.core.types import TestCase
 from aite.datasets.local import _apply_sampling, _as_context
@@ -25,7 +26,7 @@ _CONTEXT_KEYS = ("retrieval_context", "contexts", "context", "documents", "suppo
 
 
 @register_dataset("hf_hub")
-class HFHubDataset:
+class HFHubDataset(Dataset):
     name: ClassVar[str] = "hf_hub"
 
     def load(self, config: DatasetConfig) -> AsyncIterator[TestCase]:

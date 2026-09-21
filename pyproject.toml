@@ -72,6 +72,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    "import-linter>=2.0",
 ]
 
 [project.scripts]
@@ -108,3 +109,58 @@ ignore = ["E501", "B008", "SIM117"]
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+
+# 架构分层合同（CLAUDE.md 原则的机器化门禁，提交前 lint-imports 必须零违例）。
+# ignore_imports = 架构债台账：每条豁免须注明理由与撤销条件，撤销豁免即重构里程碑。
+[tool.importlinter]
+root_package = "aite"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "四层架构: 接口层 -> service -> 域工具 -> storage/gateway -> 插件层 -> core -> 基础层"
+type = "layers"
+layers = [
+    "aite.cli",
+    "aite.web",
+    "aite.service",
+    "aite.tools | aite.chaos",
+    "aite.functional",
+    "aite.storage",
+    "aite.gateway",
+    "aite.datasets | aite.connectors | aite.metrics | aite.reporting",
+    "aite.core",
+    "aite.events | aite.utils",
+]
+ignore_imports = [
+    # 组合根: engine 装配 repo/gateway、注册 builtin 组件（注册外移入口层后逐条撤销）
+    "aite.core.engine -> aite.storage.repositories",
+    "aite.core.engine -> aite.storage.db",
+    "aite.core.engine -> aite.connectors",
+    "aite.core.engine -> aite.datasets",
+    "aite.core.engine -> aite.datasets.catalog",
+    "aite.core.engine -> aite.metrics",
+    "aite.core.engine -> aite.reporting",
+    "aite.core.engine -> aite.reporting.renderers",
+    "aite.core.engine -> aite.gateway.llm_gateway",
+    "aite.core.context -> aite.gateway.llm_gateway",
+    # loader 为 metrics:auto 懒加载内置数据集（随注册外移撤销）
+    "aite.core.loader -> aite.datasets.builtin",
+    # TokenUsage 沉降中性层后撤销
+    "aite.utils.cost -> aite.core.types",
+]
+
+[[tool.importlinter.contracts]]
+name = "插件域不直接 import 彼此 (跨域只走 interfaces/registry)"
+type = "forbidden"
+source_modules = ["aite.connectors", "aite.datasets", "aite.metrics", "aite.reporting"]
+forbidden_modules = ["aite.connectors", "aite.datasets", "aite.metrics", "aite.reporting"]
+ignore_imports = [
+    # 经 core 的注册/懒加载间接链（同上，注册外移后撤销；届时可升级为 independence 合同）
+    "aite.core.engine -> aite.connectors",
+    "aite.core.engine -> aite.datasets",
+    "aite.core.engine -> aite.datasets.catalog",
+    "aite.core.engine -> aite.metrics",
+    "aite.core.engine -> aite.reporting",
+    "aite.core.engine -> aite.reporting.renderers",
+    "aite.core.loader -> aite.datasets.builtin",
+]

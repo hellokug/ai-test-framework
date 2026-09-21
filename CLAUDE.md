@@ -21,6 +21,10 @@
 
 ### 架构设计原则（写代码与代码评审的基线，2026-09-09 架构评审确立；2026-09-19 增补 13/14 与原则 1/8 扩写）
 
+分层依赖与插件独立性由 import-linter 合同机器化（合同与豁免台账见 `pyproject.toml` 的
+`[tool.importlinter]`）：`lint-imports` 零违例是提交门槛；每条豁免（ignore_imports）
+必须注明理由与撤销条件，撤销豁免即架构重构里程碑。
+
 1. **单一职责**：一个函数/类只做一件事，函数控制在 80 行以内，超限必须拆分。
    API 路由只做「参数校验 → 调 service/repo → 返回」，不写业务逻辑、不写数据
    聚合转换、不直接读磁盘文件；编排逻辑放 service 层，与 CLI 共享。同步桥接
@@ -79,7 +83,7 @@
 ### 测试策略（分域选测，不默认全量）
 
 全量 `pytest tests/` 耗时约 1 分钟，**日常迭代按改动域选跑**（域命令速查见
-`docs/handover.md` §3），只有跨域重构/发布前才跑全量；`ruff check aite tests`
+`docs/handover.md` §3），只有跨域重构/发布前才跑全量；`ruff check aite tests` 与 `lint-imports`（架构分层合同）
 每次提交前必跑。
 
 ### Git 管理
@@ -96,11 +100,12 @@
 ## 计划与进度
 
 - 计划文件：`docs/roadmap.md`。完成或变更一项后，立即更新对应条目和文末进度记录。
-- 完成标准：相关测试通过 + `ruff check aite tests` 零报错。
+- 完成标准：相关测试通过 + `ruff check aite tests` 零报错 + `lint-imports` 零违例。
 
 ## 开发验证
 
 ```bash
 pytest tests/
 ruff check aite tests
+lint-imports        # 架构分层合同（pyproject [tool.importlinter]）
 ```

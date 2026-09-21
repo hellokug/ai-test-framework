@@ -653,6 +653,7 @@ aite bench import r.json --format lm-eval                   # 层2 结果导入
 pip install -e ".[dev]"
 pytest tests/          # 145 用例（引擎调度/规则指标/judge/安全/RAG/Web e2e 全 mock，无网络）
 ruff check aite tests
+lint-imports           # 架构分层合同（pyproject [tool.importlinter]，分层/插件独立性机器化）
 ```
 
 文档：[架构](docs/architecture.md) · [数据集指南](docs/dataset-guide.md) ·

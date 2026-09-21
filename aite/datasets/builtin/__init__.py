@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from importlib import resources
 from typing import TYPE_CHECKING, ClassVar
 
+from aite.core.interfaces import Dataset
 from aite.core.registry import register_dataset
 from aite.core.types import TestCase
 from aite.datasets.local import _apply_sampling
@@ -43,6 +44,64 @@ BUILTIN_INFO: dict[str, dict] = {
         "recommend": [
             {"name": "token_f1", "threshold": 0.3},
             {"name": "context_recall", "threshold": 0.4},
+        ],
+    },
+    # ------------------------------------------------- RAGAS / RAG 评测数据集（§精度域）
+    "rgb": {
+        "file": "rgb_sample.jsonl",
+        "upstream": "github:Chenmnicks/RGB (中英 RAG 鲁棒性基准)",
+        "task": "RAG robustness: noise / rejection / integration / counterfactual (ZH)",
+        "recommend": [
+            {"name": "faithfulness", "threshold": 0.5},
+            {"name": "context_precision", "threshold": 0.4},
+        ],
+    },
+    "crudrag": {
+        "file": "crudrag_sample.jsonl",
+        "upstream": "github:IAAR-Shanghai/CRUD-RAG (中文 RAG 基准)",
+        "task": "Chinese RAG QA (Create/Read/Update/Delete tasks; sample = read)",
+        "recommend": [
+            {"name": "token_f1", "threshold": 0.15},
+            {"name": "context_recall", "threshold": 0.4},
+            {"name": "faithfulness", "threshold": 0.4},
+        ],
+    },
+    "multihoprag": {
+        "file": "multihoprag_sample.jsonl",
+        "upstream": "hf:yixuantt/MultiHopRAG",
+        "task": "multi-hop QA across news documents (comparison/inference/temporal/null)",
+        "recommend": [
+            {"name": "token_f1", "threshold": 0.2},
+            {"name": "context_recall", "threshold": 0.4},
+        ],
+    },
+    "financebench": {
+        "file": "financebench_sample.jsonl",
+        "upstream": "hf:PatronusAI/financebench",
+        "task": "open-book financial QA over company filings (RAG, EN)",
+        "recommend": [
+            {"name": "contains", "threshold": 0.4},
+            {"name": "answer_correctness", "threshold": 0.4},
+        ],
+    },
+    # ------------------------------------------------------- Agent 评测数据集
+    "gaia": {
+        "file": "gaia_sample.jsonl",
+        "upstream": "hf:gaia-benchmark/GAIA (需在 HF 同意使用条款后下载)",
+        "task": "general assistant tasks with exact short answers (agent QA)",
+        "recommend": [
+            {"name": "exact_match", "threshold": 0.2},
+            {"name": "contains", "threshold": 0.5},
+        ],
+    },
+    "xlam_fc": {
+        "file": "xlam_fc_sample.jsonl",
+        "upstream": "hf:Salesforce/xlam-function-calling-60k",
+        "task": "function calling: tool selection + argument extraction (agent)",
+        "recommend": [
+            {"name": "tool_call_correctness", "threshold": 0.8,
+             "params": {"mode": "unordered"}},
+            {"name": "tool_arg_correctness", "threshold": 0.6},
         ],
     },
     "jailbreak": {
@@ -93,7 +152,7 @@ def recommendations(builtin_ids: list[str]) -> list[dict]:
 
 
 @register_dataset("builtin")
-class BuiltinDataset:
+class BuiltinDataset(Dataset):
     name: ClassVar[str] = "builtin"
 
     def load(self, config: DatasetConfig) -> AsyncIterator[TestCase]:
