@@ -11,7 +11,8 @@ from aite.core.types import MetricResult
 from aite.utils.text import cosine_similarity
 
 
-def _reference_text(case) -> str:
+def reference_text(case) -> str:
+    """参考答案文本：expected 为 list 取首项，dict 取 answer/gold/output/text。"""
     exp = case.expected
     if exp is None:
         return ""
@@ -32,7 +33,7 @@ class EmbeddingSimilarity(Metric):
     name: ClassVar[str] = "embedding_similarity"
 
     async def compute(self, *, case, response, responses=None, ctx) -> MetricResult:
-        ref = _reference_text(case)
+        ref = reference_text(case)
         if not ref or not response.ok:
             return MetricResult(metric=self.name, value=0.0, raw={"reference": ref[:200]})
         vectors = await ctx.embed([response.output_text, ref])

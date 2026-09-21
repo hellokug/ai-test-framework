@@ -2,7 +2,7 @@ run_name: agent-eval-demo
 description: >
   Agent 评测（HTTP 约定）：被测 agent 服务在响应 JSON 中返回
   {output, trace: {steps: [{type: tool|llm, name, input, output}]}}，
-  aite 据此计算 tool_call_correctness / agent_efficiency / task_completion。
+  aite 据此计算工具选择/参数/效率/轨迹/任务完成指标。
   LangChain 用户改用 type: langchain_agent（需要 aite[agent]）。
 
 target:
@@ -18,11 +18,21 @@ target:
 datasets:
   - type: local
     path: ./examples/data/agent_tasks.jsonl
+  # 内置 agent 数据集（`aite dataset list` 查看）：
+  #   gaia    — 通用助理任务、精确短答案（hf:gaia-benchmark/GAIA 抽样版）
+  #   xlam_fc — 函数调用：工具选择 + 参数抽取（hf:Salesforce/xlam-function-calling-60k 抽样版）
+  # - type: builtin
+  #   id: xlam_fc
+  #   sample: {n: 6, seed: 1}
+  # 私域 agent 任务集可用 `aite dataset gen-domain` 的 RAG 集 + 自定义 expected 生成。
 
 metrics:
   - tool_call_correctness: {threshold: 0.8, mode: ordered}
+  - tool_arg_correctness: {threshold: 0.6}   # 期望工具参数要点 vs 实际调用参数
   - task_completion: {threshold: 0.7}
   - agent_efficiency: {threshold: 0.5, expected_steps: 4}
+  # 轨迹整体质量（LLM judge，1-10 归一化）：需要 gateway
+  # - trajectory_quality: {threshold: 0.6}
 
 report: [rich, json, html]
 output_dir: ./reports

@@ -331,6 +331,46 @@ Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源�
       同组共享长前缀模拟 RAG KV cache 命中；产物 stats.json 摘要落盘；
       REST POST/GET /perf/datasets + validate 干跑校验供前端对接）
 
+### 模块 K：RAGAS / Agent 评测框架（2026-09-21 完成）
+
+**定位（用户对齐）**：与精度域同一评测管线（engine / reports / 趋势 / 存储全复用），
+差异只在指标体系与数据集——RAG 评测走 RAGAS 指标族，Agent 评测走工具调用/轨迹
+指标族。平台化定位不变：这是自研引擎保留的「RAG / judge 维度」的体系化补全。
+
+- [x] K1 RAGAS 指标口径对齐：context_precision 升级 RAGAS 秩加权公式
+      （Σ precision@k·rel_k / |relevant|；LLM 逐条相关性判定 / token_f1 规则回退）、
+      context_recall 升级断言归因（LLM / token 覆盖回退）；新增 answer_correctness
+      （metrics/ragas_metrics.py，事实重合 F1 ⊕ 语义相似加权，RAGAS 缺省 0.75/0.25）。
+      faithfulness / answer_relevancy 沿用既有实现。五件套均「无 gateway 走确定性
+      规则口径、有 gateway 自动升级 LLM 判定」。
+- [x] K2 Agent 指标补齐：新增 tool_arg_correctness（期望工具参数要点 vs 实际调用
+      参数子串匹配）；tool_call_correctness / agent_efficiency / task_completion /
+      trajectory_quality 沿用。
+- [x] K3 开源数据集对接（builtin 抽样版 + 上游指针 + 推荐指标，`metrics: auto`
+      可用）：RAG——rgb（github:Chenmnicks/RGB，噪声/拒答/整合/反事实子集）、
+      crudrag（github:IAAR-Shanghai/CRUD-RAG）、multihoprag（hf:yixuantt/MultiHopRAG）、
+      financebench（hf:PatronusAI/financebench）；Agent——gaia（hf:gaia-benchmark/GAIA）、
+      xlam_fc（hf:Salesforce/xlam-function-calling-60k）。全量版走 add-hf / hf_hub。
+- [x] K4 私域数据集生成器（datasets/gen_domain.py + domain_corpora.py + CLI
+      `aite dataset gen-domain`）：金融/政务/法律三域种子语料（公开通用事实性内容）
+      → 确定性生成标准 RAG 形状 JSONL（gold 文档 + 同域干扰文档乱序），落
+      ./data/datasets + 注册 userstore（带 RAGAS 推荐指标）+ catalog accuracy 条目
+      （version=seed 可复现凭证）；与包内置重名显式报错。已实机生成
+      finance_private / gov_private / legal_private（各 12 条，seed=42）。
+- [x] K5 示例与文档：examples/ragas.yaml（RAGAS 五件套套件）、agent_eval.yaml 补
+      tool_arg_correctness 与内置 agent 数据集；dataset-guide 增数据集地图与
+      gen-domain 用法。
+
+**真实联调揭出并修复（build_gateway 两处既有缺陷）**：①LLM 需求判定残留硬编码
+指标名单（与 Metric.needs_llm 契约双轨、漏新指标，原则 8 违例）→ 改注册表驱动；
+②只注册 judge 模型——未配 judge 时 gateway 零模型，faithfulness 等 LLM 指标全数
+error（此前从未被真实 run 暴露，单测 MockGateway 无注册语义）→ 无 judge 时注册
+target 为缺省自评模型（指标 params.model 可覆盖）。连带加固 judge 数值解析
+（_as_int/_as_float：null/字符串计数回退最差分而非 TypeError）。实弹验证：qwen2.5:3b
+× legal_private 4 例 RAGAS 五件套全链路（context_precision/context_recall 确认
+mode=llm）。教训：集成缝隙的运行时行为离线 mock 测不到，真实联调必须先行（与
+locust 首跑同一教训）。
+
 ## 基线（已完成）
 
 - [x] pytest 全量 145 用例通过；ruff 零报错（2026-08-28）
@@ -460,3 +500,7 @@ Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源�
 
 - 2026-09-21 性能指标多档位 + 缓存命中率（用户需求：p95/均值之外补 p50/p90/p99/max；token 回传算缓存命中率）：①三域统一时延族档位——自研引擎 metrics/performance.py 重写（TTFT/延迟基类 + 子类只换 aggregation：ttft/latency/tpot/itl × 均值+p50/p90/p95/p99/max；新增 tpot_ms=(端到端−TTFT)/(tokens−1)、itl_ms 走 Timings.itl_samples_ms 逐 token 样本）、locust collect 逐请求 jsonl 现算全档位（模板逐请求补记 itl_p50/p90/p99/max 同档统计量，档级=再聚合、max 精确）、evalscope-perf 读 percentile json 50%/90%/95%/99% 行 + max 从 benchmark_data.db 逐请求记录取（多 run 取最大而非均值——均值会低估尾部）；LOWER_IS_BETTER 扩到全部档位名（单一来源）。②缓存命中率——TokenUsage.cached_tokens（None=未回传区别于 0=全 miss），parse_usage 收三家口径（OpenAI/vLLM prompt_tokens_details.cached_tokens、Anthropic cache_read_input_tokens、DeepSeek prompt_cache_hit_tokens）；自研引擎 cache_hit_rate 指标 + locust 档级 Σcached/Σprompt（token 加权）；evalscope 上游不采集缓存明细不产出。③口径修正两处——MetricResult.value 放宽可空：TTFT/Latency 不可测从 value=0.0 改为 None（0.0 会把 p50 拉成 0、均值拉低——宁缺毋错不算 0，聚合自动跳过）；chaos summarize_probes 补成功探针时延多档位概要（fail 探针的错误路径耗时不混入分布）。ITL 档级语义注：latency/ttft/tpot 每请求一样本档级分位即精确值；ITL 逐请求存同档统计量再聚合为近似（与既有 locust p95 口径一致），max 恒精确。
 - 2026-09-21 架构盘点与缩减(1)（用户要求：整理功能/审视缩减/发现风险立即重构）：规模盘点——aite 16.3k 行/tests 7k 行/221 文件，repositories.py 925 行与 cli/main.py 801 行为两大 god-file（并行冲突热点），TODO/FIXME 为零，测试占比 43%。立即缩减：①根目录调试/预览产物移除（_schema_check_locust_raw CSV×2/demo_preview/real_preview/perf_dashboard_preview，零代码引用）+perf_dashboard_*.html gitignore；②EventBus 迁中立层 aite/events.py（web/events 兼容 shim）——纠正 4 个 service 域文件反向依赖 web 包的分层倒置。风险清单：R1[高]共享工作树多会话并行无隔离（git add -A 两次卷入对方 WIP，已两次拆分重做——纪律：共享树上只用显式路径提交，中期每域独立 worktree）；R2[中]repositories.py/interfaces.py 单类膨胀（每域追加 6-10 方法）；R3[中]cli/main.py 全命令集中；遗留排期：cli 按组拆模块/repositories 按域拆 mixin（各半天，需专门窗口）。510 tests + ruff clean。
+
+- 2026-09-21 模块 K：RAGAS / Agent 评测框架（用户需求：与精度同构、差异主要在数据集，搭 RAGAS 与 Agent 评测框架 + 开源数据集对接 + 金融/政务/法律私域数据集生成）：①RAGAS 口径对齐——context_precision 升级秩加权公式（LLM 相关性判定/token_f1 回退）、context_recall 升级断言归因（LLM/token 覆盖回退）、新增 answer_correctness（metrics/ragas_metrics.py，F1⊕语义相似 0.75/0.25）；②Agent 指标补齐 tool_arg_correctness（期望参数要点子串匹配）；③开源数据集 builtin 抽样版 ×6（rgb/crudrag/multihoprag/financebench/gaia/xlam_fc，上游指针 + 推荐指标 metrics:auto 可用）；④私域生成器 gen_domain.py + domain_corpora.py + `aite dataset gen-domain`（金融/政务/法律种子语料 → 确定性 RAG JSONL + userstore/catalog 注册，已实机生成 finance_private/gov_private/legal_private 各 12 条）；⑤examples/ragas.yaml + agent_eval.yaml 更新 + dataset-guide 数据集地图。**真实联调（qwen2.5:3b × legal_private）揭出 build_gateway 两处既有缺陷并修复**——LLM 需求判定残留硬编码名单（与 needs_llm 契约双轨漏新指标）改注册表驱动；未配 judge 时 gateway 零模型致 faithfulness 等全 error（mock 单测测不到）改为注册 target 为缺省自评模型；连带加固 judge 数值解析（null 计数回退最差分而非 TypeError）。测试 +17（gateway 4/生成器 9/指标 4，本域全绿 + ruff 干净；全量 513 通过 + 2 失败均位于并行股道 in-flight 的 reliability 域文件，与本模块无关）。教训：与前轮 locust 首跑同源——集成缝隙离线 mock 测不到，真实联调必须先行。
+
+- 2026-09-21 架构纪律机器化（用户确认落地 import-linter + 注册表契约测试）：①pyproject [tool.importlinter] 两合同——分层合同（cli/web → service → tools|chaos → functional → storage → gateway → 插件层 datasets|connectors|metrics|reporting → core → events|utils，12 条豁免全注理由：engine 组合根/内置注册 10 条 + loader metrics:auto 懒加载 1 条 + TokenUsage 沉降 1 条）+ 插件域禁止直接互 import（7 条豁免为经 core 的注册间接链，注册外移后撤销并升级 independence 合同）；实测暴露结构事实——core↔插件双向依赖集中于 engine.py 注册四处 + loader 懒加载 + utils.cost→TokenUsage，豁免清单即架构债台账。②dev extras 增 import-linter>=2.0，CLAUDE.md/README 验证命令补 lint-imports 提交门槛，gitignore 缓存目录。③tests/unit/test_registry_contract.py 注册表契约（cls.name 与注册名一致/Metric 类属性 aggregation·higher_is_better·needs_llm 合法/五类组件实现 ABC/注入器生命周期契约/武器目录 kinds×schemas 自洽）——首跑即抓中 3 个真实违例：local/builtin/hf_hub 三个数据集鸭子类型未挂 Dataset ABC（load 签名本一致，补继承即绿），原则 10 教训的复现实证。38 tests（本域 + datasets/loader/add_hf 回归）+ ruff clean + lint-imports 2 kept 0 broken。悬留（Phase 4 需专门窗口）：TokenUsage/CostLimitExceeded/InProcessRateLimiter 沉降中性层、内置注册外移入口层、build_repository 外移——逐条撤豁免后再动 R2/R3 god-file 拆分。

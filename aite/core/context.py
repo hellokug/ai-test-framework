@@ -12,15 +12,23 @@ if TYPE_CHECKING:
 
 
 def build_gateway(config: SuiteConfig) -> LLMGateway | None:
-    """Create the shared LLM gateway when the suite needs LLM calls
-    (judges configured, LLM-based metrics, or embedding metrics)."""
+    """Create the shared LLM gateway when the suite needs LLM calls.
+
+    需求判定走 Metric 契约的 ``needs_llm`` 类属性（注册表驱动，单一来源；
+    不得回退到硬编码指标名单——新增 LLM 指标会漏）。模型注册：judge 模型优先；
+    未配 judge 时把 target 自身注册为缺省判定模型（自评口径，指标
+    ``params.model`` 可覆盖）。
+    """
+    from aite.core.registry import resolve_metric
+
     needs_llm = bool(config.judges)
-    metric_names = {m.name for m in config.metrics}
-    if metric_names & {
-        "faithfulness", "answer_relevancy", "trajectory_quality", "task_completion",
-        "prompt_injection_resistance", "attack_success_rate", "llm_score",
-    } | {m.name for m in config.metrics if m.name.startswith("judge_")}:
-        needs_llm = True
+    for m in config.metrics:
+        try:
+            if getattr(resolve_metric(m.name), "needs_llm", False):
+                needs_llm = True
+                break
+        except KeyError:  # unknown metric: engine fail-fasts later with its own error
+            continue
     if not needs_llm:
         return None
     from aite.gateway.llm_gateway import LLMGateway  # local import keeps core dependency-light
@@ -29,8 +37,9 @@ def build_gateway(config: SuiteConfig) -> LLMGateway | None:
     judge_models: list[Any] = [j.model for j in config.judges if j.model is not None]
     judge_models += [m for j in config.judges for m in j.models]
     for model_cfg in judge_models:
-        if model_cfg is not None:
-            gateway.register_model(model_cfg)
+        gateway.register_model(model_cfg)
+    if not judge_models:
+        gateway.register_model(config.target, make_default=True)
     return gateway
 
 

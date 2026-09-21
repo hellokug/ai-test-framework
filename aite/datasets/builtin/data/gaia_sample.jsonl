@@ -1,0 +1,6 @@
+{"id": "gaia-1", "question": "How many studio albums did the British band Queen release with lead singer Freddie Mercury?", "answer": "15", "level": 1, "number_of_steps": 1, "task_type": "count"}
+{"id": "gaia-2", "question": "What is the capital city of the country where the 2016 Summer Olympics were held?", "answer": "Brasilia", "level": 1, "number_of_steps": 2, "task_type": "multi_hop"}
+{"id": "gaia-3", "question": "How many years passed between the founding of Harvard University and the first human Moon landing?", "answer": "333", "level": 2, "number_of_steps": 2, "task_type": "multi_hop"}
+{"id": "gaia-4", "question": "How many minutes are in one full week, expressed as a plain number?", "answer": "10080", "level": 1, "number_of_steps": 1, "task_type": "calculation"}
+{"id": "gaia-5", "question": "Which element has the atomic number 26, and is it the main component of Earth's core - answer with the element name only?", "answer": "Iron", "level": 1, "number_of_steps": 2, "task_type": "science"}
+{"id": "gaia-6", "question": "Name the largest planet in our solar system in one word.", "answer": "Jupiter", "level": 1, "number_of_steps": 1, "task_type": "fact_lookup"}

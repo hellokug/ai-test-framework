@@ -1,0 +1,39 @@
+run_name: ragas-eval-demo
+description: >
+  RAGAS 评测五件套：faithfulness（忠实度/幻觉）、answer_relevancy（答案相关性）、
+  context_precision（上下文精确率·RAGAS 秩加权）、context_recall（上下文召回·断言归因）、
+  answer_correctness（答案正确性）。评测管线与精度域完全同构（engine/reports/趋势），
+  差异只在指标与数据集。无 gateway 时各指标自动退化为确定性规则口径
+  （token 重叠 / F1 / hash embedding），配置了 gateway 或 judge 模型即走 LLM 判定。
+
+target:
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:7b
+  stream: false
+
+datasets:
+  - type: builtin
+    id: rgb                              # 中文 RAG 鲁棒性基准（噪声/拒答/整合/反事实子集）
+    sample: {n: 8, seed: 1}
+  # 其他 RAG 数据集：crudrag（中文 RAG）/ hotpotqa / multihoprag（英文多跳）/
+  # financebench（金融开放问答）/ 私域生成集（aite dataset gen-domain）
+  # 全量版用 hf_hub 在线加载，如：
+  # - type: hf_hub
+  #   id: PatronusAI/financebench
+  #   split: test
+  #   limit: 50
+
+metrics: auto                             # rgb 的推荐指标（RAGAS 体系）
+
+# 或显式指定 RAGAS 五件套：
+# metrics:
+#   - faithfulness: {threshold: 0.5}      # LLM 断言支撑 / 无网关 token 覆盖回退
+#   - answer_relevancy: {threshold: 0.3}
+#   - context_precision: {threshold: 0.4} # 秩加权，LLM 相关性判定 / token_f1 回退
+#   - context_recall: {threshold: 0.5}    # 断言归因 / token 覆盖回退
+#   - answer_correctness: {threshold: 0.4}
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

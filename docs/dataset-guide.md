@@ -7,7 +7,7 @@
 
 | type | 网络 | 数据来源 | 适合 |
 |---|---|---|---|
-| `builtin` | ❌ | 包内置 5 个采样集 + `./data/` 外部注册 | 冒烟、演示、离线全集 |
+| `builtin` | ❌ | 包内置采样集（通用+RAG+Agent）+ `./data/` 外部注册 | 冒烟、演示、离线全集 |
 | `local` | ❌ | 本地 JSONL/JSON/CSV 文件 | 私有业务数据 |
 | `hf_hub` | ✅ | HuggingFace 运行时下载 | 临时跑全量公开基准 |
 
@@ -17,6 +17,37 @@
 aite dataset list            # 目录 + 推荐指标
 aite dataset show ceval_full # 单个数据集详情
 ```
+
+## 数据集地图（按评测场景）
+
+### RAGAS / RAG 评测
+
+| id | 上游 | 说明 |
+|---|---|---|
+| `rgb` | github:Chenmnicks/RGB | 中文 RAG 鲁棒性（噪声/拒答/信息整合/反事实，metadata `subset` 可 group_by） |
+| `crudrag` | github:IAAR-Shanghai/CRUD-RAG | 中文 RAG 问答（读任务） |
+| `hotpotqa` | hf:hotpotqa/hotpot_qa | 英文多跳问答 + supporting facts |
+| `multihoprag` | hf:yixuantt/MultiHopRAG | 跨文档多跳（比较/推理/时序/null 查询，metadata `question_type` 可 group_by） |
+| `financebench` | hf:PatronusAI/financebench | 金融开放问答（公司财报） |
+
+配套指标：RAGAS 五件套（faithfulness / answer_relevancy / context_precision /
+context_recall / answer_correctness）+ hit_rate / citation_accuracy，
+详见 `examples/ragas.yaml`。
+
+### Agent 评测
+
+| id | 上游 | 说明 |
+|---|---|---|
+| `gaia` | hf:gaia-benchmark/GAIA | 通用助理任务、精确短答案（全量版需在 HF 同意条款） |
+| `xlam_fc` | hf:Salesforce/xlam-function-calling-60k | 函数调用：工具选择 + 参数抽取（expected 带 tools/tool_args） |
+
+配套指标：tool_call_correctness / tool_arg_correctness / agent_efficiency /
+task_completion / trajectory_quality，详见 `examples/agent_eval.yaml`。
+被测 agent 需在响应中回传 trace（HTTP 约定或 langchain_agent 连接器）。
+
+### 精度基准
+
+`mmlu` / `gsm8k` / `ceval` / `jailbreak`（安全）——采样版离线自带，全量见下文 add-hf。
 
 ## 在线评测（hf_hub）
 
@@ -77,6 +108,24 @@ records.append({
 已用此方式落地的离线全集：`ceval_full`（52 科目 1606 题，val+dev；test split
 答案不公开无法自动评测）。
 
+### 私域数据集：gen-domain 生成器
+
+基于内置领域种子语料（金融 / 政务 / 法律，公开通用事实）确定性生成 RAG 评测集，
+同 seed 逐字节可复现（catalog `version=seed<N>` 即复现凭证）：
+
+```bash
+aite dataset gen-domain finance --name finance_private -n 12 --seed 42
+aite dataset gen-domain government -n 12          # 缺省名 government_private
+aite dataset gen-domain legal -n 12 --distractors 2
+```
+
+- 产物：`./data/datasets/<name>.jsonl`，标准 RAG 形状（question / answer /
+  retrieval_context = gold 文档 + 同域干扰文档，乱序模拟真实检索）
+- 自动注册：`{type: builtin, id: <name>}` 离线可用 + catalog accuracy 条目 +
+  自带 RAGAS 推荐指标（`metrics: auto` 直接可用）
+- 扩充题量：编辑 `aite/datasets/domain_corpora.py` 追加文档与出题池
+- Python API：`aite.datasets.gen_domain.generate_domain_dataset(repo, ...)`
+
 ### 离线数据的目标格式
 
 ```jsonl
@@ -118,5 +167,6 @@ aite run -c suite.yaml
 aite dataset list                                  # 所有 builtin + 已导入离线集
 aite dataset show <id>                             # 详情
 aite dataset add-hf <hf_id> --name <id> [-n 200]   # 在线下载 → 离线注册
+aite dataset gen-domain <领域> [--name x] [-n 12]   # 生成私域 RAG 数据集（金融/政务/法律）
 aite run -c suite.yaml                             # 跑评测
 ```

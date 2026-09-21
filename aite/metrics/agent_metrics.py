@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 
 from aite.core.interfaces import Metric
@@ -54,11 +55,58 @@ class ToolCallCorrectness(Metric):
             passed=self.judge_passed(score) if self.threshold is not None else None)
 
 
+@register_metric("tool_arg_correctness")
+class ToolArgCorrectness(Metric):
+    """Expected key arguments vs actual tool-call arguments (case-insensitive substring).
+
+    Expected via ``case.expected.tool_args``: ``{"calculator": ["85", "rate"],
+    "search": ["deposit insurance"]}`` — each named tool must have been called
+    with args containing each needle. Uncalled tools count all needles as miss.
+    """
+
+    name: ClassVar[str] = "tool_arg_correctness"
+    aggregation: ClassVar[str] = "rate"
+
+    async def compute(self, *, case, response, responses=None, ctx) -> MetricResult:
+        spec = case.expected if isinstance(case.expected, dict) else {}
+        expected_args = spec.get("tool_args") or self.params.get("tool_args") or {}
+        if not expected_args:
+            return MetricResult(metric=self.name, value=0.0,
+                                error="no expected tool_args configured")
+        trace = _trace_of(response)
+        calls: dict[str, list[str]] = {}
+        for step in trace.tool_calls:
+            args = step.input if isinstance(step.input, str) else json.dumps(
+                step.input or {}, ensure_ascii=False)
+            calls.setdefault(step.name.lower(), []).append(args.lower())
+        checks = []
+        for tool, needles in expected_args.items():
+            got = calls.get(str(tool).lower(), [])
+            for needle in needles or []:
+                checks.append({"tool": str(tool), "needle": str(needle),
+                               "hit": any(str(needle).lower() in a for a in got)})
+        if not checks:
+            return MetricResult(metric=self.name, value=0.0,
+                                error="expected tool_args has no needles")
+        value = sum(1 for c in checks if c["hit"]) / len(checks)
+        return MetricResult(
+            metric=self.name, value=round(value, 6), raw={"checks": checks},
+            passed=self.judge_passed(value) if self.threshold is not None else None)
+
+
 def _overlap(expected: list[str], actual: list[str]) -> float:
     if not expected:
         return 0.0
     hits = sum(1 for t in expected if t in actual)
     return hits / len(expected)
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    """judge 回传的数值字段可能是字符串/None——宽松解析，坏值回退默认。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _lcs_ratio(a: list[str], b: list[str]) -> float:
@@ -110,7 +158,9 @@ class TaskCompletion(Metric, LLMMetricMixin):
             return MetricResult(metric=self.name, value=0.0, error=f"llm mode failed: {exc}")
         if data is None:
             return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
-        value = float(data.get("progress", 1.0 if data.get("completed") else 0.0))
+        raw_progress = data.get("progress")
+        value = (1.0 if data.get("completed") else 0.0) if raw_progress is None \
+            else _as_float(raw_progress)
         value = max(0.0, min(value, 1.0))
         return MetricResult(metric=self.name, value=round(value, 6),
                             raw={"mode": "llm", "completed": bool(data.get("completed")),

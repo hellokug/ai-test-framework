@@ -1,5 +1,5 @@
 """Builtin metrics. Importing registers everything (rule/stats/perf/reliability/
-agent/rag/safety + LLM helpers)."""
+agent/rag/ragas/safety + LLM helpers)."""
 
 from aite.metrics import (  # noqa: F401
     agent_metrics,
@@ -9,6 +9,7 @@ from aite.metrics import (  # noqa: F401
     nlp_stats,
     performance,
     rag_metrics,
+    ragas_metrics,
     reliability,
     rules,
     safety,

@@ -428,6 +428,36 @@ def dataset_add_hf(
     console.print(f"[green]registered[/green] accuracy/{row['name']} ({count} records)")
 
 
+@dataset_app.command("gen-domain")
+def dataset_gen_domain(
+    domain: str = typer.Argument(..., help="领域（finance / government / legal）"),
+    name: str | None = typer.Option(None, help="数据集名（缺省 <domain>_private）"),
+    n: int = typer.Option(12, "-n", help="生成条数（不超过领域语料池）"),
+    seed: int = typer.Option(42, help="随机种子（=版本凭证，同种子可复现）"),
+    distractors: int = typer.Option(2, help="每条附带的同域干扰文档数"),
+    notes: str = typer.Option("", "--notes"),
+) -> None:
+    """生成私域 RAG 数据集（金融/政务/法律）：落盘 + 注册 userstore/catalog。"""
+    from aite.datasets.gen_domain import generate_domain_dataset, list_domains
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await generate_domain_dataset(
+                repo, domain, name or f"{domain}_private",
+                n=n, seed=seed, distractors=distractors, notes=notes)
+
+    try:
+        row = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]generate failed:[/red] {exc}（可用领域："
+                          f"{', '.join(list_domains())}）")
+        raise SystemExit(1) from exc
+    console.print(f"[green]generated[/green] {row['type']}/{row['name']} "
+                  f"(seed={seed}, {row['stats'].get('count')} records) -> {row['path']}")
+    console.print(f"usable offline as: {{type: builtin, id: {row['name']}}} "
+                  f"或 dataset ref: {row['name']}")
+
+
 bench_app = typer.Typer(help="evalscope / lm-eval compatibility tools")
 app.add_typer(bench_app, name="bench")
 

@@ -9,7 +9,7 @@ Context sources (three, first wins):
 from __future__ import annotations
 
 import re
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from aite.core.interfaces import Metric
 from aite.core.registry import register_metric
@@ -48,8 +48,12 @@ def _facts_of(case: TestCase) -> list[str]:
 
 
 @register_metric("context_recall")
-class ContextRecall(Metric):
-    """Fraction of gold facts covered by retrieved contexts (token overlap)."""
+class ContextRecall(Metric, LLMMetricMixin):
+    """Gold facts covered by retrieved contexts (RAGAS 口径：断言级归因).
+
+    LLM 模式（gateway 可用）逐条断言判定「能否归因到上下文」；规则回退
+    token 覆盖率（fact 中 token 被上下文覆盖比例 ≥ coverage 记命中）。
+    """
 
     name: ClassVar[str] = "context_recall"
 
@@ -58,6 +62,8 @@ class ContextRecall(Metric):
         if not facts or not contexts:
             return MetricResult(metric=self.name, value=0.0,
                                 error="needs case.expected facts + retrieval contexts")
+        if ctx.gateway is not None and not self.params.get("rule_only"):
+            return await self._llm_mode(case, facts, contexts, ctx)
         ctx_toks = set(tokenize(" ".join(contexts)))
         covered = 0
         detail = []
@@ -71,14 +77,42 @@ class ContextRecall(Metric):
             detail.append(round(hit, 4))
         value = covered / len(facts)
         return MetricResult(metric=self.name, value=round(value, 6),
-                            raw={"facts": len(facts), "covered": covered,
-                                 "per_fact": detail},
+                            raw={"mode": "token_coverage", "facts": len(facts),
+                                 "covered": covered, "per_fact": detail},
+                            passed=self.judge_passed(value) if self.threshold is not None else None)
+
+    async def _llm_mode(self, case, facts: list[str], contexts: list[str], ctx) -> MetricResult:
+        joined = "\n---\n".join(contexts)[:6000]
+        user = (
+            "## Reference facts\n" + "\n".join(f"- {f}" for f in facts)
+            + f"\n\n## Contexts\n{joined}\n\n"
+            "Can each fact be attributed to (directly inferred from) the contexts? "
+            'JSON only: {"claims": n, "attributed": n, "unattributed": ["fact", ...]}'
+        )
+        try:
+            data = await self.llm_json(ctx, "You audit RAG retrieval coverage.",
+                                       user, model=self.params.get("model"))
+        except Exception as exc:  # noqa: BLE001
+            return MetricResult(metric=self.name, value=0.0, error=f"llm failed: {exc}")
+        if not data:
+            return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
+        claims = _as_int(data.get("claims"))
+        attributed = _as_int(data.get("attributed"))
+        value = attributed / claims if claims else 0.0
+        return MetricResult(metric=self.name, value=round(value, 6),
+                            raw={"mode": "llm", "claims": claims,
+                                 "attributed": attributed,
+                                 "unattributed": data.get("unattributed", [])[:10]},
                             passed=self.judge_passed(value) if self.threshold is not None else None)
 
 
 @register_metric("context_precision")
-class ContextPrecision(Metric):
-    """Fraction of retrieved contexts relevant to the question (embedding/token sim)."""
+class ContextPrecision(Metric, LLMMetricMixin):
+    """RAGAS 口径：秩加权平均精确率（位置越靠前的相关上下文贡献越大）。
+
+    value = (1/|relevant|) · Σ_k precision@k · relevant_k，无相关条目 = 0。
+    LLM 模式（gateway 可用）逐条判定相关性；规则回退 token_f1 ≥ relevant_sim。
+    """
 
     name: ClassVar[str] = "context_precision"
 
@@ -88,16 +122,56 @@ class ContextPrecision(Metric):
         if not contexts or not question:
             return MetricResult(metric=self.name, value=0.0,
                                 error="needs question + retrieval contexts")
+        if ctx.gateway is not None and not self.params.get("rule_only"):
+            return await self._llm_mode(case, question, contexts, ctx)
         from aite.utils.text import token_f1
 
         sims = [token_f1(question, c)[2] for c in contexts]
         threshold = float(self.params.get("relevant_sim", 0.15))
-        relevant = sum(1 for s in sims if s >= threshold)
-        value = relevant / len(contexts)
+        value = _rank_weighted_precision([s >= threshold for s in sims])
         return MetricResult(metric=self.name, value=round(value, 6),
-                            raw={"contexts": len(contexts), "relevant": relevant,
+                            raw={"mode": "token_overlap", "contexts": len(contexts),
                                  "sims": [round(s, 4) for s in sims]},
                             passed=self.judge_passed(value) if self.threshold is not None else None)
+
+    async def _llm_mode(self, case, question: str, contexts: list[str], ctx) -> MetricResult:
+        numbered = "\n".join(f"[{i}] {c[:800]}" for i, c in enumerate(contexts, 1))
+        user = (
+            f"## Question\n{question}\n\n## Retrieved contexts\n{numbered}\n\n"
+            "Is each context relevant (useful for answering the question)? "
+            'JSON only: {"relevant": [true|false, ...]}  # one per context, in order'
+        )
+        try:
+            data = await self.llm_json(ctx, "You audit RAG retrieval quality.",
+                                       user, model=self.params.get("model"))
+        except Exception as exc:  # noqa: BLE001
+            return MetricResult(metric=self.name, value=0.0, error=f"llm failed: {exc}")
+        if not data or not isinstance(data.get("relevant"), list):
+            return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
+        verdicts = [bool(v) for v in list(data["relevant"])[:len(contexts)]]
+        verdicts += [False] * (len(contexts) - len(verdicts))
+        value = _rank_weighted_precision(verdicts)
+        return MetricResult(metric=self.name, value=round(value, 6),
+                            raw={"mode": "llm", "relevant": verdicts},
+                            passed=self.judge_passed(value) if self.threshold is not None else None)
+
+
+def _rank_weighted_precision(relevant: list[bool]) -> float:
+    """RAGAS context_precision 公式：Σ precision@k·rel_k / |relevant|。"""
+    hits, weighted = 0, 0.0
+    for k, rel in enumerate(relevant, 1):
+        if rel:
+            hits += 1
+            weighted += hits / k
+    return weighted / hits if hits else 0.0
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    """judge 回传的计数字段可能是字符串/None——宽松取整，坏值回退 0（最差分）。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 @register_metric("hit_rate")
@@ -166,8 +240,8 @@ class Faithfulness(Metric, LLMMetricMixin):
             return MetricResult(metric=self.name, value=0.0, error=f"llm failed: {exc}")
         if not data:
             return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
-        claims = int(data.get("claims", 0))
-        supported = int(data.get("supported", 0))
+        claims = _as_int(data.get("claims"))
+        supported = _as_int(data.get("supported"))
         value = supported / claims if claims else 0.0
         return MetricResult(metric=self.name, value=round(value, 6),
                             raw={"mode": "llm", "claims": claims, "supported": supported,
