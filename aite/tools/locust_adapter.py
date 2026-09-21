@@ -544,11 +544,9 @@ class LocustAdapter(ToolAdapter):
                 label, share * 100)
             # 就地置空：指标行与秒级时序同步剔除假流式测量（TTFT 保留，退化为端到端口径）
             for r in recs:
-                for k in ("tpot_ms", "itl_avg", "itl_p95", "gen_ms"):
+                for k in ("tpot_ms", "itl_avg", "itl_p50", "itl_p90",
+                          "itl_p95", "itl_p99", "itl_max", "gen_ms"):
                     r[k] = None
-        total = len(recs)
-        failed = total - len(ok_recs)
-
         def mean(key: str) -> float | None:
             vals = [float(r[key]) for r in ok_recs if r.get(key) is not None]
             return round(sum(vals) / len(vals), 1) if vals else None
@@ -560,26 +558,77 @@ class LocustAdapter(ToolAdapter):
             pos = min(int(0.95 * (len(vals) - 1)) + 1, len(vals) - 1)
             return vals[pos]
 
-        span = self._span_seconds(recs)
-        metrics = {
-            "latency_avg_ms": mean("latency_ms"),
-            "latency_p95_ms": p95("latency_ms"),
-            "ttft_ms": mean("ttft_ms"),
-            "ttft_p95_ms": p95("ttft_ms"),
-            "tpot_ms": mean("tpot_ms"),
-            "tpot_p95_ms": p95("tpot_ms"),
-            "itl_ms": mean("itl_avg"),
-            "itl_p95_ms": p95("itl_p95"),
-            "qps": round(total / span, 3) if span and span > 0 else None,
-            "error_rate": failed / total if total else None,
-            "output_tps": self._global_tps(recs),
-            "avg_input_tokens": self._mean_key(recs, "prompt_tokens"),
-            "avg_output_tokens": self._mean_key(recs, "tokens"),
-        }
+        metrics = self._aggregate_request_metrics(ok_recs, recs)
         append_metric_rows(out.rows, req.metric_thresholds, label,
-                           metrics, total)
+                           metrics, len(recs))
         if metrics.get("qps") is not None:
             out.raw_score[label] = metrics["qps"]
+
+    def _aggregate_request_metrics(self, ok_recs: list[dict],
+                                   recs: list[dict]) -> dict:
+        """请求级样本 → 档级指标字典（时延族全分位表驱动；键名保持兼容）。
+
+        时延族（latency/ttft/tpot）逐请求一个样本 → 档级分位即精确值；ITL
+        逐请求存同档统计量（itl_p50 等）→ 档级 pXX 为其再聚合、max 为精确值。
+        采样缺失的键直接省略（旧版 jsonl 无 itl 档位 / 缓冲门禁清空后：
+        未知 ≠ 0，原则 9——宁缺毋错）。
+        """
+
+        def mean(key: str) -> float | None:
+            vals = [float(r[key]) for r in ok_recs if r.get(key) is not None]
+            return round(sum(vals) / len(vals), 1) if vals else None
+
+        def pct(key: str, q: float) -> float | None:
+            vals = sorted(float(r[key]) for r in ok_recs if r.get(key) is not None)
+            if not vals:
+                return None
+            pos = min(int(q * (len(vals) - 1)) + 1, len(vals) - 1)
+            return vals[pos]
+
+        def vmax(key: str) -> float | None:
+            vals = [float(r[key]) for r in ok_recs if r.get(key) is not None]
+            return max(vals) if vals else None
+
+        metrics: dict = {}
+        families = (("latency", "latency_ms", "latency_avg_ms"),
+                    ("ttft", "ttft_ms", "ttft_ms"),
+                    ("tpot", "tpot_ms", "tpot_ms"))
+        for name, key, avg_key in families:
+            if (avg := mean(key)) is not None:
+                metrics[avg_key] = avg
+            for tag, q in (("p50", 0.50), ("p90", 0.90), ("p95", 0.95),
+                           ("p99", 0.99)):
+                if (v := pct(key, q)) is not None:
+                    metrics[f"{name}_{tag}_ms"] = v
+            if (v := vmax(key)) is not None:
+                metrics[f"{name}_max_ms"] = v
+        if (v := mean("itl_avg")) is not None:
+            metrics["itl_ms"] = v
+        for tag, q in (("p50", 0.50), ("p90", 0.90), ("p95", 0.95),
+                       ("p99", 0.99)):
+            if (v := pct(f"itl_{tag}", q)) is not None:
+                metrics[f"itl_{tag}_ms"] = v
+        if (v := vmax("itl_max")) is not None:
+            metrics["itl_max_ms"] = v
+
+        total = len(recs)
+        failed = total - len(ok_recs)
+        span = self._span_seconds(recs)
+        metrics["qps"] = round(total / span, 3) if span and span > 0 else None
+        metrics["error_rate"] = failed / total if total else None
+        metrics["output_tps"] = self._global_tps(recs)
+        metrics["avg_input_tokens"] = self._mean_key(recs, "prompt_tokens")
+        metrics["avg_output_tokens"] = self._mean_key(recs, "tokens")
+        # 缓存命中率 = Σcached / Σprompt（仅端点回传缓存明细的请求；token 加权，
+        # 未回传 = 未知而非 0——整档无回传则不产出该指标）
+        with_cache = [r for r in ok_recs
+                      if r.get("cached_tokens") is not None
+                      and r.get("prompt_tokens")]
+        if with_cache:
+            metrics["cache_hit_rate"] = round(
+                sum(float(r["cached_tokens"]) for r in with_cache)
+                / sum(float(r["prompt_tokens"]) for r in with_cache), 4)
+        return metrics
 
     @staticmethod
     def _buffered_share(ok_recs: list[dict]) -> float:

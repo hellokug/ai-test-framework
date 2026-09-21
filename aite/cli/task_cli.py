@@ -48,33 +48,52 @@ def _load_spec(value: str) -> dict:
     return loaded
 
 
-def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
-    """按域装配任务管理子应用：create / list / get / rm / run / stop / retry。"""
-    app = typer.Typer(help=f"{kit.domain} 域任务管理", no_args_is_help=True)
+def _run_with_repo(factory):
+    """repo_session + asyncio.run 样板收口：factory(repo) → 结果。"""
 
-    def _fail(exc: Exception) -> None:
-        err_console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
-        raise SystemExit(1) from exc
+    async def _go():
+        async with repo_session(config.db_url_from_env()) as repo:
+            return await factory(repo)
 
-    @app.command("create")
-    def create(
-        spec: str = typer.Option(..., "--spec", help="任务 spec：内联 JSON/YAML 或文件路径"),
-        name: str = typer.Option("", "--name", help="任务名"),
-    ) -> None:
-        """创建任务（pending，不运行）。"""
-        body = _load_spec(spec)
+    return asyncio.run(_go())
 
-        async def _go() -> dict:
-            async with repo_session(config.db_url_from_env()) as repo:
-                return await kit.create(repo, body, name=name)
 
-        try:
-            task = asyncio.run(_go())
-        except TaskStateError as exc:
-            _fail(exc)
-            return
-        console.print(f"[green]created[/green] {task['id']} status={task['status']}")
+def _fail(exc: Exception) -> None:
+    err_console.print(f"[red]{type(exc).__name__}:[/red] {exc}")
+    raise SystemExit(1) from exc
 
+
+def _print_detail(row: dict) -> None:
+    for key in ("id", "name", "status", "retry_of", "retry_count",
+                "created_at", "started_at", "finished_at"):
+        console.print(f"[bold]{key}[/bold]: {row[key]}")
+    console.print("[bold]spec[/bold]:")
+    console.print_json(json.dumps(row["spec"], ensure_ascii=False, default=str))
+    if row["result"] is not None:
+        console.print("[bold]result[/bold]:")
+        console.print_json(json.dumps(row["result"], ensure_ascii=False,
+                                      default=str))
+    if row["error"]:
+        console.print(f"[bold]error[/bold]: {escape(row['error'])}")
+
+
+def _print_verdict(task: dict) -> None:
+    console.print(f"[bold]{task['id']}[/bold] status=[bold]{task['status']}[/bold]")
+    if task["result"] is not None:
+        console.print_json(json.dumps(task["result"], ensure_ascii=False,
+                                      default=str))
+    if task["error"]:
+        console.print(f"[red]error:[/red] {escape(task['error'])}")
+    # CI 语义：任务执行失败 → 1；套件业务判定非 passed（failed/error）→ 1
+    if task["status"] != "succeeded":
+        raise SystemExit(1)
+    verdict = (task["result"] or {}).get("status") \
+        if isinstance(task["result"], dict) else None
+    if verdict is not None and verdict != "passed":
+        raise SystemExit(1)
+
+
+def _register_inspect_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
     @app.command("list")
     def list_tasks(
         status: str | None = typer.Option(None, help="按状态过滤"),
@@ -85,15 +104,18 @@ def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
 
         async def _go() -> list[dict]:
             async with repo_session(config.db_url_from_env()) as repo:
-                return await kit.list(repo, status=status, retry_of=retry_of, limit=limit)
+                return await kit.list(repo, status=status, retry_of=retry_of,
+                                      limit=limit)
 
         tasks = asyncio.run(_go())
         table = Table(title=f"{kit.domain} tasks ({len(tasks)} shown)")
-        for col in ("id", "name", "status", "retry", "created_at", "finished_at"):
+        for col in ("id", "name", "status", "retry", "created_at",
+                    "finished_at"):
             table.add_column(col, overflow="fold",
                              no_wrap=col in ("id", "status"))
         for t in tasks:
-            chain = str(t["retry_count"]) + (f" ←{t['retry_of'][:8]}" if t["retry_of"] else "")
+            chain = str(t["retry_count"]) + (
+                f" ←{t['retry_of'][:8]}" if t["retry_of"] else "")
             table.add_row(t["id"], t["name"], t["status"], chain,
                           t["created_at"], t["finished_at"] or "")
         console.print(table)
@@ -101,25 +123,33 @@ def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
     @app.command("get")
     def get(task_id: str = typer.Argument(...)) -> None:
         """查看任务详情（含 spec / result / error）。"""
-
-        async def _go() -> dict | None:
-            async with repo_session(config.db_url_from_env()) as repo:
-                return await kit.get(repo, task_id)
-
-        task = asyncio.run(_go())
+        try:
+            task = _run_with_repo(lambda repo: kit.get(repo, task_id))
+        except TaskStateError as exc:
+            _fail(exc)
+            return
         if task is None:
             _fail(TaskNotFoundError(task_id))
             return
-        for key in ("id", "name", "status", "retry_of", "retry_count",
-                    "created_at", "started_at", "finished_at"):
-            console.print(f"[bold]{key}[/bold]: {task[key]}")
-        console.print("[bold]spec[/bold]:")
-        console.print_json(json.dumps(task["spec"], ensure_ascii=False, default=str))
-        if task["result"] is not None:
-            console.print("[bold]result[/bold]:")
-            console.print_json(json.dumps(task["result"], ensure_ascii=False, default=str))
-        if task["error"]:
-            console.print(f"[bold]error[/bold]: {escape(task['error'])}")
+        _print_detail(task)
+
+
+def _register_action_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
+    @app.command("create")
+    def create(
+        spec: str = typer.Option(..., "--spec",
+                                 help="任务 spec：内联 JSON/YAML 或文件路径"),
+        name: str = typer.Option("", "--name", help="任务名"),
+    ) -> None:
+        """创建任务（pending，不运行）。"""
+        body = _load_spec(spec)
+        try:
+            task = _run_with_repo(lambda repo: kit.create(repo, body, name=name))
+        except TaskStateError as exc:
+            _fail(exc)
+            return
+        console.print(f"[green]created[/green] {task['id']} "
+                      f"status={task['status']}")
 
     @app.command("rm")
     def rm(
@@ -143,7 +173,7 @@ def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
 
     @app.command("run")
     def run(task_id: str = typer.Argument(...)) -> None:
-        """运行任务并等待终态（同步形态；exit code 0=succeeded，CI 友好）。"""
+        """运行任务并等待终态（同步形态；exit 0=succeeded 且 passed）。"""
 
         async def _go() -> dict | None:
             async with repo_session(config.db_url_from_env()) as repo:
@@ -158,48 +188,35 @@ def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
         if task is None:
             _fail(TaskNotFoundError(task_id))
             return
-        console.print(f"[bold]{task['id']}[/bold] status=[bold]{task['status']}[/bold]")
-        if task["result"] is not None:
-            console.print_json(json.dumps(task["result"], ensure_ascii=False, default=str))
-        if task["error"]:
-            console.print(f"[red]error:[/red] {escape(task['error'])}")
-        # CI 语义：任务执行失败 → 1；套件业务判定非 passed（failed/error）→ 1
-        if task["status"] != "succeeded":
-            raise SystemExit(1)
-        verdict = (task["result"] or {}).get("status") \
-            if isinstance(task["result"], dict) else None
-        if verdict is not None and verdict != "passed":
-            raise SystemExit(1)
+        _print_verdict(task)
 
     @app.command("stop")
     def stop(task_id: str = typer.Argument(...)) -> None:
         """停止运行中任务（协作式；超时强转 cancelled）。"""
-
-        async def _go() -> dict:
-            async with repo_session(config.db_url_from_env()) as repo:
-                return await kit.stop(repo, task_id)
-
         try:
-            task = asyncio.run(_go())
+            task = _run_with_repo(lambda repo: kit.stop(repo, task_id))
         except (TaskNotFoundError, TaskStateError) as exc:
             _fail(exc)
             return
-        console.print(f"[yellow]stopped[/yellow] {task['id']} status={task['status']}")
+        console.print(f"[yellow]stopped[/yellow] {task['id']} "
+                      f"status={task['status']}")
 
     @app.command("retry")
     def retry(task_id: str = typer.Argument(...)) -> None:
         """重试终态任务：创建新任务（retry_of 指向原任务）。"""
-
-        async def _go() -> dict:
-            async with repo_session(config.db_url_from_env()) as repo:
-                return await kit.retry(repo, task_id)
-
         try:
-            task = asyncio.run(_go())
+            task = _run_with_repo(lambda repo: kit.retry(repo, task_id))
         except (TaskNotFoundError, TaskStateError) as exc:
             _fail(exc)
             return
         console.print(f"[green]retry created[/green] {task['id']} "
-                      f"(retry_of={task['retry_of']}, count={task['retry_count']})")
+                      f"(retry_of={task['retry_of']}, "
+                      f"count={task['retry_count']})")
 
+
+def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
+    """按域装配任务管理子应用：create / list / get / rm / run / stop / retry。"""
+    app = typer.Typer(help=f"{kit.domain} 域任务管理", no_args_is_help=True)
+    _register_inspect_commands(app, kit)
+    _register_action_commands(app, kit)
     return app

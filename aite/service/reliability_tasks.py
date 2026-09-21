@@ -232,7 +232,7 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
     """
     from aite.tools import run_tool_suite
 
-    cases, defaults, bg, probe, window = _parse_suite(body)
+    cases, defaults, bg, probe, _window = _parse_suite(body)
     base_url = str(probe.get("base_url") or "").strip().rstrip("/")
     model = str(probe.get("model") or "").strip()
     url = base_url if base_url.endswith("/chat/completions") \
@@ -253,71 +253,20 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
     probes: list[dict] = []
     events: list[dict] = []
     case_results: list[dict] = []
-    bg_report: dict | None = None
 
     async def business() -> dict | None:
-        nonlocal bg_report
         load = asyncio.create_task(run_tool_suite(bg_raw, ctx.repo)) \
             if bg_raw else None
         for case in cases:
-            fault = dict(case.get("fault") or {})
-            injector_name = str(fault.get("injector") or "process")
-            kind = str(fault.get("kind") or "")
-            if not kind:
-                raise ValueError(f"用例 {case['name']!r}: fault.kind 必填")
-            fd = _resolve_case_fd(case, defaults)
-            inject = case.get("inject") or {}
-            if injector_name != "process":
-                raise ValueError(f"用例 {case['name']!r}: inject 两级对象选择当前"
-                                 f"仅支持 process 武器（{injector_name!r} 走 R 系列"
-                                 "环境通道）")
-            if not isinstance(inject, dict) or not inject:
-                raise ValueError(f"用例 {case['name']!r}: 缺 inject"
-                                 "（命中注入单元有歧义不静默）")
-            process_spec = inject.get("process")
-            if not process_spec:
-                raise ValueError(f"用例 {case['name']!r}: 缺 inject.process"
-                                 "（本机 host 环境注入单元=进程）")
-            match, exclude, select_spec = parse_process_spec(process_spec)
-            select_spec = select_spec or dict(default_select)
-            pids = resolve_processes(match, exclude, select_spec, seed=seed)
-
-            specs = [FaultSpec(injector=injector_name, kind=kind,
-                               target={"pid": p},
-                               params=dict(fault.get("params") or {}),
-                               name=f"{kind}@pid{p}") for p in pids]
-
-            def observe_case_window(fd=fd, post=post_window):
-                return run_observation(replace(
-                    ProbeConfig(url=url, model=model, api_key=api_key,
-                                interval=interval, timeout=timeout,
-                                prompt=prompt),
-                    duration=fd + post))
-
-            case_probes, case_events = await run_with_chaos(
-                specs, observe_case_window, fault_duration=fd)
+            entry, case_probes, case_events = await _execute_case(
+                case, defaults, default_select, seed, url, model, api_key,
+                interval, timeout, prompt, post_window, ctx.repo)
             for ev in case_events:
                 ev["case"] = case["name"]
             events.extend(case_events)
             probes.extend(case_probes)
-            rto = compute_rto(case_probes, case_events)
-            entry: dict[str, Any] = {
-                "name": case["name"],
-                "targets": [f"pid:{p}" for p in pids],
-                "fault": {"injector": injector_name, "kind": kind,
-                          "fault_duration": fd},
-                "rto": rto,
-            }
-            expect = case.get("expect_rto")
-            if expect is not None:
-                ok = rto["rto_seconds"] is not None \
-                    and rto["rto_seconds"] <= float(expect)
-                entry["verdict"] = "passed" if ok else "failed"
-                entry["checks"] = [{"name": "rto", "expected": f"<={expect}",
-                                    "actual": rto["rto_seconds"], "passed": ok}]
             case_results.append(entry)
-        if load is not None:
-            bg_report = suite_summary(await load)
+        bg_report = suite_summary(await load) if load is not None else None
         return bg_report
 
     bg_report = await business()
@@ -336,6 +285,63 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
                   "timeout": timeout, "post_window": post_window,
                   "background": bool(bg)},
     }
+
+
+async def _execute_case(case: dict, defaults: dict, default_select: dict,
+                        seed: int, url: str, model: str, api_key: str,
+                        interval: float, timeout: float, prompt: str,
+                        post_window: float, repo: Any) -> tuple[dict, list, list]:
+    """单用例：注入层活体解析 → 逐 pid 注入 → fault_duration 定时恢复 → 判定。"""
+    fault = dict(case.get("fault") or {})
+    injector_name = str(fault.get("injector") or "process")
+    kind = str(fault.get("kind") or "")
+    if not kind:
+        raise ValueError(f"用例 {case['name']!r}: fault.kind 必填")
+    fd = _resolve_case_fd(case, defaults)
+    inject = case.get("inject") or {}
+    if injector_name != "process":
+        raise ValueError(f"用例 {case['name']!r}: inject 两级对象选择当前"
+                         f"仅支持 process 武器（{injector_name!r} 走 R 系列"
+                         "环境通道）")
+    if not isinstance(inject, dict) or not inject:
+        raise ValueError(f"用例 {case['name']!r}: 缺 inject"
+                         "（命中注入单元有歧义不静默）")
+    process_spec = inject.get("process")
+    if not process_spec:
+        raise ValueError(f"用例 {case['name']!r}: 缺 inject.process"
+                         "（本机 host 环境注入单元=进程）")
+    match, exclude, select_spec = parse_process_spec(process_spec)
+    select_spec = select_spec or dict(default_select)
+    pids = resolve_processes(match, exclude, select_spec, seed=seed)
+
+    specs = [FaultSpec(injector=injector_name, kind=kind,
+                       target={"pid": p},
+                       params=dict(fault.get("params") or {}),
+                       name=f"{kind}@pid{p}") for p in pids]
+
+    def observe_case_window(fd=fd, post=post_window):
+        return run_observation(replace(
+            ProbeConfig(url=url, model=model, api_key=api_key,
+                        interval=interval, timeout=timeout, prompt=prompt),
+            duration=fd + post))
+
+    case_probes, case_events = await run_with_chaos(
+        specs, observe_case_window, fault_duration=fd)
+    rto = compute_rto(case_probes, case_events)
+    entry: dict[str, Any] = {
+        "name": case["name"],
+        "targets": [f"pid:{p}" for p in pids],
+        "fault": {"injector": injector_name, "kind": kind,
+                  "fault_duration": fd},
+        "rto": rto,
+    }
+    expect = case.get("expect_rto")
+    if expect is not None:
+        ok = rto["rto_seconds"] is not None and rto["rto_seconds"] <= float(expect)
+        entry["verdict"] = "passed" if ok else "failed"
+        entry["checks"] = [{"name": "rto", "expected": f"<={expect}",
+                            "actual": rto["rto_seconds"], "passed": ok}]
+    return entry, case_probes, case_events
 
 
 def build_reliability_task_kit(bus: EventSink | None = None) -> DomainTaskKit:
