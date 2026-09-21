@@ -260,7 +260,7 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
         for case in cases:
             entry, case_probes, case_events = await _execute_case(
                 case, defaults, default_select, seed, url, model, api_key,
-                interval, timeout, prompt, post_window, ctx.repo)
+                interval, timeout, prompt, post_window)
             for ev in case_events:
                 ev["case"] = case["name"]
             events.extend(case_events)
@@ -290,7 +290,7 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
 async def _execute_case(case: dict, defaults: dict, default_select: dict,
                         seed: int, url: str, model: str, api_key: str,
                         interval: float, timeout: float, prompt: str,
-                        post_window: float, repo: Any) -> tuple[dict, list, list]:
+                        post_window: float) -> tuple[dict, list, list]:
     """单用例：注入层活体解析 → 逐 pid 注入 → fault_duration 定时恢复 → 判定。"""
     fault = dict(case.get("fault") or {})
     injector_name = str(fault.get("injector") or "process")
