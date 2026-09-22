@@ -130,6 +130,14 @@ class SuiteConfig(BaseModel):
     concurrency: int | None = None               # CLI/override of target rate_limit.concurrency
     max_cost_usd: float | None = None            # global cost circuit breaker
     case_timeout_s: float | None = None
+    module: str | None = None                    # 评测模块标签：reports/<module>/ 归位（缺省 misc）
+
+    @field_validator("module")
+    @classmethod
+    def _check_module(cls, v: str | None) -> str | None:
+        if v is not None and v not in config.EVAL_MODULES:
+            raise ValueError(f"module must be one of {config.EVAL_MODULES}, got {v!r}")
+        return v
 
     @field_validator("pass_strategy")
     @classmethod

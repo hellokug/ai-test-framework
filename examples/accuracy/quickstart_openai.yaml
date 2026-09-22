@@ -1,3 +1,4 @@
+module: accuracy
 run_name: quickstart-openai
 description: >
   MVP 冒烟套件：OpenAI 兼容目标（OpenAI/DeepSeek/Qwen/vLLM/Ollama 皆可）+

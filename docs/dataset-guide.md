@@ -32,7 +32,7 @@ aite dataset show ceval_full # 单个数据集详情
 
 配套指标：RAGAS 五件套（faithfulness / answer_relevancy / context_precision /
 context_recall / answer_correctness）+ hit_rate / citation_accuracy，
-详见 `examples/ragas.yaml`。
+详见 `examples/accuracy/ragas.yaml`。
 
 ### Agent 评测
 
@@ -42,7 +42,7 @@ context_recall / answer_correctness）+ hit_rate / citation_accuracy，
 | `xlam_fc` | hf:Salesforce/xlam-function-calling-60k | 函数调用：工具选择 + 参数抽取（expected 带 tools/tool_args） |
 
 配套指标：tool_call_correctness / tool_arg_correctness / agent_efficiency /
-task_completion / trajectory_quality，详见 `examples/agent_eval.yaml`。
+task_completion / trajectory_quality，详见 `examples/accuracy/agent_eval.yaml`。
 被测 agent 需在响应中回传 trace（HTTP 约定或 langchain_agent 连接器）。
 
 ### 精度基准

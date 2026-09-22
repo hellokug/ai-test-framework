@@ -32,13 +32,13 @@ aite serve                      # Web 平台 http://127.0.0.1:8300
 
 | 示例 | 说明 |
 |---|---|
-| `quickstart_openai.yaml` | MVP 冒烟：GSM8K 采样 + exact_match(数字抽取) + p95 延迟 |
-| `judge_example.yaml` | LLM-as-a-Judge：score / pairwise(位置偏差双向) / multi(一致性) |
-| `rag_eval.yaml` | RAG：context precision/recall、hit@k、faithfulness、引用准确率 |
-| `agent_eval.yaml` | Agent：tool_call_correctness、task_completion、效率（HTTP trace 约定） |
-| `swebench.yaml` | SWE-bench 离线打分：predictions_file + swe_resolution（金补丁冒烟，需 Docker） |
-| `reliability.yaml` | 可靠性：repeats 重跑一致率 + 扰动鲁棒性 |
-| `safety.yaml` | 安全：越狱 ASR、提示注入抗性、PII 泄露、毒性 |
+| `examples/accuracy/quickstart_openai.yaml` | MVP 冒烟：GSM8K 采样 + exact_match(数字抽取) + p95 延迟 |
+| `examples/accuracy/judge_example.yaml` | LLM-as-a-Judge：score / pairwise(位置偏差双向) / multi(一致性) |
+| `examples/accuracy/rag_eval.yaml` | RAG：context precision/recall、hit@k、faithfulness、引用准确率 |
+| `examples/accuracy/agent_eval.yaml` | Agent：tool_call_correctness、task_completion、效率（HTTP trace 约定） |
+| `examples/accuracy/swebench.yaml` | SWE-bench 离线打分：predictions_file + swe_resolution（金补丁冒烟，需 Docker） |
+| `examples/reliability/reliability.yaml` | 可靠性：repeats 重跑一致率 + 扰动鲁棒性 |
+| `examples/accuracy/safety.yaml` | 安全：越狱 ASR、提示注入抗性、PII 泄露、毒性 |
 
 ## 评测维度（内置 65 指标 + 3 类 Judge）
 
@@ -81,7 +81,7 @@ aite dataset add-hf openai/gsm8k --name gsm8k_full -n 200   # 下载→字段映
 aite run -c suite.yaml                           # 之后 {type: builtin, id: gsm8k_full} 完全离线
 ```
 
-数据文件落 `./data/datasets/`、注册表 `./data/aite_datasets.json`（不进包源码）；
+数据文件按类型落 `./data/datasets/<类型>/`（accuracy/functional/perf）、注册表 `./data/aite_datasets.json`（不进包源码）；
 Python API 同名函数 `aite.datasets.add_hf.add_hf_dataset()`。字段自动识别
 （question/answer/choices 等），生僻字段名用 `--fields input=xxx,expected=yyy` 映射。
 
@@ -114,8 +114,8 @@ aite run -c examples/swebench.yaml               # predictions_file → swe_reso
 ```
 
 值语义：1.0 resolved / 0.0 未解或空补丁（缺预测按未解）；harness 失败或基础设施
-错误记 None 跳过（宁缺毋错）。打分产物落 `data/swebench/<run>/`（predictions/
-logs/report），参数见 `examples/swebench.yaml` 注释（dataset_name/timeout_s/
+错误记 None 跳过（宁缺毋错）。打分产物落 `data/accuracy/swebench/<run>/`（predictions/
+logs/report），参数见 `examples/accuracy/swebench.yaml` 注释（dataset_name/timeout_s/
 work_dir/python_exe）。金补丁冒烟：predictions 只放一案 gold patch，预期该案
 resolve=1、其余缺预测=0。
 
@@ -126,7 +126,7 @@ suite 带 `engine` 字段即路由到工具适配层（无 engine 走自研引�
 RAGEval 四个后端，`tools.extra_args.eval_backend` 切换）：
 
 ```yaml
-# examples/tool_evalscope.yaml
+# examples/accuracy/tool_evalscope.yaml
 engine: evalscope
 target:                       # 复用平台统一 target（OpenAI 兼容端点直连）
   type: openai_compatible
@@ -187,7 +187,7 @@ OpenAI 规范）：
 > 测试的价值而非误报；换 vLLM/OpenAI 端点后应全绿。
 
 ```yaml
-# examples/functional_pytest.yaml
+# examples/functional/functional_pytest.yaml
 engine: pytest
 target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
 tools:
@@ -289,7 +289,7 @@ instruction/prompt/query/user 取首个命中），适配器导出为逐行 prom
 evalscope 底层 `--duration` 为软退出：到点后不派新请求、在途请求跑完。
 
 ```yaml
-# examples/perf_evalscope.yaml（节选）
+# examples/perf/perf_evalscope.yaml（节选）
 perf:
   dataset: ./examples/data/business_qa.jsonl
   max_tokens: [64, 128]
@@ -379,7 +379,7 @@ evalscope-perf 按档实际时长 + 档间 5s 间隔偏移近似拼接。
 
 ```bash
 pip install 'aite[locust]'
-aite run -c examples/locust.yaml
+aite run -c examples/perf/locust.yaml
 ```
 
 ### 性能场景数据集与到达模型（模块 J 一期）
@@ -473,7 +473,7 @@ HTML 曲线用预览脚本（数据契约与 REST 端点完全一致，即 F1 �
 
 ```bash
 # 完整流程第一步：跑一次压测，产出 timeseries.json
-aite run -c examples/locust.yaml            # 或 examples/perf_evalscope.yaml
+aite run -c examples/perf/locust.yaml            # 或 examples/perf/perf_evalscope.yaml
 
 # 方式一：交互清单——列出 reports/ 下全部压测时序（最新在前），回车选最新
 python scripts/preview_perf_dashboard.py

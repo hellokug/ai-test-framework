@@ -1,3 +1,4 @@
+module: reliability
 run_name: reliability-demo
 description: >
   可靠性评测：repeats=5 计算 repeat_consistency，

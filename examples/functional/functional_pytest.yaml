@@ -1,3 +1,4 @@
+module: functional
 run_name: functional-pytest
 description: 功能测试（pytest 引擎）：真实调用模型 + 规则断言，场景级 pass_rate
 

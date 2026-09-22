@@ -5,8 +5,8 @@
 
 用法：
   # 交替驱动新跑（按给定顺序 L→E→L→E…，每轮结束即入库）
-  python scripts/compare_perf.py --suites examples/locust_deepseek.yaml \
-      examples/perf_evalscope_deepseek.yaml --rounds 2
+  python scripts/compare_perf.py --suites examples/perf/locust_deepseek.yaml \
+      examples/perf/perf_evalscope_deepseek.yaml --rounds 2
 
   # 分析已有 run（按 run_id 或按 suite 名 + 起始日期聚合）
   python scripts/compare_perf.py --runs <id1> <id2> [<id3>...]

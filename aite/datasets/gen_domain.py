@@ -14,7 +14,7 @@ CLI::
 - 语料种子在 ``aite.datasets.domain_corpora``（公开通用事实性内容，扩充语料即
   扩充可生成题量）；同 (domain, n, seed, distractors) 输出逐字节一致，
   catalog ``version=seed<N>`` 即可复现凭证。
-- 产物 JSONL 落 ``./data/datasets/<name>.jsonl``（用户数据区，不入包源码，
+- 产物 JSONL 落 ``./data/datasets/accuracy/<name>.jsonl``（用户数据区，不入包源码，
   同 add-hf 约定），注册 userstore 外部注册表（带 recommend，``metrics: auto``
   可用）+ dataset catalog 的 accuracy 条目。
 - 记录形态 = 标准 RAG 形状：question / answer / retrieval_context
@@ -103,7 +103,7 @@ async def generate_domain_dataset(
         raise ValueError(f"数据集名 {name!r} 与包内置数据集冲突，请换一个名字")
     records = generate_records(domain, n, seed, distractors)
 
-    out_dir = userstore.data_root() / "datasets"
+    out_dir = userstore.dataset_dir("accuracy")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{name}.jsonl"
     with path.open("w", encoding="utf-8") as fh:
@@ -111,7 +111,7 @@ async def generate_domain_dataset(
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     userstore.upsert(name, {
-        "file": f"datasets/{name}.jsonl",
+        "file": f"datasets/accuracy/{name}.jsonl",
         "external": True,
         "upstream": f"aite-gen:{domain}",
         "task": f"私域{DOMAIN_CORPORA[domain]['label']}领域 RAG 评测集（aite-gen 生成）",

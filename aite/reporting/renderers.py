@@ -35,12 +35,14 @@ def _dataset_ident(d: dict) -> str:
 
 
 def report_relpath(report: RunReport) -> Path:
-    """报告目录层级：``<模型>/<数据集>/<本地时间>_<run短id>``。
+    """报告目录层级：``<模块>/<模型>/<数据集>/<本地时间>_<run短id>``。
 
-    第一层模型、第二层数据集（多个用 ``+`` 连接）、第三层时间；
+    第一层模块（suite.module，缺省 ``misc`` 向后兼容）、第二层模型、
+    第三层数据集（多个用 ``+`` 连接）、第四层时间；
     名称均做 Windows 路径净化；短 id 保证同秒不冲突。
     """
     started = (report.started_at or utcnow()).astimezone()  # 目录名用本地时间更直觉
+    module = _path_safe(str(report.config.get("module") or "misc"))
     target = report.config.get("target") or {}
     model = _path_safe(str(target.get("model") or "unknown"))
     idents = [_path_safe(_dataset_ident(d)) for d in report.config.get("datasets") or []]
@@ -48,7 +50,7 @@ def report_relpath(report: RunReport) -> Path:
     if len(ds_dir) > 50:  # 防路径过长
         ds_dir = f"{idents[0]}+{len(idents) - 1}more"
     leaf = f"{started.strftime('%Y%m%d-%H%M%S')}_{(report.run_id or 'latest')[:8]}"
-    return Path(model) / ds_dir / leaf
+    return Path(module) / Path(model) / ds_dir / leaf
 
 
 def datasets_label(config: dict) -> str:

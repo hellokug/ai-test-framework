@@ -229,7 +229,7 @@ def main() -> None:  # pragma: no cover - 脚本入口
     ap.add_argument("--output-tokens", type=int, help="期望输出长度（写 meta）")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--name", default="perf-scene")
-    ap.add_argument("--out-dir", default="./perf_datasets")
+    ap.add_argument("--out-dir", default="./data/datasets/perf")
     args = ap.parse_args()
 
     cfg = {"corpus": args.corpus, "count": args.count,

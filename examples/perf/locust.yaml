@@ -1,3 +1,4 @@
+module: perf
 run_name: perf-locust
 description: 性能压测（locust 引擎）：通用 HTTP 压测备选，委托 locust 子进程执行
 

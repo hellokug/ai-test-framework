@@ -22,6 +22,7 @@
 | `concurrency` | int | target.rate_limit.concurrency | 全局并发覆盖 |
 | `max_cost_usd` | float | null | 成本熔断（target 累计成本 + judge 预算） |
 | `case_timeout_s` | float | null | 单 case 超时 |
+| `module` | str | null | 评测模块标签：`accuracy`/`functional`/`perf`/`reliability`；报告目录第一层（缺省落 `misc/`） |
 
 ## target（连接器）
 

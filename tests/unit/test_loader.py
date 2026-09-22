@@ -89,3 +89,22 @@ class TestLoadSuite:
     def test_missing_file(self):
         with pytest.raises(FileNotFoundError):
             load_suite("does/not/exist.yaml")
+
+
+class TestSuiteModule:
+    """suite.module：评测模块标签（reports/<module>/ 归位 + 目录分域，Schema 只增）。"""
+
+    MINIMAL = {"run_name": "s", "target": {"type": "openai_compatible"},
+               "datasets": [{"type": "local", "path": "./x.jsonl"}],
+               "metrics": [{"exact_match": {}}]}
+
+    def test_module_default_none(self):
+        assert load_suite(dict(self.MINIMAL)).module is None
+
+    def test_module_accepted(self):
+        for m in ("accuracy", "functional", "perf", "reliability"):
+            assert load_suite({**self.MINIMAL, "module": m}).module == m
+
+    def test_module_invalid_rejected(self):
+        with pytest.raises(ValidationError, match="module"):
+            load_suite({**self.MINIMAL, "module": "weird"})

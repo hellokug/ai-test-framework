@@ -1,3 +1,4 @@
+module: accuracy
 run_name: qa-suite
 description: 文本 QA 数据集评测（local sample_qa，开放式短答案）
 

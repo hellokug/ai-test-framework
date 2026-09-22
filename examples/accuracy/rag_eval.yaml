@@ -1,3 +1,4 @@
+module: accuracy
 run_name: rag-eval-demo
 description: RAG 评测：检索质量（context precision/recall、hit@k）+ 生成质量（faithfulness、answer relevancy、引用）。
 

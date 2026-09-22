@@ -1,7 +1,7 @@
 """用户自建离线数据集的存储与外部注册表。
 
 设计约束（项目约定）：
-- 外部数据集**不进包源码**：JSONL 落在项目 ``./data/datasets/``，
+- 外部数据集**不进包源码**：JSONL 按类型落在项目 ``./data/datasets/<类型>/``，
   注册信息在 ``./data/aite_datasets.json``。
 - 路径相对当前工作目录（与 ``./aite.db``、``./reports`` 的约定一致），
   在项目根目录执行命令即可。
@@ -20,6 +20,12 @@ REGISTRY_FILENAME = "aite_datasets.json"
 def data_root() -> Path:
     """外部数据集根目录（项目 ./data）。"""
     return Path("./data")
+
+
+def dataset_dir(dataset_type: str) -> Path:
+    """类型化数据集目录：``./data/datasets/<type>/``（functional 域既有约定的对齐推广）。"""
+    from aite.datasets.catalog import check_type
+    return data_root() / "datasets" / check_type(dataset_type)
 
 
 def registry_path() -> Path:

@@ -60,7 +60,7 @@ class TestGenerateDomainDataset:
         assert row["type"] == "accuracy" and row["version"] == "seed42"
         assert row["stats"] == {"count": 6, "domain": "government", "distractors": 2}
 
-        path = tmp_path / "data" / "datasets" / "gov_test.jsonl"
+        path = tmp_path / "data" / "datasets" / "accuracy" / "gov_test.jsonl"
         records = [json.loads(line) for line
                    in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert len(records) == 6
@@ -76,10 +76,10 @@ class TestGenerateDomainDataset:
     async def test_regenerate_same_seed_reproducible(self, repo, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         await generate_domain_dataset(repo, "finance", "fin_test", n=5, seed=42)
-        content = (tmp_path / "data" / "datasets" / "fin_test.jsonl").read_text(
+        content = (tmp_path / "data" / "datasets" / "accuracy" / "fin_test.jsonl").read_text(
             encoding="utf-8")
         await generate_domain_dataset(repo, "finance", "fin_test", n=5, seed=42)
-        assert (tmp_path / "data" / "datasets" / "fin_test.jsonl").read_text(
+        assert (tmp_path / "data" / "datasets" / "accuracy" / "fin_test.jsonl").read_text(
             encoding="utf-8") == content
 
     @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+module: accuracy
 run_name: ragas-eval-demo
 description: >
   RAGAS 评测五件套：faithfulness（忠实度/幻觉）、answer_relevancy（答案相关性）、

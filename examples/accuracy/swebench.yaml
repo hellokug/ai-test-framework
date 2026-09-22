@@ -1,3 +1,4 @@
+module: accuracy
 run_name: swebench-smoke
 description: >
   SWE-bench 离线打分链路：predictions_file 连接器逐案取出补丁（批量 agent 如
@@ -10,7 +11,7 @@ description: >
 target:
   type: predictions_file
   params:
-    path: ./data/swebench/predictions.jsonl
+    path: ./data/accuracy/swebench/predictions.jsonl
 
 datasets:
   - type: builtin

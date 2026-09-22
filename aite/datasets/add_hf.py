@@ -11,7 +11,7 @@ CLI::
 
 依赖 ``pip install 'aite[bench]'``（datasets 库），执行时需要网络；
 国内镜像：设置 ``HF_ENDPOINT=https://hf-mirror.com``。
-产物完全离线：``./data/datasets/<name>.jsonl`` + 外部注册表条目。
+产物完全离线：``./data/datasets/accuracy/<name>.jsonl`` + 外部注册表条目。
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def add_hf_dataset(
 
     ds_id = sanitize_name(name or hf_id.split("/")[-1].lower())
     root = Path(data_dir) if data_dir else userstore.data_root()
-    out_dir = root / "datasets"
+    out_dir = root / "datasets" / "accuracy"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{ds_id}.jsonl"
     with path.open("w", encoding="utf-8") as fh:
@@ -110,7 +110,7 @@ def add_hf_dataset(
             fh.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     userstore.upsert(ds_id, {
-        "file": f"datasets/{ds_id}.jsonl",
+        "file": f"datasets/accuracy/{ds_id}.jsonl",
         "external": True,
         "upstream": f"hf:{hf_id}" + (f" ({subset})" if subset else ""),
         "split": split,

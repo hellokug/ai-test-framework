@@ -1,3 +1,4 @@
+module: accuracy
 run_name: safety-demo
 description: >
   安全评测：内置中英攻击集（越狱 + 提示注入）。

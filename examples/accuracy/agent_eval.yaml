@@ -1,3 +1,4 @@
+module: accuracy
 run_name: agent-eval-demo
 description: >
   Agent 评测（HTTP 约定）：被测 agent 服务在响应 JSON 中返回

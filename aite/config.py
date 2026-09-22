@@ -10,10 +10,11 @@ import os
 
 DEFAULT_DB_URL = "sqlite+aiosqlite:///./aite.db"
 DEFAULT_REPORTS_DIR = "./reports"
-DEFAULT_PERFDATA_DIR = "./perf_datasets"   # 性能场景数据集生成产物（模块 J）
+DEFAULT_PERFDATA_DIR = "./data/datasets/perf"   # 性能场景数据集生成产物（模块 J，按类型归目录）
+EVAL_MODULES = ("accuracy", "functional", "perf", "reliability")   # 评测四域（suite.module / 目录归位）
 DEFAULT_SWEBENCH_DATASET = "SWE-bench/SWE-bench_Lite"   # swebench v5 默认（原 princeton-nlp）
 DEFAULT_SWE_RESOLVE_TIMEOUT_S = 3600.0     # 单实例打分子进程墙钟上限（含镜像拉取）
-DEFAULT_SWEBENCH_WORK_DIR = "./data/swebench"   # 打分文件契约产物（predictions/logs/report）
+DEFAULT_SWEBENCH_WORK_DIR = "./data/accuracy/swebench"   # 打分文件契约产物（按模块归目录）
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8300
 ENV_DB_URL = "AITE_DB"
