@@ -10,30 +10,32 @@ description: >
 target:
   type: openai_compatible
   base_url: http://localhost:11434/v1
-  model: qwen2.5:7b
+  model: qwen2.5:3b
   stream: false
 
 datasets:
-  - type: builtin
-    id: rgb                              # 中文 RAG 鲁棒性基准（噪声/拒答/整合/反事实子集）
-    sample: {n: 8, seed: 1}
-  # 其他 RAG 数据集：crudrag（中文 RAG）/ hotpotqa / multihoprag（英文多跳）/
+  - type: local
+    path: ./examples/fixtures/rgb_openbook.jsonl   # 开卷版：文档组装进 prompt（测给定文档下的生成忠实度）
+    group_by: subset                     # 按子集分组：rejection 本就该低分（拒答测试），别和检索质量混看
+  # 闭卷版（裸问答 + gold 文档打分）与更多 RAG 数据集：
+  # crudrag（中文 RAG）/ hotpotqa / multihoprag（英文多跳）/
   # financebench（金融开放问答）/ 私域生成集（aite dataset gen-domain）
+  # - type: builtin
+  #   id: rgb
+  #   sample: {n: 8, seed: 1}
   # 全量版用 hf_hub 在线加载，如：
   # - type: hf_hub
   #   id: PatronusAI/financebench
   #   split: test
   #   limit: 50
 
-metrics: auto                             # rgb 的推荐指标（RAGAS 体系）
-
-# 或显式指定 RAGAS 五件套：
-# metrics:
-#   - faithfulness: {threshold: 0.5}      # LLM 断言支撑 / 无网关 token 覆盖回退
-#   - answer_relevancy: {threshold: 0.3}
-#   - context_precision: {threshold: 0.4} # 秩加权，LLM 相关性判定 / token_f1 回退
-#   - context_recall: {threshold: 0.5}    # 断言归因 / token 覆盖回退
-#   - answer_correctness: {threshold: 0.4}
+metrics:                                  # local 数据集无推荐指标，显式指定（RAGAS 体系）
+  - faithfulness: {threshold: 0.5}        # 答案是否忠实于给定文档（LLM 判定 / 无网关 token 覆盖回退）
+  - context_precision: {threshold: 0.4}   # 秩加权精确率（LLM 相关性判定 / token_f1 回退）
+# 其余 RAGAS 指标：
+# - answer_relevancy: {threshold: 0.3}
+# - context_recall: {threshold: 0.5}
+# - answer_correctness: {threshold: 0.4}
 
 report: [rich, json, html]
 output_dir: ./reports

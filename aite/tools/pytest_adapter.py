@@ -129,6 +129,9 @@ class PytestAdapter(ToolAdapter):
             # 主套件把 fixtures 列入 norecursedirs（防误收集），显式传目录仍会被拦，
             # 统一清空兜底（pytest 行为：显式目录参数同样受 norecursedirs 过滤）
             "-o", "norecursedirs=",
+            # 清空继承的根 addopts（如主套件 -n auto）——内层场景必须串行，
+            # 否则嵌套 xdist worker 放大开销
+            "-o", "addopts=",
         ] for s in scenarios}
         return {"scenarios": scenarios, "argv": argv, "env": env,
                 "timeout": timeout, "skipped": skipped}

@@ -14,7 +14,7 @@ target:
                                             #   set DEEPSEEK_API_KEY=sk-xxx 后运行
 
 perf:                              # 复用 evalscope-perf 的 perf 配置段（同键同语义）
-  dataset: ./examples/data/business_qa.jsonl   # 或 prompt: 固定提示词（二选一）
+  dataset: ./examples/fixtures/business_qa.jsonl   # 或 prompt: 固定提示词（二选一）
   max_tokens: 1024                  # 标量定长（locust 侧无区间采样）
 
   mode: baseline                   # baseline / ramp / soak（probe 不支持——SLA 二分

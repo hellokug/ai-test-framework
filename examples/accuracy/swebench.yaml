@@ -11,7 +11,7 @@ description: >
 target:
   type: predictions_file
   params:
-    path: ./data/accuracy/swebench/predictions.jsonl
+    path: ./data/runs/swebench/predictions.jsonl
 
 datasets:
   - type: builtin

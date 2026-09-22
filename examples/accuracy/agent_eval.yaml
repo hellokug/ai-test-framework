@@ -18,7 +18,7 @@ target:
 
 datasets:
   - type: local
-    path: ./examples/data/agent_tasks.jsonl
+    path: ./examples/fixtures/agent_tasks.jsonl
   # 内置 agent 数据集（`aite dataset list` 查看）：
   #   gaia    — 通用助理任务、精确短答案（hf:gaia-benchmark/GAIA 抽样版）
   #   xlam_fc — 函数调用：工具选择 + 参数抽取（hf:Salesforce/xlam-function-calling-60k 抽样版）

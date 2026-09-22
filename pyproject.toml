@@ -78,6 +78,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "import-linter>=2.0",
+    "pytest-xdist>=3.5",
 ]
 
 [project.scripts]
@@ -95,7 +96,7 @@ include = ["aite", "examples", "docs", "tests", "README.md", "pyproject.toml"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -n 4"   # xdist 并行（实测 auto 在 Windows 上 worker 启动税反超收益）；单测调试 -n0 关闭
 # 默认值全集 + fixtures（防主套件误收集 tests/fixtures 下的离线场景用例，
 # pytest 子进程由适配器 argv 清空该选项兜底）。写全会替换默认值，勿删默认项。
 norecursedirs = [

@@ -11,7 +11,7 @@ target:
 
 datasets:
   - type: local
-    path: ./examples/data/business_qa.jsonl
+    path: ./examples/fixtures/business_qa.jsonl
     sample: {n: 8, seed: 7}
 
 metrics:

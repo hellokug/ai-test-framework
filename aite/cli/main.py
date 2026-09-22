@@ -87,7 +87,7 @@ def init(
     base.mkdir(parents=True, exist_ok=True)
     targets = {
         base / "quickstart.yaml": QUICKSTART_YAML,
-        base / "data" / "sample_qa.jsonl": SAMPLE_JSONL,
+        base / "data" / "datasets" / "accuracy" / "sample_qa.jsonl": SAMPLE_JSONL,
     }
     for path, content in targets.items():
         if path.exists() and not force:

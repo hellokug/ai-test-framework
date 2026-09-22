@@ -13,7 +13,7 @@ target:
 
 datasets:
   - type: local
-    path: ./data/sample_qa.jsonl
+    path: ./data/datasets/accuracy/sample_qa.jsonl
 
 metrics:
   - contains: {threshold: 0.6}       # 答案包含标准答案即通过（开放式 QA 宽松口径）

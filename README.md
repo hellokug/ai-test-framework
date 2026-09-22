@@ -114,7 +114,7 @@ aite run -c examples/swebench.yaml               # predictions_file → swe_reso
 ```
 
 值语义：1.0 resolved / 0.0 未解或空补丁（缺预测按未解）；harness 失败或基础设施
-错误记 None 跳过（宁缺毋错）。打分产物落 `data/accuracy/swebench/<run>/`（predictions/
+错误记 None 跳过（宁缺毋错）。打分产物落 `data/runs/swebench/<run>/`（predictions/
 logs/report），参数见 `examples/accuracy/swebench.yaml` 注释（dataset_name/timeout_s/
 work_dir/python_exe）。金补丁冒烟：predictions 只放一案 gold patch，预期该案
 resolve=1、其余缺预测=0。
@@ -291,7 +291,7 @@ evalscope 底层 `--duration` 为软退出：到点后不派新请求、在途�
 ```yaml
 # examples/perf/perf_evalscope.yaml（节选）
 perf:
-  dataset: ./examples/data/business_qa.jsonl
+  dataset: ./examples/fixtures/business_qa.jsonl
   max_tokens: [64, 128]
   mode: ramp
   ramp: {from: 1, to: 4, step: 3}
@@ -675,7 +675,7 @@ aite bench import r.json --format lm-eval                   # 层2 结果导入
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/          # 145 用例（引擎调度/规则指标/judge/安全/RAG/Web e2e 全 mock，无网络）
+pytest tests/          # 490 用例（xdist -n 4 并行；引擎调度/规则指标/judge/安全/RAG/Web e2e 全 mock，无网络）
 ruff check aite tests
 lint-imports           # 架构分层合同（pyproject [tool.importlinter]，分层/插件独立性机器化）
 ```
