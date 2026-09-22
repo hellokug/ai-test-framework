@@ -20,7 +20,7 @@ datasets:
     id: gsm8k
     sample: {n: 10, seed: 42}
   - type: local
-    path: ./examples/fixtures/business_qa.jsonl
+    path: ./data/datasets/debug/business_qa.jsonl
     limit: 5
 
 metrics:

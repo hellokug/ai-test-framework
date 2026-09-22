@@ -212,7 +212,11 @@ reports/
 
 # user datasets & external registry (regenerate via scripts/, e.g. scripts/convert_ceval.py)
 # 锚定仓库根目录：裸 data/ 会连带吞掉包内 aite/datasets/builtin/data/ 的新文件
-/data/
+/data/*
+# 调试用小数据集随仓库分发（examples 引用）；其余 data/ 内容（导入数据集/运行产物）不入库
+!/data/datasets/
+/data/datasets/*
+!/data/datasets/debug/
 
 # Claude Code local settings
 .claude/settings.local.json

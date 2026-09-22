@@ -11,7 +11,7 @@ target:                             # 复用平台统一 target 配置
 
 perf:
   # ---- 负载：数据集驱动（与 prompt 二选一）----
-  dataset: ./examples/fixtures/business_qa.jsonl   # 行数=条数；输入键同平台约定
+  dataset: ./data/datasets/debug/business_qa.jsonl   # 行数=条数；输入键同平台约定
   max_tokens: 1024            # 输出长度区间，每请求均匀采样；标量=定长
   # prompt: "..."                  # 简单场景用固定提示词（与 dataset 二选一）
 

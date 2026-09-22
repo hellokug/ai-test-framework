@@ -10,13 +10,12 @@ description: >
 target:
   type: openai_compatible
   base_url: http://localhost:11434/v1
-  model: qwen2.5:3b
+  model: qwen2.5:7b
   stream: false
 
 datasets:
   - type: local
-    path: ./examples/fixtures/rgb_openbook.jsonl   # 开卷版：文档组装进 prompt（测给定文档下的生成忠实度）
-    group_by: subset                     # 按子集分组：rejection 本就该低分（拒答测试），别和检索质量混看
+    path: ./data/datasets/debug/rgb_openbook.jsonl   # 开卷版：文档组装进 prompt（测给定文档下的生成忠实度）
   # 闭卷版（裸问答 + gold 文档打分）与更多 RAG 数据集：
   # crudrag（中文 RAG）/ hotpotqa / multihoprag（英文多跳）/
   # financebench（金融开放问答）/ 私域生成集（aite dataset gen-domain）
@@ -36,6 +35,25 @@ metrics:                                  # local 数据集无推荐指标，显
 # - answer_relevancy: {threshold: 0.3}
 # - context_recall: {threshold: 0.5}
 # - answer_correctness: {threshold: 0.4}
+
+# 独立判官：judges 注册的模型成为 gateway 缺省判定模型，
+# faithfulness / context_precision 的 LLM 判定自动改用它（判答分离，不再 3b 自评）
+judges:
+  - type: score
+    model:
+      type: openai_compatible
+      name: judge-deepseek                # gateway 内部别名
+      base_url: http://localhost:11434/v1
+      model: deepseek-r1:8b               # 本机 Ollama；judge 不设阈值=只出分不拦截
+      rate_limit: {rpm: 60}
+    rubric: >
+      评估回答对给定资料的忠实度与问题相关性，1-10 打分。
+      输出 JSON：{"score": <1-10>, "reasoning": "<一句话>"}
+  # 云端 DeepSeek 评分质量更好（r1:8b 是思考型模型，偶尔输出带 think 段）：
+  # 把上面 model 段换成：
+  #      base_url: https://api.deepseek.com
+  #      model: deepseek-chat
+  #      api_key_env: DEEPSEEK_API_KEY
 
 report: [rich, json, html]
 output_dir: ./reports

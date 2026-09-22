@@ -14,7 +14,7 @@ target:
 
 datasets:
   - type: local
-    path: ./examples/fixtures/business_qa.jsonl
+    path: ./data/datasets/debug/business_qa.jsonl
     sample: {n: 5, seed: 3}
     repeats: 4                           # 1 base + 3 重跑
     perturbations: [typo, paraphrase]

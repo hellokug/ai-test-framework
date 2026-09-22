@@ -291,7 +291,7 @@ evalscope 底层 `--duration` 为软退出：到点后不派新请求、在途�
 ```yaml
 # examples/perf/perf_evalscope.yaml（节选）
 perf:
-  dataset: ./examples/fixtures/business_qa.jsonl
+  dataset: ./data/datasets/debug/business_qa.jsonl
   max_tokens: [64, 128]
   mode: ramp
   ramp: {from: 1, to: 4, step: 3}
