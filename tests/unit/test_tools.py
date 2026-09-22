@@ -1,6 +1,7 @@
 """工具适配层单测（全离线：不 import evalscope、不触网）。"""
 
 import json
+import pathlib
 
 import pytest
 
@@ -229,3 +230,88 @@ async def test_tool_suite_carries_failure_details(repo, monkeypatch):
            "tools": {"datasets": ["gsm8k"]}}
     report = await run_tool_suite(raw, repo)
     assert report.details["failures"][0]["case"] == "yes_no"
+
+
+class TestEvalscopeSubprocess:
+    """独立环境执行模式：python_exe 指向 evalscope 专属 venv（py3.14 装不上
+    editdistance 实证），配置走文件契约、结果走既有 reports/*.json 收集。"""
+
+    def _req(self, tmp_path, extra=None):
+        from aite.tools.base import ToolRunRequest
+        return ToolRunRequest(
+            run_name="swe-eval", target={"model": "qwen2.5:3b",
+                                         "base_url": "http://localhost:11434/v1",
+                                         "api_key_env": "OLLAMA_KEY"},
+            datasets=["swe_bench_lite_agentic"], limit_per_subset=1,
+            work_dir=tmp_path, extra=extra or {})
+
+    def test_build_config_hides_reserved_keys(self, tmp_path):
+        """python_exe/timeout_s 是适配器保留键，不得泄漏进 TaskConfig。"""
+        from aite.tools.evalscope_adapter import EvalscopeAdapter
+        cfg = EvalscopeAdapter().build_config(
+            self._req(tmp_path, {"python_exe": "./.venv-evalscope/Scripts/python.exe",
+                                 "timeout_s": 14400, "use_cache": False}))
+        assert cfg["model"] == "qwen2.5:3b"
+        assert cfg["datasets"] == ["swe_bench_lite_agentic"]
+        assert "python_exe" not in cfg and "timeout_s" not in cfg
+
+    @pytest.mark.asyncio
+    async def test_run_via_subprocess_writes_and_collects(self, tmp_path, monkeypatch):
+        import json as _json
+
+        from aite.tools import evalscope_adapter as em
+
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            import subprocess
+            captured["cmd"] = cmd
+            cfg = _json.loads(pathlib.Path(cmd[3]).read_text(encoding="utf-8"))
+            assert cfg["datasets"] == ["swe_bench_lite_agentic"]
+            reports = pathlib.Path(kw["cwd"]) / "reports"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "qwen2.5_3b.json").write_text(_json.dumps({
+                "dataset_name": "swe_bench_lite_agentic", "score": 0.25,
+                "metrics": [{"name": "acc", "num": 1, "score": 0.25}],
+            }, ensure_ascii=False), encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(em.subprocess, "run", fake_run)
+        result = await em.EvalscopeAdapter().run(self._req(
+            tmp_path, {"python_exe": "py310-python", "timeout_s": 3600}))
+        cmd = captured["cmd"]
+        assert cmd[0] == "py310-python" and "-c" in cmd[:3]
+        assert any("run_task" in c for c in cmd)
+        assert result.raw_score["swe_bench_lite_agentic"] == 0.25
+        assert result.rows[0].dataset == "evalscope:swe_bench_lite_agentic"
+
+    @pytest.mark.asyncio
+    async def test_subprocess_failure_raises_with_tail(self, tmp_path, monkeypatch):
+        from aite.tools import evalscope_adapter as em
+
+        def fake_run(cmd, **kw):
+            import subprocess
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom: sandbox image pull denied")
+
+        monkeypatch.setattr(em.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError, match="sandbox image pull denied"):
+            await em.EvalscopeAdapter().run(self._req(
+                tmp_path, {"python_exe": "py310-python"}))
+
+    @pytest.mark.asyncio
+    async def test_in_process_fallback_when_no_python_exe(self, tmp_path, monkeypatch):
+        """无 python_exe 时维持原进程内路径（evalscope 可导入的环境）。"""
+        import sys
+        import types
+
+        from aite.tools import evalscope_adapter as em
+
+        called = {}
+
+        def fake_run_task(cfg):
+            called["cfg"] = cfg
+
+        stub = types.SimpleNamespace(run_task=fake_run_task)
+        monkeypatch.setitem(sys.modules, "evalscope", stub)
+        await em.EvalscopeAdapter().run(self._req(tmp_path))
+        assert called["cfg"]["model"] == "qwen2.5:3b"

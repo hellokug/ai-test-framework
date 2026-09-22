@@ -1,0 +1,32 @@
+module: accuracy
+run_name: swe-evalscope
+description: >
+  SWE-bench 场景 1 一条命令版：engine: evalscope 整场委托——平台任务编排下发，
+  evalscope 官方 agent 沙箱（内部逐实例起容器跑测试）驱动推理与判分，
+  aite 收口报告/入库/对比。模型在 target 段设置（本机 Ollama 冒烟 / 云端 API 真评）。
+
+engine: evalscope                  # 路由到 evalscope 引擎适配器
+
+target:                            # 被测模型端点（OpenAI 兼容）
+  type: openai_compatible
+  base_url: http://localhost:11434/v1
+  model: qwen2.5:3b                # 真实评测换 deepseek-chat 等 + api_key_env
+  api_key_env: OLLAMA_KEY          # Ollama 不校验，占位即可
+  stream: false
+
+tools:
+  datasets: [swe_bench_lite_agentic]   # evalscope 数据集名：swe_bench_verified_mini_agentic
+                                       #   （50 题精选）/ swe_bench_lite_agentic（300 题）等
+  limit_per_subset: 1                 # 每数据集实例数；首跑验证管线，真实评测去掉或加大
+  metric_thresholds: {acc: 0.3}       # acc 即 resolve rate（可 auto，可省略）
+  extra_args:
+    # evalscope 装在独立环境（本机 py3.14 装不上其依赖 editdistance）；
+    # 留空则要求 aite 环境自身可导入 evalscope
+    python_exe: ./.venv-evalscope/Scripts/python.exe
+    timeout_s: 14400                  # agent 任务子进程墙钟上限（缺省 4h）
+    # extra_params 原生透传（TaskConfig → dataset_args），如：
+    # extra_params: {build_docker_images: true, pull_remote_images_if_available: true}
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

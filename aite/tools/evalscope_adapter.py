@@ -11,8 +11,12 @@ reports/*.json + HTML；eval_backend 可选 Native/OpenCompass/VLMEvalKit/RAGEva
 
 from __future__ import annotations
 
+import asyncio
+import json
+import subprocess
 from typing import Any
 
+from aite import config
 from aite.tools.base import (
     ToolAdapter,
     ToolMetricRow,
@@ -57,6 +61,19 @@ def _normalize_metric_names(metric_list: list) -> list[str]:
 class EvalscopeAdapter(ToolAdapter):
     name = "evalscope"
 
+    # 适配器保留键（tools.extra_args 内）：不透传给 TaskConfig
+    RESERVED_KEYS = ("python_exe", "timeout_s")
+
+    # 独立环境子进程引导：配置经文件契约传入（零 CLI 旗标漂移风险），
+    # 报告由 collect() 按既有 reports/*.json 契约回收（原则 12）
+    RUN_TASK_BOOTSTRAP = """
+import json, sys
+from evalscope import run_task
+from evalscope.config import TaskConfig
+cfg = json.load(open(sys.argv[1], encoding="utf-8"))
+run_task(TaskConfig(**cfg))
+"""
+
     def build_config(self, req: ToolRunRequest) -> dict:
         url, api_key = api_endpoint(req.target)
         cfg: dict[str, Any] = {
@@ -71,14 +88,48 @@ class EvalscopeAdapter(ToolAdapter):
         }
         if req.limit_per_subset:
             cfg["limit"] = req.limit_per_subset
-        cfg.update(req.extra or {})   # eval_backend / generation_config 等原生参数透传
+        extra = {k: v for k, v in (req.extra or {}).items()
+                 if k not in self.RESERVED_KEYS}
+        cfg.update(extra)             # eval_backend / generation_config 等原生参数透传
         return cfg
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
-        from evalscope import run_task  # 进程内依赖；装在统一 conda 环境
-
+        python_exe = (req.extra or {}).get("python_exe")
+        if python_exe:
+            # agent 级长任务 + evalscope 独立环境（如 py3.10 venv）：子进程 + 文件契约
+            return await self._run_subprocess(req, str(python_exe))
+        try:
+            from evalscope import run_task  # 进程内依赖；装在统一 conda 环境
+        except ImportError as exc:
+            raise RuntimeError(
+                "evalscope 不可导入：安装到 aite 环境，或在 tools.extra_args."
+                f"python_exe 指向独立 evalscope 环境（原错误：{exc}）") from exc
         cfg = self.build_config(req)
         await run_sync_in_thread(run_task, cfg)
+        return self.collect(req)
+
+    async def _run_subprocess(self, req: ToolRunRequest, python_exe: str
+                              ) -> ToolRunResult:
+        cfg = self.build_config(req)
+        timeout_s = float((req.extra or {}).get("timeout_s")
+                          or config.DEFAULT_EVALSCOPE_TASK_TIMEOUT_S)
+        cfg_path = req.work_dir / "task_cfg.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [python_exe, "-c", self.RUN_TASK_BOOTSTRAP, str(cfg_path)],
+                capture_output=True, text=True, timeout=timeout_s,
+                cwd=str(req.work_dir))
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"evalscope task timed out after {timeout_s}s — "
+                "可用 tools.extra_args.timeout_s 调大") from exc
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "")[-800:]
+            raise RuntimeError(f"evalscope task failed: {tail}")
         return self.collect(req)
 
     def list_tasks(self) -> list[dict]:
