@@ -1,0 +1,29 @@
+module: accuracy
+run_name: swebench-online
+description: >
+  SWE-bench 场景 2：测试自研 agent——aite 逐案把 issue POST 给 agent 服务
+  （服务自己负责容器内 agent 循环并返回 diff），swe_resolution 照常判分。
+  与场景 1（predictions_file 离线）共用数据集与判卷指标，仅驱动方式不同。
+
+target:
+  type: custom_http
+  base_url: http://localhost:9000          # 你的 agent 服务
+  timeout_s: 3600                          # agent 循环耗时可达分钟级
+  template:
+    method: POST
+    path: /agent/run
+    body: '{"task": {{ case.input | tojson }}, "stream": false}'
+  extract: output                          # 期望返回 diff 文本
+
+datasets:
+  - type: builtin
+    id: swebench_lite
+    # sample: {n: 5, seed: 1}
+
+metrics:
+  - swe_resolution: {threshold: 0.5, model: self-agent}
+  - agent_efficiency: {expected_steps: 30}   # 在线驱动才有轨迹/步数
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}
