@@ -80,3 +80,40 @@ async def test_missing_file_is_explicit_error(tmp_path):
     conn = PredictionsFileConnector(config)
     resp = await conn.invoke(swe_case("x"), InvokeOptions())
     assert resp.error is not None and "not found" in resp.error
+
+
+@pytest.mark.asyncio
+async def test_accepts_json_dict_of_records(tmp_path):
+    """mini-swe-agent preds.json 形态：{instance_id: {记录}}。"""
+    pred = tmp_path / "preds.json"
+    pred.write_text(json.dumps({
+        "repo__r1": {"instance_id": "repo__r1", "model_patch": "diff-A"},
+        "repo__r2": {"instance_id": "repo__r2", "model_patch": "diff-B"},
+    }), encoding="utf-8")
+    conn = PredictionsFileConnector(TargetConfig(
+        type="predictions_file", params={"path": str(pred)}))
+    resp = await conn.invoke(swe_case("repo__r2"), InvokeOptions())
+    assert resp.output == "diff-B"
+
+
+@pytest.mark.asyncio
+async def test_accepts_json_dict_of_patch_strings(tmp_path):
+    """最简形态：{instance_id: "patch 字符串"}——键即 instance_id。"""
+    pred = tmp_path / "preds.json"
+    pred.write_text(json.dumps({"repo__r1": "diff-plain"}), encoding="utf-8")
+    conn = PredictionsFileConnector(TargetConfig(
+        type="predictions_file", params={"path": str(pred)}))
+    resp = await conn.invoke(swe_case("repo__r1"), InvokeOptions())
+    assert resp.output == "diff-plain"
+
+
+@pytest.mark.asyncio
+async def test_accepts_json_list(tmp_path):
+    """swebench 官方 .json 形态：list[record]。"""
+    pred = tmp_path / "preds.json"
+    pred.write_text(json.dumps([
+        {"instance_id": "repo__r1", "model_patch": "diff-list"}]), encoding="utf-8")
+    conn = PredictionsFileConnector(TargetConfig(
+        type="predictions_file", params={"path": str(pred)}))
+    resp = await conn.invoke(swe_case("repo__r1"), InvokeOptions())
+    assert resp.output == "diff-list"

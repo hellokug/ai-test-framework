@@ -46,21 +46,39 @@ class PredictionsFileConnector(TargetSystem):
         self._mtime: float | None = None
 
     def _load(self) -> dict[str, dict[str, Any]]:
-        """JSONL → key_field 索引；mtime 变化即重读（同一进程内可换文件续跑）。"""
+        """predictions 文件 → key_field 索引；mtime 变化即重读（同一进程内可换文件续跑）。
+
+        两种格式（swebench predictions 契约）：`.jsonl` 逐行一条记录；
+        `.json` 为 list[record] 或 `{instance_id: record}`（值也可直接是补丁
+        字符串，如 mini-swe-agent 的 preds.json）。
+        """
         if not self.path.exists():
             raise FileNotFoundError(f"predictions file not found: {self.path}")
         mtime = self.path.stat().st_mtime
         if self._records is None or mtime != self._mtime:
             records: dict[str, dict[str, Any]] = {}
-            with self.path.open(encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
+            if self.path.suffix.lower() == ".json":
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                pairs = data.items() if isinstance(data, dict) else (
+                    (None, rec) for rec in data)
+                for fallback_key, rec in pairs:
+                    if isinstance(rec, str):   # {id: patch} 最简形态
+                        rec = {self.patch_field: rec}
+                    if not isinstance(rec, dict):
                         continue
-                    rec = json.loads(line)
-                    key = rec.get(self.key_field)
+                    key = rec.get(self.key_field, fallback_key)
                     if key is not None:
                         records[str(key)] = rec
+            else:
+                with self.path.open(encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        rec = json.loads(line)
+                        key = rec.get(self.key_field)
+                        if key is not None:
+                            records[str(key)] = rec
             self._records, self._mtime = records, mtime
         return self._records
 

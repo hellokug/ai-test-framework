@@ -11,6 +11,8 @@ description: >
 target:
   type: predictions_file
   params:
+    # harness 批量产物直接指进来：mini-swe-agent 的 preds.json（{id: 补丁} 或
+    # list/dict 记录）、DeepSeek Harness/SWE-agent 的 predictions 文件均可
     path: ./data/runs/swebench/predictions.jsonl
 
 datasets:
