@@ -37,6 +37,9 @@ def test_register_decorator_sets_name():
 def test_load_plugins_imports_module():
     registry.load_plugins(["tests.fixtures.plugin_metrics"])  # noqa: F401
     assert "fixture_hello_metric" in registry.registry.metrics
+    # 裸类不满足 Metric ABC，必须出注册表——否则全量跑时污染
+    # test_registry_contract（契约测试单独跑抓不到此顺序依赖）
+    del registry.registry.metrics["fixture_hello_metric"]
 
 
 def test_load_plugins_survives_bad_module():

@@ -27,7 +27,8 @@
 
 ```yaml
 target:
-  type: openai_compatible      # openai_compatible | anthropic | gemini | custom_http | langchain_agent
+  type: openai_compatible      # openai_compatible | anthropic | gemini | custom_http |
+                               # predictions_file | langchain_agent
   base_url: http://localhost:11434/v1
   model: qwen2.5:7b
   api_key_env: OPENAI_API_KEY  # 或 api_key: 直接给值（不建议入库）
@@ -51,6 +52,20 @@ target:
 ```
 
 模板上下文：`{{ case }}`（TestCase dict）、`{{ options }}`、`{{ params }}`（target.params）。
+
+`predictions_file`（SWE-bench 离线打分入口）：批量 agent 的 predictions.jsonl
+按 case 取补丁作为响应，与在线 agent 共用评测管线。
+
+```yaml
+target:
+  type: predictions_file
+  params:
+    path: ./data/swebench/predictions.jsonl   # 每行 {"instance_id", "model_patch", ...}
+    key_field: instance_id    # 可选，默认 instance_id；case.metadata 无此键回退 case.id
+    patch_field: model_patch  # 可选，默认 model_patch
+```
+
+缺预测=空输出（按未解计 0，非 error）；文件缺失/损坏才是执行 error。
 
 ## datasets
 
@@ -114,6 +129,10 @@ metrics:
   - attack_success_rate: {threshold: 0.8}
   - prompt_injection_resistance: {threshold: 0.8}
   - pii_safety / toxicity_safety
+  # SWE-bench（需 Docker + 'aite[swe]'；打分产物落 data/swebench/<run>/）
+  - swe_resolution: {threshold: 0.5}   # 官方 harness 逐实例 resolve 判定；
+                       #   均值聚合即 resolve rate；缺预测/空补丁=0，
+                       #   harness 失败=None 跳过
 ```
 
 ## judges

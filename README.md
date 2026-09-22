@@ -36,10 +36,11 @@ aite serve                      # Web 平台 http://127.0.0.1:8300
 | `judge_example.yaml` | LLM-as-a-Judge：score / pairwise(位置偏差双向) / multi(一致性) |
 | `rag_eval.yaml` | RAG：context precision/recall、hit@k、faithfulness、引用准确率 |
 | `agent_eval.yaml` | Agent：tool_call_correctness、task_completion、效率（HTTP trace 约定） |
+| `swebench.yaml` | SWE-bench 离线打分：predictions_file + swe_resolution（金补丁冒烟，需 Docker） |
 | `reliability.yaml` | 可靠性：repeats 重跑一致率 + 扰动鲁棒性 |
 | `safety.yaml` | 安全：越狱 ASR、提示注入抗性、PII 泄露、毒性 |
 
-## 评测维度（内置 41 指标 + 3 类 Judge）
+## 评测维度（内置 65 指标 + 3 类 Judge）
 
 内置数据集带推荐指标（含默认阈值），可直接 `metrics: auto` 自动填充：
 
@@ -62,12 +63,15 @@ metrics: auto        # 自动展开为 exact_match {threshold: 0.5, extract: num
   （引擎物化 repeats/perturbations 衍生用例并聚合归原）
 - **安全**：attack_success_rate(1-ASR)、prompt_injection_resistance、pii_leakage、
   toxicity（judge+分类器+正则混合判定，内置中英攻击集）
+- **代码智能**：swe_resolution（SWE-bench 逐实例 resolve 判定，均值即 resolve rate；
+  官方 harness 子进程打分，需 Docker + `aite[swe]`）
 
 ## 连接器
 
 `openai_compatible`（OpenAI/DeepSeek/Qwen/vLLM/Ollama，流式 TTFT）、`anthropic`、
-`gemini`、`custom_http`（jinja2 模板 + JSON 路径提取）、`langchain_agent`
-（需 `aite[agent]`，BaseCallbackHandler 捕获轨迹）。
+`gemini`、`custom_http`（jinja2 模板 + JSON 路径提取）、`predictions_file`
+（本地 predictions.jsonl 查补丁——批量 agent 的离线产物走同一条评测管线）、
+`langchain_agent`（需 `aite[agent]`，BaseCallbackHandler 捕获轨迹）。
 
 ## 离线数据集导入（HF → builtin）
 
@@ -94,6 +98,26 @@ aite dataset show functional:my-scene / aite dataset rm <ref>
 自研引擎套件用 catalog 引用 `datasets: [{ref: <名>}]`；`add-hf` 自动登记为
 accuracy 型，perf 场景生成（REST）自动登记为 perf 型。契约：功能性=行为规约
 （请求+断言）、精度=题库（含标准答案）、性能=流量特征（分布语义无关，生成产物）。
+
+## SWE-bench 离线打分（resolve rate）
+
+被测对象是「agent harness × 模型」组合：批量 agent（DeepSeek Harness /
+mini-swe-agent / SWE-agent 等）自跑 SWE-bench 产出 `predictions.jsonl`，
+aite 收口打分、报告与跨 run 对比——打分调官方 harness（CLI 子进程 + 文件契约，
+每实例起容器跑仓库测试，**需本机 Docker**，Windows 走 WSL2）。
+
+```bash
+pip install 'aite[swe]'                          # swebench>=5.0；国内网络同设 HF_ENDPOINT
+aite dataset add-hf SWE-bench/SWE-bench_Lite --name swebench_lite \
+    --fields input=problem_statement -n 8        # 实例入库（instance_id/patch 等进 metadata）
+aite run -c examples/swebench.yaml               # predictions_file → swe_resolution
+```
+
+值语义：1.0 resolved / 0.0 未解或空补丁（缺预测按未解）；harness 失败或基础设施
+错误记 None 跳过（宁缺毋错）。打分产物落 `data/swebench/<run>/`（predictions/
+logs/report），参数见 `examples/swebench.yaml` 注释（dataset_name/timeout_s/
+work_dir/python_exe）。金补丁冒烟：predictions 只放一案 gold patch，预期该案
+resolve=1、其余缺预测=0。
 
 ## 外部评测工具（平台化：精度跑分委托专业工具）
 

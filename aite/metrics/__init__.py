@@ -13,4 +13,5 @@ from aite.metrics import (  # noqa: F401
     reliability,
     rules,
     safety,
+    swebench,
 )

@@ -49,6 +49,11 @@ bench = [
     "datasets>=2.19",
     "huggingface_hub>=0.23",
 ]
+# SWE-bench 打分（swe_resolution 指标）：harness 以 CLI 子进程调用，
+# aite 不 import 其 API；打分另需本机 Docker（Linux x86_64 镜像）。
+swe = [
+    "swebench>=5.0",
+]
 # 通用 HTTP 压测（engine: locust）：locust 子进程执行，aite 不直接依赖其 API。
 locust = [
     "locust>=2.20",

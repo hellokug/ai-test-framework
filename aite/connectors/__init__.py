@@ -1,8 +1,14 @@
 """Builtin connectors. Importing this module registers all builtin components."""
 
-from aite.connectors import anthropic, custom_http, gemini, openai_compatible  # noqa: F401
+from aite.connectors import (  # noqa: F401
+    anthropic,
+    custom_http,
+    gemini,
+    openai_compatible,
+    predictions_file,
+)
 
-__all__ = ["openai_compatible", "anthropic", "gemini", "custom_http"]
+__all__ = ["openai_compatible", "anthropic", "gemini", "custom_http", "predictions_file"]
 
 
 def try_register_agent_connectors() -> list[str]:
