@@ -110,10 +110,14 @@ run_task(TaskConfig(**cfg))
 
     async def _run_subprocess(self, req: ToolRunRequest, python_exe: str
                               ) -> ToolRunResult:
+        # 子进程 cwd 切进 work_dir，配置与产物一律绝对路径（相对路径会在
+        # 切换后的 cwd 下二次拼接——首跑实弹教训）
+        work_dir = req.work_dir.resolve()
         cfg = self.build_config(req)
+        cfg["work_dir"] = str(work_dir)
         timeout_s = float((req.extra or {}).get("timeout_s")
                           or config.DEFAULT_EVALSCOPE_TASK_TIMEOUT_S)
-        cfg_path = req.work_dir / "task_cfg.json"
+        cfg_path = work_dir / "task_cfg.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                             encoding="utf-8")
@@ -122,7 +126,7 @@ run_task(TaskConfig(**cfg))
                 subprocess.run,
                 [python_exe, "-c", self.RUN_TASK_BOOTSTRAP, str(cfg_path)],
                 capture_output=True, text=True, timeout=timeout_s,
-                cwd=str(req.work_dir))
+                cwd=str(work_dir))
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
                 f"evalscope task timed out after {timeout_s}s — "

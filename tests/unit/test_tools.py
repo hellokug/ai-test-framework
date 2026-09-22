@@ -266,8 +266,10 @@ class TestEvalscopeSubprocess:
         def fake_run(cmd, **kw):
             import subprocess
             captured["cmd"] = cmd
+            assert pathlib.Path(cmd[3]).is_absolute(), "cwd 切换后相对路径会错位"
             cfg = _json.loads(pathlib.Path(cmd[3]).read_text(encoding="utf-8"))
             assert cfg["datasets"] == ["swe_bench_lite_agentic"]
+            assert pathlib.Path(cfg["work_dir"]).is_absolute()
             reports = pathlib.Path(kw["cwd"]) / "reports"
             reports.mkdir(parents=True, exist_ok=True)
             (reports / "qwen2.5_3b.json").write_text(_json.dumps({
