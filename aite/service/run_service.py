@@ -77,7 +77,7 @@ async def execute_suite(
         from aite.tools import run_tool_suite
 
         if not chaos_raw:
-            return await run_tool_suite(raw, repo)
+            return await run_tool_suite(raw, repo, event_cb=event_cb)
 
         from aite.chaos import run_with_chaos
         from aite.tools import execute_tool, persist_tool_result

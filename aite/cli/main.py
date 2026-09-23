@@ -137,12 +137,19 @@ def run(
     storage_url = (sreq.config.storage.url if sreq.config
                    else storage_url_of(raw))
 
+    def _tool_progress(ev: dict) -> None:
+        """工具引擎运行期进度（evalscope 等）：日志解析出的 done/total 实时打印。"""
+        if quiet:
+            return
+        console.print(f"[dim]  {ev.get('phase', 'progress')}: "
+                      f"{ev.get('done', '?')}/{ev.get('total', '?')}[/dim]")
+
     async def _run() -> int:
         async with repo_session(storage_url) as repo:
             report = await execute_suite(
                 raw, repo, limit=limit, dataset_ids=dataset_ids,
                 concurrency=concurrency, max_cost_usd=max_cost_usd,
-                report_formats=report_formats,
+                report_formats=report_formats, event_cb=_tool_progress,
                 progress=None if quiet else RichProgressReporter())
             _print_report_summary(report)
             return report.exit_code
@@ -153,7 +160,10 @@ def run(
 def _print_report_summary(report) -> None:
     from rich.markup import escape
 
-    table = Table(title=f"{report.run_name} [{report.status}]", show_lines=False)
+    from aite.core.aggregator import execution_status
+
+    table = Table(title=f"{report.run_name} [评估 {report.status} · 执行 {execution_status(report)}]",
+                  show_lines=False)
     for col in ("metric", "value", "threshold", "result", "reports"):
         table.add_column(col)
     for s in report.summaries:
@@ -167,9 +177,13 @@ def _print_report_summary(report) -> None:
             "",
         )
     console.print(table)
+    if any(s.passed is None for s in report.summaries
+           if s.dataset is None and s.group is None):
+        console.print("  [dim]说明: result 为 '-' 的指标未配置阈值，仅记录不参与判定"
+                      "（如 score = judge 对回答质量的 1-10 评分归一化）[/dim]")
     failures = report.details.get("failures") or []
     if failures:
-        console.print(f"  失败详情（{len(failures)} 例；完整信息见 junit/log 报告）:")
+        console.print(f"  执行失败详情（{len(failures)} 例；完整信息见 junit/log 报告）:")
         for f in failures[:20]:
             console.print(f"    [red]✗[/red] {escape(f['dataset'])}::{escape(f['case'])}")
             for line in str(f.get("detail", "")).splitlines()[:5]:
@@ -177,6 +191,30 @@ def _print_report_summary(report) -> None:
                     console.print(f"      {escape(line)}")
         if len(failures) > 20:
             console.print(f"    …… 其余 {len(failures) - 20} 例见 junit 报告")
+    # 评估未通过的 case：输入/输出/预期/原因（完整版见 HTML 报告 Failing cases）
+    payloads = (report.details or {}).get("case_payloads") or {}
+    thresholds = {s.metric: s.threshold for s in report.summaries}
+    eval_failed = [r for r in report.case_metrics if r.passed is False]
+
+    def flat(text: str, limit: int) -> str:
+        """多行内容压成单行摘要（prompt 里的换行会让表格明细断行难读）。"""
+        return escape(" ".join(text.split())[:limit])
+
+    if eval_failed:
+        console.print(f"  评估未通过明细（{len(eval_failed)} 条判定；"
+                      f"完整判官证据见 HTML 报告 Failing cases）:")
+        for r in eval_failed[:10]:
+            p = payloads.get(r.case_id) or {}
+            console.print(f"    [red]✗[/red] {escape(r.case_id)}::{escape(r.metric)} "
+                          f"value={r.value} 阈值={thresholds.get(r.metric)}")
+            if p.get("input"):
+                console.print(f"      输入: {flat(p['input'], 120)}")
+            if p.get("output"):
+                console.print(f"      输出: {flat(p['output'], 160)}")
+            if p.get("expected"):
+                console.print(f"      预期: {flat(p['expected'], 120)}")
+        if len(eval_failed) > 10:
+            console.print(f"    …… 其余 {len(eval_failed) - 10} 条见 HTML 报告")
     reports = report.details.get("reports") or {}
     for fmt, path in reports.items():
         console.print(f"  report [{fmt}]: {path}")

@@ -3,16 +3,38 @@
 > 约定：每完成或变更一项，立即更新对应条目与文末进度记录。
 > 顺序原则：核心功能优先，前端体验最后。
 
-## 架构定位（2026-09-01 重定：平台化）
+## 架构定位（2026-09-01 重定：平台化；2026-09-23 收紧：不造任何评估指标）
 
-**aite 是评测平台，不是评测引擎。** 精度基准跑分委托给专业工具
-（evalscope / opencompass / lm-eval），平台核心价值 = 数据集管理 + 工具编排 +
-结果统一。已确认的决策：
+**aite 是测试框架 / 评测编排平台，不是评测引擎，不造任何评估指标。**
+评测能力一律来自集成开源引擎，平台核心价值 = 数据集管理 + 工具编排 +
+开源入口统一收口 + 开源输出统一格式化。已确认的决策：
 
-- 自研引擎**保留作补充**：性能延迟、安全探针、RAG、judge 闭环等外部工具
-  覆盖不到的维度；精度基准（mmlu/ceval/gsm8k 跑分）走外部工具
+- （2026-09-23 用户确认，覆盖下一条的部分口径）**不造任何评估指标**：指标算法
+  一律委托开源引擎（evalscope / lm-eval / ragas / deepeval / swebench harness /
+  locust / pytest…），新增评测能力 = 在 aite/tools/ 新增适配器；aite/metrics/
+  冻结，不再新写指标算法
+- ~~自研引擎**保留作补充**~~（2026-09-23 起收缩为存量兼容）：性能延迟、安全探针、
+  RAG、judge 闭环等自研指标不再扩展，存量保留至迁移完成
 - 首个接入 **evalscope**（pip 轻、Python API、原生 OpenAI 兼容端点、中文基准全）
 - 执行形态：**进程内 Python API**（依赖版本冲突用隔离策略解决）
+
+### 存量自研指标迁移（2026-09-23 立项，未排期）
+
+`aite/metrics/` 约 2100 行自研实现与新定位冲突，典型：RAGAS 五件套手工重实现
+（`ragas_metrics.py` 模块头自述「RAGAS 五件套在本框架的对应实现」；
+`examples/accuracy/ragas.yaml` 名为 ragas 实则未调用 ragas 库）、BLEU/ROUGE-L/
+chrF 手写（`nlp_stats.py` + `utils/text.py`）、hash embedding 回退
+（`embedding.py`）、自研 judge prompt（`judge/`）、内置安全攻击集（`safety.py`）。
+迁移方向（每项 = 接开源引擎适配器 + 存量指标标记 deprecated + 报告兼容过渡，
+实施前逐项对齐）：
+
+- [ ] RAG 五件套 → ragas（或 evalscope RAGEval 后端）替换 rag_metrics/ragas_metrics
+- [ ] Judge 三件（score/pairwise/multi）→ 评估 deepeval 等开源 judge 框架
+- [ ] 统计类（BLEU/ROUGE-L/token F1）→ sacrebleu / 所接引擎自带口径，自研实现下线
+- [ ] 安全 → 评估开源安全评测引擎（garak 类）
+- [ ] 精度基准 → 已由 evalscope / lm-eval 集成覆盖，自研引擎降级为存量兼容
+- [ ] Agent/可靠性自研指标（agent_metrics/reliability）→ 随所接开源框架评估去留
+- 性能指标聚合（performance.py）与工具域收集属「输出统一格式化」，不在迁移范围
 
 ## v1 目标（2026-08-28 重定）
 
@@ -528,3 +550,7 @@ locust 首跑同一教训）。
 - 2026-09-23 启动收敛补全（用户发现 runs 页多条 swe-evalscope 卡 running）——原则 8 的最后一处缺口：后台任务早有 mark_stale_bg_tasks 启动关账，但 **run 行无人收敛**（跨天累积：被强杀 serve 的 in-flight run、并行会话的 smoke-fail-visibility 四条等全部永久 running）。修法不动契约（仅用既有 list_runs/update_run）：service 层新增 `close_interrupted_runs(repo)`——单写者进程重启后 running 态 run 不可能存活，统一关账 error；接线 web AppState.startup（mark_stale_bg_tasks 之后）。重启实证：历史 6 条卡死 running 全部收敛、running 剩余 0。测试 +2（收敛/无残留不写库），502 passed + ruff clean + lint-imports 2 kept 0 broken。
 
 - 2026-09-23（续）evalscope 环境完备清单定型（实弹逐层点亮）：.venv-evalscope = py3.10 + evalscope 1.12.0 + swebench==4.1.0（官方钉版）+ resource.py no-op shim（Windows 顶层导入）+ `evalscope[sandbox]` 附加包（ms_enclave，agent 沙箱环境缺它 ImportError）。链路实证至 agent 循环运行：平台下发 → 数据集加载（HF 镜像）→ 实例镜像拉取（swebench 官方 DockerHub 命名空间，本机镜像源慢拉可行）→ SandboxService docker 引擎启动 → 模型 openai_api（Ollama qwen2.5:3b）agent 循环进行中。镜像代理预拉 + retag 模式对 evalscope 拉取同样适用（首实例 astropy 慢拉约 9 分钟）。
+
+- 2026-09-23 **定位收紧：不造任何评估指标**（用户确认，覆盖 2026-09-01「自研引擎保留作补充」）。全库审计结论：工程域（evalscope / pytest / evalscope-perf / locust / swebench 五个适配器，入口收口 + 输出归一）符合定位；`aite/metrics/` 约 2100 行为平台化决策前（08-28~09-01 期间）的历史存量，与新定位冲突——RAGAS 五件套手工重实现、BLEU/ROUGE-L 手写、hash embedding 回退、自研 judge prompt、内置安全攻击集；`examples/accuracy/ragas.yaml` 名为 ragas 实未调用 ragas 库。落地：定位红线写入 CLAUDE.md「架构与目标」与 README 顶部（含存量说明）；aite/metrics/ 冻结不扩展；立项「存量自研指标迁移」（见架构定位节，未排期，方向 ragas/deepeval/sacrebleu/安全引擎），每项实施前单独对齐。
+
+- 2026-09-23 工具引擎运行期进度可见性（用户需求：running 期间前端/CLI 什么都不展示，不知道总用例数与当前用例）：①ToolRunRequest 增 `progress_cb` 可选回调（additive，既有适配器零影响）；②evalscope 子进程从阻塞 run 改为 Popen + 轮询——增量读 evalscope 自写 logs/eval_log.log，正则解析 tqdm 进度行（Evaluating/Running 的 done/total）→ progress 事件，stdout/stderr 落 proc_*.log 文件（超时/失败取尾，不再 PIPE 撑爆风险）；③run_tool_suite 接收 event_cb（service execute_suite 工具分支此前直接丢弃）——事件同形转发（原生引擎 progress 事件形状，前端零改动），total 已知即异步回写 run 行 total_cases；CLI run 工具分支实时打印进度行（--quiet 静默）。实测：SSE 流出 {"type":"progress","phase":"Evaluating[swe_bench_lite_agentic]","done":0,"total":1}、run 行 total_cases=1。测试 +6（解析/转发/total 回写/Popen 桩重构），504 passed + ruff clean + lint-imports 2 kept 0 broken。悬留：swe_bench agentic 报告 json 与 collect 的字段级兼容核验（实例跑完后）。

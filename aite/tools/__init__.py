@@ -7,6 +7,9 @@ Web 趋势中并列可比。无 engine 字段的 suite 走自研引擎，行为�
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -242,8 +245,14 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
     return report
 
 
-async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
-    """本地执行工具型 suite：先建 run 行（running 可见）→ 执行 → 入库。"""
+async def run_tool_suite(raw: dict, repo: Any,
+                         event_cb: Callable[[dict], None] | None = None
+                         ) -> RunReport:
+    """本地执行工具型 suite：先建 run 行（running 可见）→ 执行 → 入库。
+
+    event_cb：运行期进度事件出口（Web SSE / CLI 打印共用）；适配器经
+    req.progress_cb 回传（如 evalscope 日志解析出的 done/total），total
+    已知即回写 run 行 total_cases。"""
     engine_name = raw.get("engine")
     req, cfg_snapshot = parse_tool_suite(raw)
     report = RunReport(
@@ -253,9 +262,32 @@ async def run_tool_suite(raw: dict, repo: Any) -> RunReport:
     suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)
     run_id = await repo.create_run(req.run_name, cfg_snapshot, suite_id)
     report.run_id = run_id
+    last_total: int | None = None
+    bg_updates: set[asyncio.Task] = set()
+
+    def progress_cb(ev: dict) -> None:
+        """适配器进度事件 → event_cb（SSE/CLI）+ total 已知即异步回写 run 行。"""
+        nonlocal last_total
+        if event_cb:
+            event_cb(ev)
+        total = ev.get("total")
+        if total and total != last_total:
+            last_total = total
+
+            async def _write_total():
+                with contextlib.suppress(Exception):
+                    await repo.update_run(run_id, total_cases=int(total))
+
+            task = asyncio.create_task(_write_total())
+            bg_updates.add(task)
+            task.add_done_callback(bg_updates.discard)
+
+    req.progress_cb = progress_cb
     try:
         adapter = get_tool(engine_name)
         result = await adapter.run(req)
+        if bg_updates:
+            await asyncio.gather(*bg_updates, return_exceptions=True)
         return await persist_tool_result(raw, repo, result, req.work_dir, run_id=run_id)
     except Exception as exc:  # noqa: BLE001 - run-level failure must be persisted
         logger.exception("tool run failed")

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 from typing import Any
 
@@ -56,6 +57,19 @@ def _normalize_metric_names(metric_list: list) -> list[str]:
         elif isinstance(m, dict):
             names.extend(m.keys())
     return ["mean_acc" if n == "acc" else n for n in names]
+
+
+_PROGRESS_RE = re.compile(
+    r"(Evaluating\[[^\]]*\]|Running\[[^\]]*\])\s+\d+%\|\s*(\d+)/(\d+)")
+
+
+def parse_progress(line: str) -> dict | None:
+    """evalscope 日志行 → 进度事件（与原生引擎 progress 事件同形，前端零改动）。"""
+    m = _PROGRESS_RE.search(line)
+    if not m:
+        return None
+    return {"type": "progress", "phase": m.group(1),
+            "done": int(m.group(2)), "total": int(m.group(3))}
 
 
 @register_tool("evalscope")
@@ -111,6 +125,11 @@ run_task(TaskConfig(**cfg))
 
     async def _run_subprocess(self, req: ToolRunRequest, python_exe: str
                               ) -> ToolRunResult:
+        await self._run_subprocess_impl(req, python_exe)
+        return self.collect(req)
+
+    async def _run_subprocess_impl(self, req: ToolRunRequest, python_exe: str
+                                   ) -> None:
         # 子进程 cwd 切进 work_dir，配置与产物一律绝对路径（相对路径会在
         # 切换后的 cwd 下二次拼接——首跑实弹教训）
         work_dir = req.work_dir.resolve()
@@ -125,20 +144,40 @@ run_task(TaskConfig(**cfg))
         # 中文 Windows 保命：docker-py/工具链读 UTF-8 文件（如 docker context
         # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正
         env = {**os.environ, "PYTHONUTF8": "1"}
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run,
+        log_path = work_dir / "logs" / "eval_log.log"   # evalscope 自写日志
+        stdout_path = work_dir / "proc_stdout.log"
+        stderr_path = work_dir / "proc_stderr.log"
+        with stdout_path.open("wb") as out_fh, stderr_path.open("wb") as err_fh:
+            # 句柄仅 spawn 需要（子进程自行持有副本），随后即可关闭
+            proc = subprocess.Popen(
                 [python_exe, "-c", self.RUN_TASK_BOOTSTRAP, str(cfg_path)],
-                capture_output=True, text=True, timeout=timeout_s,
-                cwd=str(work_dir), env=env)
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"evalscope task timed out after {timeout_s}s — "
-                "可用 tools.extra_args.timeout_s 调大") from exc
+                cwd=str(work_dir), env=env, stdout=out_fh, stderr=err_fh)
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        offset = 0
+        try:
+            while proc.poll() is None:
+                if asyncio.get_event_loop().time() > deadline:
+                    proc.kill()
+                    raise RuntimeError(
+                        f"evalscope task timed out after {timeout_s}s — "
+                        "可用 tools.extra_args.timeout_s 调大")
+                if req.progress_cb and log_path.exists():
+                    with log_path.open(encoding="utf-8", errors="replace") as fh:
+                        fh.seek(offset)
+                        new_text = fh.read()
+                        offset = fh.tell()
+                    for line in new_text.splitlines():
+                        ev = parse_progress(line)
+                        if ev:
+                            req.progress_cb(ev)
+                await asyncio.sleep(3)
+        except BaseException:
+            proc.kill()
+            raise
         if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "")[-800:]
+            tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-800:] \
+                or stdout_path.read_text(encoding="utf-8", errors="replace")[-800:]
             raise RuntimeError(f"evalscope task failed: {tail}")
-        return self.collect(req)
 
     def list_tasks(self) -> list[dict]:
         """枚举 evalscope 全部基准：name/metrics/tags/few_shot_num/subsets。"""

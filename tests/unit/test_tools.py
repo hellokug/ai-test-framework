@@ -263,23 +263,32 @@ class TestEvalscopeSubprocess:
 
         captured = {}
 
-        def fake_run(cmd, **kw):
-            import subprocess
-            captured["cmd"] = cmd
-            assert pathlib.Path(cmd[3]).is_absolute(), "cwd 切换后相对路径会错位"
-            cfg = _json.loads(pathlib.Path(cmd[3]).read_text(encoding="utf-8"))
-            assert cfg["datasets"] == ["swe_bench_lite_agentic"]
-            assert pathlib.Path(cfg["work_dir"]).is_absolute()
-            assert kw["env"]["PYTHONUTF8"] == "1"   # 中文 Windows GBK 解码防御
-            reports = pathlib.Path(kw["cwd"]) / "reports"
-            reports.mkdir(parents=True, exist_ok=True)
-            (reports / "qwen2.5_3b.json").write_text(_json.dumps({
-                "dataset_name": "swe_bench_lite_agentic", "score": 0.25,
-                "metrics": [{"name": "acc", "num": 1, "score": 0.25}],
-            }, ensure_ascii=False), encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        class FakePopen:
+            def __init__(self, cmd, **kw):
+                captured["cmd"] = cmd
+                self.returncode = None
+                assert pathlib.Path(cmd[3]).is_absolute(), "cwd 切换后相对路径会错位"
+                cfg = _json.loads(pathlib.Path(cmd[3]).read_text(encoding="utf-8"))
+                assert cfg["datasets"] == ["swe_bench_lite_agentic"]
+                assert pathlib.Path(cfg["work_dir"]).is_absolute()
+                assert kw["env"]["PYTHONUTF8"] == "1"   # 中文 Windows GBK 解码防御
+                reports = pathlib.Path(kw["cwd"]) / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / "qwen2.5_3b.json").write_text(_json.dumps({
+                    "dataset_name": "swe_bench_lite_agentic", "score": 0.25,
+                    "metrics": [{"name": "acc", "num": 1, "score": 0.25}],
+                }, ensure_ascii=False), encoding="utf-8")
+                stderr = pathlib.Path(kw["cwd"]) / "proc_stderr.log"
+                stderr.write_text("ok", encoding="utf-8")
+                self.returncode = 0   # 立即退出
 
-        monkeypatch.setattr(em.subprocess, "run", fake_run)
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(em.subprocess, "Popen", FakePopen)
         result = await em.EvalscopeAdapter().run(self._req(
             tmp_path, {"python_exe": "py310-python", "timeout_s": 3600}))
         cmd = captured["cmd"]
@@ -292,11 +301,22 @@ class TestEvalscopeSubprocess:
     async def test_subprocess_failure_raises_with_tail(self, tmp_path, monkeypatch):
         from aite.tools import evalscope_adapter as em
 
-        def fake_run(cmd, **kw):
-            import subprocess
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom: sandbox image pull denied")
+        class FailPopen:
+            def __init__(self, cmd, **kw):
+                import pathlib
+                self.returncode = None
+                stderr = pathlib.Path(kw["cwd"]) / "proc_stderr.log"
+                stderr.parent.mkdir(parents=True, exist_ok=True)
+                stderr.write_text("boom: sandbox image pull denied", encoding="utf-8")
+                self.returncode = 1
 
-        monkeypatch.setattr(em.subprocess, "run", fake_run)
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(em.subprocess, "Popen", FailPopen)
         with pytest.raises(RuntimeError, match="sandbox image pull denied"):
             await em.EvalscopeAdapter().run(self._req(
                 tmp_path, {"python_exe": "py310-python"}))
@@ -318,3 +338,73 @@ class TestEvalscopeSubprocess:
         monkeypatch.setitem(sys.modules, "evalscope", stub)
         await em.EvalscopeAdapter().run(self._req(tmp_path))
         assert called["cfg"]["model"] == "qwen2.5:3b"
+
+
+class TestProgressParsing:
+    """evalscope 日志进度解析 + 事件回传（前端/CLI 运行期可见性）。"""
+
+    def test_parse_progress_lines(self):
+        from aite.tools.evalscope_adapter import parse_progress
+        lines = [
+            "2026-09-23 22:25:16 - evalscope - INFO: Evaluating[swe_bench_lite_agentic] 100%| 1/1 [Elapsed: 00:00]",
+            "2026-09-23 22:25:16 - evalscope - INFO: Running[eval]   0%| 0/1 [Elapsed: 08:56]",
+            "2026-09-23 22:25:16 - evalscope - INFO: Start loading benchmark dataset",
+        ]
+        events = [ev for line in lines if (ev := parse_progress(line))]
+        assert events == [
+            {"type": "progress", "phase": "Evaluating[swe_bench_lite_agentic]",
+             "done": 1, "total": 1},
+            {"type": "progress", "phase": "Running[eval]", "done": 0, "total": 1},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_run_tool_suite_forwards_progress_events(self, tmp_path, monkeypatch):
+        """event_cb 收到 progress 事件；total 已知即回写 run 行 total_cases。"""
+        from aite.tools import run_tool_suite
+        from aite.tools.base import ToolMetricRow, ToolRunResult
+
+        raw = {"engine": "fake-progress", "run_name": "p1",
+               "target": {"model": "m"},
+               "tools": {"datasets": ["d1"]},
+               "storage": {"url": "sqlite+aiosqlite://"}}
+
+        class FakeAdapter:
+            def build_config(self, req):
+                return {}
+
+            async def run(self, req):
+                assert req.progress_cb is not None, "适配器应拿到进度回调"
+                req.progress_cb({"type": "progress", "phase": "Evaluating[d1]",
+                                 "done": 0, "total": 3})
+                return ToolRunResult(rows=[ToolMetricRow(
+                    dataset="evalscope:d1", metric="acc", value=1.0, count=3)])
+
+        from aite.tools.base import register_tool, unregister_tool
+        register_tool("fake-progress")(FakeAdapter)
+
+        class FakeRepo:
+            def __init__(self):
+                self.updates = []
+
+            async def upsert_suite(self, name, cfg):
+                return "s1"
+
+            async def create_run(self, *a, **k):
+                return "r1"
+
+            async def update_run(self, run_id, **fields):
+                self.updates.append(fields)
+
+            async def list_metric_summaries(self, run_id):
+                return []
+
+            async def update_case_results(self, *a, **k):
+                return None
+
+        repo = FakeRepo()
+        events = []
+        await run_tool_suite(raw, repo, event_cb=events.append)
+        assert {"type": "progress", "phase": "Evaluating[d1]",
+                "done": 0, "total": 3} in events
+        assert any(u.get("total_cases") == 3 for u in repo.updates)
+        unregister_tool("fake-progress")
