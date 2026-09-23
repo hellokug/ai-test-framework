@@ -409,3 +409,25 @@ class TestProgressParsing:
                 "done": 0, "total": 3} in events
         assert any(u.get("total_cases") == 3 for u in repo.updates)
         unregister_tool("fake-progress")
+
+    def test_collect_unnamed_metric_fallback(self, tmp_path):
+        """swe_bench agentic 报告：metrics 无名 + 顶层 score 缺失 →
+        兜底命名 score 并回填 raw_score（实弹 20260923 报告形态）。"""
+        import json as _json
+
+        from aite.tools.base import ToolRunRequest
+        from aite.tools.evalscope_adapter import EvalscopeAdapter
+
+        reports = tmp_path / "reports" / "deepseek-chat"
+        reports.mkdir(parents=True)
+        (reports / "swe_bench_lite_agentic.json").write_text(_json.dumps({
+            "schema_version": 2, "dataset_name": "swe_bench_lite_agentic",
+            "score": None,
+            "metrics": [{"name": None, "num": 1, "score": 0.0}],
+        }), encoding="utf-8")
+        req = ToolRunRequest(run_name="r", target={}, datasets=[],
+                             work_dir=tmp_path)
+        result = EvalscopeAdapter().collect(req)
+        assert result.rows[0].metric == "score"
+        assert result.rows[0].value == 0.0
+        assert result.raw_score["swe_bench_lite_agentic"] == 0.0

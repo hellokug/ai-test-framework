@@ -222,17 +222,21 @@ run_task(TaskConfig(**cfg))
             label = f"evalscope:{ds_name}"
             if data.get("score") is not None:
                 out.raw_score[ds_name] = float(data["score"])
-            for m in data.get("metrics") or []:
-                thr = req.metric_thresholds.get(m.get("name"))
+            metrics = [m for m in data.get("metrics") or [] if m.get("score") is not None]
+            # 聚合基准（如 swe_bench agentic）metrics 可能无名且缺顶层 score——
+            # 单指标时以 "score" 兜底命名并回填 raw_score
+            if data.get("score") is None and len(metrics) == 1:
+                out.raw_score[ds_name] = float(metrics[0]["score"])
+            for m in metrics:
+                name = str(m.get("name") or "score")
+                thr = req.metric_thresholds.get(name)
                 if thr is None and req.auto_thresholds:
-                    thr = (RECOMMENDED_THRESHOLDS.get(ds_name) or {}).get(m.get("name"))
-                value = m.get("score")
-                if value is None:
-                    continue
+                    thr = (RECOMMENDED_THRESHOLDS.get(ds_name) or {}).get(name)
+                value = float(m["score"])
                 out.rows.append(ToolMetricRow(
-                    dataset=label, metric=str(m.get("name")), value=float(value),
+                    dataset=label, metric=name, value=value,
                     count=int(m.get("num") or 0), threshold=thr,
-                    passed=(float(value) >= thr) if thr is not None else None,
+                    passed=(value >= thr) if thr is not None else None,
                 ))
             perf = data.get("perf_metrics") or {}
             summary = perf.get("summary") if isinstance(perf, dict) else None
