@@ -91,6 +91,16 @@
           <button class="btn" @click="go('runs')">← 返回</button>
         </div>
       </header>
+      <div class="card" v-if="run.status==='running'">
+        <h3>实时进度</h3>
+        <div v-if="runLive">
+          <div class="dim mono">{{ runLive.phase }} — {{ runLive.done }}/{{ runLive.total }}</div>
+          <div style="background:#e8e8e8;border-radius:4px;height:10px;overflow:hidden">
+            <div :style="'background:#2a9d8f;height:10px;width:'+(runLive.total?Math.round(runLive.done/runLive.total*100):0)+'%'"></div>
+          </div>
+        </div>
+        <div v-else class="dim">引擎启动/环境准备中，尚无进度事件…</div>
+      </div>
       <div class="stats-row">
         <div class="stat"><b>{{ run.total_cases }}</b><span>用例</span></div>
         <div class="stat"><b class="bad">{{ run.error_cases }}</b><span>错误</span></div>

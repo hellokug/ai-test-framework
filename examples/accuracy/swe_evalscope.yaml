@@ -9,9 +9,9 @@ engine: evalscope                  # 路由到 evalscope 引擎适配器
 
 target:                            # 被测模型端点（OpenAI 兼容）
   type: openai_compatible
-  base_url: http://localhost:11434/v1
-  model: qwen2.5:3b                # 真实评测换 deepseek-chat 等 + api_key_env
-  api_key_env: OLLAMA_KEY          # Ollama 不校验，占位即可
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY    # 需先设置（setx DEEPSEEK_API_KEY sk-xxx 后重启 serve）
   stream: false
 
 tools:

@@ -13,7 +13,7 @@ const app = createApp({
       launchYaml: LAUNCH_TEMPLATE,
       launchLimit: null, launchProgress: "", launchPct: 0,
       // run detail
-      run: null, runCases: [], caseFilter: "",
+      run: null, runCases: [], caseFilter: "", runLive: null,
       // trends
       trendQuery: { suite: "", metric: "", days: 30 }, trendRows: [],
       // suites / cases / models
@@ -75,12 +75,32 @@ const app = createApp({
     },
     async openRun(id) {
       this.view = "run-detail"; location.hash = `#/run-detail/${id}`;
+      if (this._runEs) { this._runEs.close(); this._runEs = null; }
+      this.runLive = null;
       const [run, cases] = await Promise.all([
         this.api(`/runs/${id}`), this.api(`/runs/${id}/cases?limit=1000`),
       ]);
       run.summaries = run.summaries || [];
       this.run = run;
       this.runCases = cases.items.map(c => ({ ...c, _open: false }));
+      if (run.status === "running") this.watchRunStream(id);
+    },
+    watchRunStream(runId) {
+      // running 态详情页订阅实时进度（工具引擎 progress 事件与原生同形）
+      const es = new EventSource(this.apiBase + `/runs/${runId}/stream`);
+      this._runEs = es;
+      es.onmessage = async (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.type === "progress") {
+          this.runLive = { phase: data.phase || "", done: data.done ?? 0,
+                           total: data.total ?? 0 };
+        } else if (data.type === "done" || data.type === "error"
+                   || data.type === "run_finished") {
+          es.close(); this._runEs = null;
+          await this.openRun(runId);   // 终态重载（status 已变，不再续订）
+        }
+      };
+      es.onerror = () => { es.close(); if (this._runEs === es) this._runEs = null; };
     },
     async launchRun() {
       this.launching = true; this.launchError = ""; this.launchProgress = "提交中…";
