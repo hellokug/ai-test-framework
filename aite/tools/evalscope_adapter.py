@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 from typing import Any
 
@@ -121,12 +122,15 @@ run_task(TaskConfig(**cfg))
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                             encoding="utf-8")
+        # 中文 Windows 保命：docker-py/工具链读 UTF-8 文件（如 docker context
+        # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正
+        env = {**os.environ, "PYTHONUTF8": "1"}
         try:
             proc = await asyncio.to_thread(
                 subprocess.run,
                 [python_exe, "-c", self.RUN_TASK_BOOTSTRAP, str(cfg_path)],
                 capture_output=True, text=True, timeout=timeout_s,
-                cwd=str(work_dir))
+                cwd=str(work_dir), env=env)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
                 f"evalscope task timed out after {timeout_s}s — "

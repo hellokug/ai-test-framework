@@ -270,6 +270,7 @@ class TestEvalscopeSubprocess:
             cfg = _json.loads(pathlib.Path(cmd[3]).read_text(encoding="utf-8"))
             assert cfg["datasets"] == ["swe_bench_lite_agentic"]
             assert pathlib.Path(cfg["work_dir"]).is_absolute()
+            assert kw["env"]["PYTHONUTF8"] == "1"   # 中文 Windows GBK 解码防御
             reports = pathlib.Path(kw["cwd"]) / "reports"
             reports.mkdir(parents=True, exist_ok=True)
             (reports / "qwen2.5_3b.json").write_text(_json.dumps({
