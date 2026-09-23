@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from aite import __version__ as aite_version
 from aite import config
+from aite.service import close_interrupted_runs
 from aite.storage.db import Database
 from aite.storage.repositories import SqlAlchemyRepository
 from aite.utils.logging import get_logger
@@ -40,8 +41,10 @@ class AppState:
         await self.repo.init()
         # 状态机闭合：上次进程崩溃/强杀残留的中间态任务标记为 error
         stale = await self.repo.mark_stale_bg_tasks()
-        if stale:
-            logger.warning("标记 %d 个残留后台任务为 error（上次进程未正常结束）", stale)
+        interrupted = await close_interrupted_runs(self.repo)
+        if stale or interrupted:
+            logger.warning("启动收敛：%d 个残留后台任务 + %d 个中断 run 标记为 error",
+                           stale, interrupted)
 
     async def shutdown(self) -> None:
         bg_ids = list(self.tasks)

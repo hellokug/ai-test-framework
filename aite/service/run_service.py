@@ -100,3 +100,15 @@ async def execute_suite(
         suite.report = [f.strip() for f in report_formats.split(",") if f.strip()]
     engine = ExecutionEngine(repo, progress=progress, event_cb=event_cb)
     return await engine.run_suite(suite, limit=limit, dataset_ids=dataset_ids)
+
+
+async def close_interrupted_runs(repo: Any) -> int:
+    """启动收敛（原则 8 状态机闭合）：单写者进程重启后，running 态的 run
+    不可能还活着（后台任务由 mark_stale_bg_tasks 关账，run 行此前无人收）——
+    统一关账为 error。返回收敛条数。"""
+    runs = await repo.list_runs(limit=1000)
+    stale = [r for r in runs if r.get("status") == "running"]
+    for r in stale:
+        await repo.update_run(r["id"], status="error",
+                              error="interrupted: server restarted")
+    return len(stale)

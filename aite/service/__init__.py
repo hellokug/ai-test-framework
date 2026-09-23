@@ -6,10 +6,11 @@
 from aite.service.run_service import (
     SuiteRequest,
     apply_tool_limit,
+    close_interrupted_runs,
     execute_suite,
     resolve_suite,
     storage_url_of,
 )
 
-__all__ = ["SuiteRequest", "apply_tool_limit", "execute_suite", "resolve_suite",
-           "storage_url_of"]
+__all__ = ["SuiteRequest", "apply_tool_limit", "close_interrupted_runs",
+           "execute_suite", "resolve_suite", "storage_url_of"]
