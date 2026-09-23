@@ -94,12 +94,12 @@
       <div class="card" v-if="run.status==='running'">
         <h3>实时进度</h3>
         <div v-if="runLive">
-          <div class="dim mono">{{ runLive.phase }} — {{ runLive.done }}/{{ runLive.total }}</div>
-          <div style="background:#e8e8e8;border-radius:4px;height:10px;overflow:hidden">
+          <div class="dim mono">{{ runLive.phase }}<span v-if="runLive.total"> — {{ runLive.done }}/{{ runLive.total }}</span></div>
+          <div v-if="runLive.total" style="background:#e8e8e8;border-radius:4px;height:10px;overflow:hidden">
             <div :style="'background:#2a9d8f;height:10px;width:'+(runLive.total?Math.round(runLive.done/runLive.total*100):0)+'%'"></div>
           </div>
         </div>
-        <div v-else class="dim">引擎启动/环境准备中，尚无进度事件…</div>
+        <div v-else class="dim">引擎启动/环境准备中…</div>
       </div>
       <div class="stats-row">
         <div class="stat"><b>{{ run.total_cases }}</b><span>用例</span></div>
@@ -125,7 +125,7 @@
         </table>
       </div>
       <div class="card">
-        <h3>用例结果 <span class="dim">({{ runCases.length }})</span></h3>
+        <h3>用例结果 <span class="dim">({{ runCases.length }})</span> <span v-if="run.status==='running'" class="dim">— 判分完成后逐条写入（SWE-bench 结果=容器内测试是否通过）</span></h3>
         <input v-model="caseFilter" placeholder="按 case id / 文本过滤…" style="width:280px;margin-bottom:8px">
         <table class="tbl small">
           <thead><tr><th style="width:24px"></th><th>Case</th><th>指标</th><th>输出</th></tr></thead>

@@ -28,7 +28,13 @@ chrF 手写（`nlp_stats.py` + `utils/text.py`）、hash embedding 回退
 迁移方向（每项 = 接开源引擎适配器 + 存量指标标记 deprecated + 报告兼容过渡，
 实施前逐项对齐）：
 
-- [ ] RAG 五件套 → ragas（或 evalscope RAGEval 后端）替换 rag_metrics/ragas_metrics
+- [~] RAG 五件套 → ragas（或 evalscope RAGEval 后端）替换 rag_metrics/ragas_metrics
+      ——**自研实现已删（2026-09-23）**：rag_metrics.py/ragas_metrics.py/embedding.py
+      及 rag_eval.yaml/ragas.yaml 旧示例下线，BUILTIN_INFO 与 gen_domain recommend
+      收缩为规则口径（token_f1/contains），本地注册表同步清理；**替换路径已定：
+      evalscope RAGEval 的 RAGAS 后端**（官方内置五件套指标，复用既有 evalscope
+      适配器入口，零新对接），适配器扩展待实装（编排方式 A 一任务两阶段 /
+      B 引用既有答案，待用户拍板，见进度记录）
 - [ ] Judge 三件（score/pairwise/multi）→ 评估 deepeval 等开源 judge 框架
 - [ ] 统计类（BLEU/ROUGE-L/token F1）→ sacrebleu / 所接引擎自带口径，自研实现下线
 - [ ] 安全 → 评估开源安全评测引擎（garak 类）
@@ -554,3 +560,9 @@ locust 首跑同一教训）。
 - 2026-09-23 **定位收紧：不造任何评估指标**（用户确认，覆盖 2026-09-01「自研引擎保留作补充」）。全库审计结论：工程域（evalscope / pytest / evalscope-perf / locust / swebench 五个适配器，入口收口 + 输出归一）符合定位；`aite/metrics/` 约 2100 行为平台化决策前（08-28~09-01 期间）的历史存量，与新定位冲突——RAGAS 五件套手工重实现、BLEU/ROUGE-L 手写、hash embedding 回退、自研 judge prompt、内置安全攻击集；`examples/accuracy/ragas.yaml` 名为 ragas 实未调用 ragas 库。落地：定位红线写入 CLAUDE.md「架构与目标」与 README 顶部（含存量说明）；aite/metrics/ 冻结不扩展；立项「存量自研指标迁移」（见架构定位节，未排期，方向 ragas/deepeval/sacrebleu/安全引擎），每项实施前单独对齐。
 
 - 2026-09-23 工具引擎运行期进度可见性（用户需求：running 期间前端/CLI 什么都不展示，不知道总用例数与当前用例）：①ToolRunRequest 增 `progress_cb` 可选回调（additive，既有适配器零影响）；②evalscope 子进程从阻塞 run 改为 Popen + 轮询——增量读 evalscope 自写 logs/eval_log.log，正则解析 tqdm 进度行（Evaluating/Running 的 done/total）→ progress 事件，stdout/stderr 落 proc_*.log 文件（超时/失败取尾，不再 PIPE 撑爆风险）；③run_tool_suite 接收 event_cb（service execute_suite 工具分支此前直接丢弃）——事件同形转发（原生引擎 progress 事件形状，前端零改动），total 已知即异步回写 run 行 total_cases；CLI run 工具分支实时打印进度行（--quiet 静默）。实测：SSE 流出 {"type":"progress","phase":"Evaluating[swe_bench_lite_agentic]","done":0,"total":1}、run 行 total_cases=1。测试 +6（解析/转发/total 回写/Popen 桩重构），504 passed + ruff clean + lint-imports 2 kept 0 broken。悬留：swe_bench agentic 报告 json 与 collect 的字段级兼容核验（实例跑完后）。
+
+- 2026-09-23 存量迁移第一项执行：自研 RAGAS 五件套删除（用户指示「原本实现的那堆没用的删了」）——rag_metrics.py/ragas_metrics.py/embedding.py（含 hash embedding、answer_relevancy/embedding_similarity）+ rag_eval.yaml/ragas.yaml 旧示例下线；BUILTIN_INFO（rgb/crudrag/multihoprag/hotpotqa/financebench）与 gen_domain DEFAULT_RECOMMEND 收缩为存活规则口径（token_f1/contains）并注明 RAGAS 走 evalscope-rageval；本地 data/aite_datasets.json 三条私域集 recommend 同步清理；tests 删 TestRAG/TestRagas、registry/gateway 断言改用存活指标；metrics/__init__ 头注写明红线与冻结状态；dataset-guide 配套指标段改指 evalscope-rageval。**替换路径查证定案：evalscope RAGEval 官方内置 RAGAS 后端**（tool: "RAGAS"，五件套指标全，critic_llm/embeddings 配置化，run_task 同一入口，`pip install evalscope[rag]`）——复用既有 evalscope 适配器入口零新对接，扩展现有适配器即可。待拍板：编排方式 A（一任务两阶段：引擎先跑模型出答案→转 RAGEval 输入打分，用户无感）/ B（引用既有答案记录，贴合 ai_study RAG 系统现成输出场景）。tests 109 项相关域全绿 + ruff 干净（test_chaos_discovery 4 失败为环境敏感既有问题，与本次无关）。
+
+- 2026-09-23 rageval 适配器实装（用户拍板 A/B 都要，「yaml 里一个配置的事」）：tools/rageval_adapter.py（engine: evalscope-rageval）——契约按本机 conda 环境 evalscope 1.9.1 源码 pin 死（backend/rag_eval/ragas：run_task 入口 + testset_file 加载器宽别名 question/answer/contexts + 产山 `<testset>_score.json` 逐 case 分数）；三块胶水零指标算法：字段映射（TestCase→user_input/response/retrieved_contexts/reference）、客户端注入（critic_llm/embeddings 翻译 + api_key_env 环境变量解析）、分数归一（逐 case 分数→均值指标行 + 缺分 case 进 failures，回归测试钉死「下标逐一对应」）；A/B 编排=数据集 records 有无 response 字段自动分派（混合形态显式报错），A 复用平台 connector 调端点（tools→connectors 分层合法）；metrics 只认官方 ragas 名 + relevancy/correctness 缺 embeddings fail-fast；ToolRunRequest.rag_eval 字段 + parse_tool_suite rageval 段 + pyproject rageval extra（evalscope[rag]）；examples/accuracy/ragas.yaml 回归（真调开源 ragas）。离线测试 11 项（不依赖 evalscope 安装：build_config 形状/api_key env 解析/B 模式 testset 落盘/混合形态拒绝/方案 A 缺 target 守卫/collect 均值计数失败明细/缺 score 文件显式失败/parse 分支）+ 62 项相关域全绿 + ruff 干净（test_tools 1 处 import 排序为并行股道 in-flight）。实弹待用户环境：evalscope conda env 补 pip install 'evalscope[rag]' 后 aite run -c examples/accuracy/ragas.yaml。
+
+- 2026-09-23 运行期阶段事件流（用户反馈：实时进度在计数前是盲区、用例结果空置语义不明）：①evalscope 日志解析从"仅计数行"扩展为**计数 + 阶段双通道**——加载数据集/拉取实例镜像 ×N（计数）/基础与环境镜像就绪/构建实例镜像 ×N/沙箱已启动，阶段行仅 phase 无 done/total，前端渲染为当前阶段文本（有计数才画进度条）；②详情页"用例结果"标注语义——SWE-bench 结果=容器内测试是否通过，判分完成后逐条写入，运行中为空属评测语义非故障；③前端详情页运行中改 5s 轮询 run 行（CLI 与界面下发统一可见，details.progress 持久化是基础）。实弹教训一条：多层字符串嵌套转义（脚本→文件→import）把 \1 吃成 \x01，chr(92) 显式构造反斜杠根治。测试 +3（阶段行/拉取进度/期望更新），502 passed + ruff clean。悬留：per-instance 级实时（需 evalscope 回调钩子，非日志解析可得）。

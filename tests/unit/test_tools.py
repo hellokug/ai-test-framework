@@ -356,6 +356,7 @@ class TestProgressParsing:
             {"type": "progress", "phase": "Evaluating[swe_bench_lite_agentic]",
              "done": 1, "total": 1},
             {"type": "progress", "phase": "Running[eval]", "done": 0, "total": 1},
+            {"type": "progress", "phase": "加载数据集"},   # 阶段行：仅状态播报，无计数
         ]
 
     @pytest.mark.asyncio
@@ -431,3 +432,20 @@ class TestProgressParsing:
         assert result.rows[0].metric == "score"
         assert result.rows[0].value == 0.0
         assert result.raw_score["swe_bench_lite_agentic"] == 0.0
+
+    def test_parse_stage_lines(self):
+        """阶段行（无计数）→ 仅 phase 的状态事件（运行期"在干嘛"可见性）。"""
+        from aite.tools.evalscope_adapter import parse_progress
+        cases = [
+            ("...INFO: Start loading benchmark dataset: swe_bench_lite_agentic", "加载数据集"),
+            ("...INFO: Attempting to pull 1 SWE-Bench images from Docker Hub", "拉取实例镜像 ×1"),
+            ("...INFO: SandboxService: manager started for engine=docker", "沙箱已启动"),
+        ]
+        for line, phase in cases:
+            ev = parse_progress(line)
+            assert ev and ev["phase"] == phase and "total" not in ev
+
+    def test_parse_pull_progress(self):
+        from aite.tools.evalscope_adapter import parse_progress
+        ev = parse_progress("...INFO: Pulling SWE-Bench images   0%| 0/1 [Elapsed: 01:00]")
+        assert ev == {"type": "progress", "phase": "拉取实例镜像", "done": 0, "total": 1}

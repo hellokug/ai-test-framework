@@ -61,15 +61,38 @@ def _normalize_metric_names(metric_list: list) -> list[str]:
 
 _PROGRESS_RE = re.compile(
     r"(Evaluating\[[^\]]*\]|Running\[[^\]]*\])\s+\d+%\|\s*(\d+)/(\d+)")
+_PROGRESS_RE_PULL = re.compile(
+    r"Pulling SWE-Bench images\s+\d+%\|\s*(\d+)/(\d+)")
+
+# 阶段行（无 done/total，仅状态播报——运行期"现在在干嘛"可见性）
+_STAGE_PATTERNS = (
+    (re.compile(r"Start loading benchmark dataset"), "加载数据集"),
+    (re.compile(r"Attempting to pull (\d+) SWE-Bench images", re.I), r"拉取实例镜像 ×\1"),
+    (re.compile(r"Base images built successfully"), "基础镜像就绪"),
+    (re.compile(r"No environment images need to be built"), "环境镜像就绪"),
+    (re.compile(r"Building instance images for (\d+) instances"), r"构建实例镜像 ×\1"),
+    (re.compile(r"SandboxService: manager started"), "沙箱已启动"),
+)
 
 
 def parse_progress(line: str) -> dict | None:
-    """evalscope 日志行 → 进度事件（与原生引擎 progress 事件同形，前端零改动）。"""
+    """evalscope 日志行 → 进度/阶段事件（与原生引擎 progress 事件同形）。
+
+    计数行（Evaluating/Running/拉取进度）带 done/total；阶段行仅 phase。"""
     m = _PROGRESS_RE.search(line)
-    if not m:
-        return None
-    return {"type": "progress", "phase": m.group(1),
-            "done": int(m.group(2)), "total": int(m.group(3))}
+    if m:
+        return {"type": "progress", "phase": m.group(1),
+                "done": int(m.group(2)), "total": int(m.group(3))}
+    m = _PROGRESS_RE_PULL.search(line)
+    if m:
+        return {"type": "progress", "phase": "拉取实例镜像",
+                "done": int(m.group(1)), "total": int(m.group(2))}
+    for pat, text in _STAGE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            return {"type": "progress",
+                    "phase": m.expand(text) if m.groups() else text}
+    return None
 
 
 @register_tool("evalscope")
