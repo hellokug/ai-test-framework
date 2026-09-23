@@ -105,7 +105,16 @@ class EvalscopeAdapter(ToolAdapter):
     # 独立环境子进程引导：配置经文件契约传入（零 CLI 旗标漂移风险），
     # 报告由 collect() 按既有 reports/*.json 契约回收（原则 12）
     RUN_TASK_BOOTSTRAP = """
-import json, sys
+import json, pathlib, sys
+
+_orig_write_text = pathlib.Path.write_text
+
+def _lf_write_text(self, data, *args, **kwargs):
+    kwargs.setdefault("newline", "\\n")
+    return _orig_write_text(self, data, *args, **kwargs)
+
+pathlib.Path.write_text = _lf_write_text   # Windows 宿主 CRLF 毒化容器内 eval.sh/补丁
+
 from evalscope import run_task
 from evalscope.config import TaskConfig
 cfg = json.load(open(sys.argv[1], encoding="utf-8"))
