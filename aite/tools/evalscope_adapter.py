@@ -142,8 +142,10 @@ run_task(TaskConfig(**cfg))
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                             encoding="utf-8")
         # 中文 Windows 保命：docker-py/工具链读 UTF-8 文件（如 docker context
-        # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正
+        # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正；
+        # HF 镜像默认注入（huggingface.co 直连不可达的环境开箱即用）
         env = {**os.environ, "PYTHONUTF8": "1"}
+        env.setdefault("HF_ENDPOINT", config.DEFAULT_HF_ENDPOINT)
         log_path = work_dir / "logs" / "eval_log.log"   # evalscope 自写日志
         stdout_path = work_dir / "proc_stdout.log"
         stderr_path = work_dir / "proc_stderr.log"
