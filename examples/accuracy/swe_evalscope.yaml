@@ -18,7 +18,7 @@ tools:
   datasets: [swe_bench_lite_agentic]   # evalscope 数据集名：swe_bench_verified_mini_agentic
                                        #   （50 题精选）/ swe_bench_lite_agentic（300 题）等
   limit_per_subset: 1                 # 每数据集实例数；首跑验证管线，真实评测去掉或加大
-  metric_thresholds: {acc: 0.3}       # acc 即 resolve rate（可 auto，可省略）
+  metric_thresholds: {score: 0.3}   # swe_bench agentic 指标无名，collect 兜底命名 score（即 resolve rate）       # acc 即 resolve rate（可 auto，可省略）
   extra_args:
     # evalscope 装在独立环境（本机 py3.14 装不上其依赖 editdistance）；
     # 留空则要求 aite 环境自身可导入 evalscope
