@@ -147,3 +147,17 @@ def attach_summaries(report: RunReport, summaries: list[MetricSummary],
     status, score = decide_status(summaries, strategy, weights)
     report.status = status
     report.details["overall_score"] = score
+
+
+def execution_status(report: RunReport) -> str:
+    """执行健康度（与评估结论正交的第二维度）。
+
+    success = 全部 case 调用成功；partial = 部分失败；failed = 全部失败；
+    unknown = 无 case。「评估结论 failed 但执行 success」是最需要显式区分的
+    场景——指标低分是模型/判官问题，不是框架没跑起来。
+    """
+    if report.total_cases <= 0:
+        return "unknown"
+    if report.error_cases == 0:
+        return "success"
+    return "failed" if report.error_cases >= report.total_cases else "partial"

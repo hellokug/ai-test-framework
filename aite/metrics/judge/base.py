@@ -7,7 +7,7 @@ from typing import ClassVar
 from aite.core.interfaces import Judge
 from aite.core.registry import register_judge
 from aite.core.types import MetricResult
-from aite.metrics.llm_based import DEFAULT_RUBRIC, parse_json_loose
+from aite.metrics.llm_based import DEFAULT_RUBRIC, fmt_exc, parse_json_loose
 
 SYSTEM_PROMPT = (
     "You are a strict, impartial evaluation judge. Assess the AI answer against "
@@ -42,7 +42,7 @@ class ScoreJudge(Judge):
                 max_tokens=int(self.params.get("max_tokens", 800)), json_mode=True,
             )
         except Exception as exc:  # noqa: BLE001
-            return MetricResult(metric=self.name, value=0.0, error=f"judge call failed: {exc}")
+            return MetricResult(metric=self.name, value=0.0, error=f"judge call failed: {fmt_exc(exc)}")
         data = parse_json_loose(result)
         score = _extract_score(data)
         if score is None:

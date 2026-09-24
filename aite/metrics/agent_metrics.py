@@ -8,7 +8,7 @@ from typing import ClassVar
 from aite.core.interfaces import Metric
 from aite.core.registry import register_metric
 from aite.core.types import AgentTrace, MetricResult
-from aite.metrics.llm_based import LLMMetricMixin
+from aite.metrics.llm_based import LLMMetricMixin, fmt_exc
 
 
 def _trace_of(response) -> AgentTrace:
@@ -155,7 +155,7 @@ class TaskCompletion(Metric, LLMMetricMixin):
             data = await self.llm_json(ctx, "You evaluate agent task completion.", user,
                                        model=self.params.get("model"))
         except Exception as exc:  # noqa: BLE001
-            return MetricResult(metric=self.name, value=0.0, error=f"llm mode failed: {exc}")
+            return MetricResult(metric=self.name, value=0.0, error=f"llm mode failed: {fmt_exc(exc)}")
         if data is None:
             return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
         raw_progress = data.get("progress")
@@ -221,7 +221,7 @@ class TrajectoryQuality(Metric, LLMMetricMixin):
             data = await self.llm_json(ctx, "You are an expert agent-trajectory evaluator.",
                                        user, model=self.params.get("model"))
         except Exception as exc:  # noqa: BLE001
-            return MetricResult(metric=self.name, value=0.0, error=f"llm mode failed: {exc}")
+            return MetricResult(metric=self.name, value=0.0, error=f"llm mode failed: {fmt_exc(exc)}")
         if not data:
             return MetricResult(metric=self.name, value=0.0, error="unparseable judge output")
         try:

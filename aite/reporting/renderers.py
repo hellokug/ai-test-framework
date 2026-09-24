@@ -16,9 +16,20 @@ from typing import TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from aite.core.aggregator import execution_status
 from aite.core.interfaces import ReportRenderer
 from aite.core.registry import register_renderer
 from aite.core.types import utcnow
+
+
+def _failing_reason(r, threshold: float | None, higher: bool) -> str:
+    """bad-case 的「为什么不通过」：判定错误 / 未配阈值 / 值与阈值的方向关系。"""
+    if r.error:
+        return str(r.error).splitlines()[0]
+    if threshold is None:
+        return "未配置阈值（仅记录，不参与判定）"
+    direction = "<" if higher else ">"
+    return f"value {r.value:.4f} {direction} 阈值 {threshold:g}，未达标"
 
 if TYPE_CHECKING:
     from aite.core.types import RunReport
@@ -94,11 +105,20 @@ class HtmlRenderer(ReportRenderer):
         grouped = [s for s in report.summaries if s.dataset is not None or s.group is not None]
         failed = [r for r in report.case_metrics
                   if r.passed is False or (r.error and r.value is None)]
+        payloads = (report.details or {}).get("case_payloads") or {}
+        thresholds = {s.metric: s.threshold for s in report.summaries}
+        higher = {s.metric: s.higher_is_better for s in report.summaries}
+        failed_rows = [{
+            "r": r,
+            "payload": payloads.get(r.case_id),
+            "why": _failing_reason(r, thresholds.get(r.metric), higher.get(r.metric, True)),
+        } for r in failed[:500]]
         template = self._env.get_template("report.html.j2")
         html = template.render(
             report=report, overall=overall, grouped=grouped,
-            failed_cases=failed[:500], failed_count=len(failed),
+            failed_cases=failed_rows, failed_count=len(failed),
             datasets=datasets_label(report.config),
+            exec_status=execution_status(report),
         )
         path.write_text(html, encoding="utf-8")
         return path

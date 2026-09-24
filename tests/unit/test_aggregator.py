@@ -98,3 +98,18 @@ def test_grouped_summaries_do_not_affect_status():
                                  dataset="d1")
     status, _ = decide_status([overall_fail, grouped_pass], "all_of")
     assert status == "failed"
+
+
+def test_execution_status_orthogonal_to_verdict():
+    """执行健康度与评估结论是两个维度：全 0 分但调用全成功 = success 执行 + failed 评估。"""
+    from types import SimpleNamespace
+
+    from aite.core.aggregator import execution_status
+
+    def report(total, errors):
+        return SimpleNamespace(total_cases=total, error_cases=errors)
+
+    assert execution_status(report(8, 0)) == "success"    # 执行全成功（评估可以 failed）
+    assert execution_status(report(8, 3)) == "partial"
+    assert execution_status(report(8, 8)) == "failed"
+    assert execution_status(report(0, 0)) == "unknown"

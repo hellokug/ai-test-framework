@@ -12,12 +12,13 @@ report rendering.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aite.core.aggregator import aggregate, decide_status
+from aite.core.aggregator import aggregate, decide_status, execution_status
 from aite.core.context import build_context, build_gateway
 from aite.core.registry import (
     load_plugins,
@@ -54,6 +55,78 @@ import aite.connectors  # noqa: E402,F401  (registers connectors)
 import aite.datasets  # noqa: E402,F401  (registers datasets)
 import aite.metrics  # noqa: E402,F401  (registers metrics + judges)
 import aite.reporting  # noqa: E402,F401  (registers renderers)
+
+
+def _expected_str(expected: Any) -> str:
+    """expected 字段快照：标量直取，dict/list 转 JSON（截断交给调用方）。"""
+    if isinstance(expected, (dict, list)):
+        return json.dumps(expected, ensure_ascii=False)
+    return "" if expected is None else str(expected)
+
+
+def _case_payloads(executed: list[dict]) -> dict[str, dict]:
+    """逐 case 的输入/输出/预期快照（报告与 bad-case 分析用，逐字段截断控体积）。"""
+    payloads: dict[str, dict] = {}
+    for e in executed:
+        case: TestCase = e["case"]
+        response: TargetResponse = e["response"]
+        if case.id in payloads:
+            continue  # 变体与 base 同 id，保留首条
+        payloads[case.id] = {
+            "input": str(case.input)[:600],
+            "output": (response.output_text or "")[:800],
+            "expected": _expected_str(case.expected)[:400],
+            "target_error": (response.error or "")[:300],
+        }
+    return payloads
+
+
+def _log_metric_result(metric: str, case_id: str, res: MetricResult, *,
+                       judge: str = "") -> None:
+    """逐判定过程日志：干什么、结果值或错误——评测过程的可观测性基线。"""
+    who = f"judge[{judge}] " if judge else ""
+    if res.error:
+        logger.warning("metric %s%s on %s errored: %s", who, metric, case_id,
+                       (res.error or "").splitlines()[0])
+    else:
+        logger.info("metric %s%s on %s = %s", who, metric, case_id, res.value)
+
+
+def _log_run_header(config: SuiteConfig, cases: list[TestCase]) -> None:
+    """运行头：target/数据集/指标/判官/并发一屏可见——评测异常时的第一排查入口。"""
+    ds_counts: dict[str, int] = {}
+    for c in cases:
+        key = c.dataset or "-"
+        ds_counts[key] = ds_counts.get(key, 0) + 1
+    metrics = ", ".join(m.name + (f">={m.threshold}" if m.threshold is not None else "")
+                        for m in config.metrics) or "-"
+    judges = ", ".join(
+        (j.model.name or j.model.model or j.type) if j.model is not None
+        else "/".join(m.name or m.model or "" for m in j.models) or j.type
+        for j in config.judges) or "-"
+    rl = config.target.rate_limit
+    logger.info(
+        "run %s | target %s@%s | cases %d [%s] | metrics [%s] | judges [%s] | concurrency %s",
+        config.run_name, config.target.model, config.target.base_url, len(cases),
+        ", ".join(f"{k}={v}" for k, v in ds_counts.items()),
+        metrics, judges,
+        config.concurrency or rl.concurrency or "default(8)",
+    )
+
+
+def _log_run_summary(report: RunReport, records: list[CaseMetricRecord]) -> None:
+    """收尾摘要 + 指标判定错误统计（error 非空的判定会污染均值/置 0，判读前必看）。"""
+    err_by_metric: dict[str, int] = {}
+    for rec in records:
+        if rec.error:
+            err_by_metric[rec.metric] = err_by_metric.get(rec.metric, 0) + 1
+    logger.info("run %s finished: status=%s cases=%d target_errors=%d cost=$%.4f",
+                report.run_name, report.status, report.total_cases,
+                report.error_cases, report.total_cost_usd)
+    if err_by_metric:
+        logger.warning("metric computations errored (相关均值不可信，详见 report.json "
+                       "case_metrics[].error): %s",
+                       ", ".join(f"{k}x{v}" for k, v in sorted(err_by_metric.items())))
 
 
 class ExecutionEngine:
@@ -96,6 +169,7 @@ class ExecutionEngine:
             cases = await self._load_cases(config, limit, dataset_ids)
             report.total_cases = len({c.id for c in cases})
             await self.repo.update_run(run_id, total_cases=report.total_cases)
+            _log_run_header(config, cases)
 
             # ---------------- Phase A: execute ----------------
             executed = await self._execute_all(config, target, cases, run_id, report)
@@ -122,6 +196,7 @@ class ExecutionEngine:
             )
             if render:
                 report.details["reports"] = self._render_reports(config, report)
+            _log_run_summary(report, records)
         except Exception as exc:  # noqa: BLE001 - run-level failure must be persisted
             logger.exception("run failed")
             report.status = "error"
@@ -135,8 +210,10 @@ class ExecutionEngine:
                 await gateway.close()
         self._emit("run_finished", run_id=run_id, status=report.status)
         self.progress and self.progress.finish(
-            f"{config.run_name}: {report.status} "
-            f"({report.total_cases} cases, ${report.total_cost_usd:.4f})")
+            f"{config.run_name} · 执行 {execution_status(report)} "
+            f"({report.total_cases - report.error_cases}/{report.total_cases} case 调用成功) · "
+            f"评估结论 {report.status} "
+            f"(cost ${report.total_cost_usd:.4f})")
         return report
 
     run = run_suite  # friendly alias
@@ -202,6 +279,7 @@ class ExecutionEngine:
         suite_id = await self.repo.upsert_suite(config.run_name)
         case_row_cache: dict[str, int] = {}
         executed: list[dict] = []
+        failures: list[dict] = []
         done = 0
         self.progress and self.progress.start(len(cases), "executing cases")
         self._emit("phase", phase="execute", total=len(cases))
@@ -226,6 +304,13 @@ class ExecutionEngine:
                 report.total_cost_usd = round(report.total_cost_usd + response.cost_usd, 8)
             if not response.ok:
                 report.error_cases += 1
+                # 执行失败明细进报告（CLI 汇总打印）：target 挂掉时指标全 0，
+                # 用户必须能直接看到「哪条 case、什么错」，而不是自己翻库
+                failures.append({
+                    "dataset": case.dataset or "",
+                    "case": f"{case.id}:{case.variant}",
+                    "detail": (response.error or "")[:300],
+                })
             if case.id not in case_row_cache:
                 case_row_cache[case.id] = await self.repo.save_test_case(suite_id, case)
             result_row = await self.repo.save_case_result(
@@ -233,13 +318,26 @@ class ExecutionEngine:
                 dataset=case.dataset, variant=case.variant, variant_of=case.variant_of)
             done += 1
             self.progress and self.progress.update(1, note=f"{case.id}:{case.variant}")
+            if response.ok:
+                logger.info("case %s:%s ok %.0fms", case.id, case.variant,
+                            response.timings.total_ms or 0)
+            else:
+                logger.warning("case %s:%s FAILED: %s", case.id, case.variant,
+                               (response.error or "").splitlines()[0])
             if done % 5 == 0 or done == len(cases):
                 self._emit("progress", phase="execute", done=done, total=len(cases))
             return {"case": case, "response": response, "result_row": result_row}
 
         executed = list(await asyncio.gather(*[one(c) for c in cases]))
+        report.details["case_payloads"] = _case_payloads(executed)
+        if failures:
+            report.details["failures"] = failures[:50]
         self._emit("phase", phase="execute_done", done=len(executed))
         return executed
+
+    def _progress_note(self, note: str) -> None:
+        """进度条备注：当前正在算的指标/判官与用例（不推进进度）。"""
+        self.progress and self.progress.update(0, note=note[:60])
 
     # ------------------------------------------------------------------ phase B
     def _metric_infos(self, config: SuiteConfig) -> dict[str, tuple[Any, Any, float | None]]:
@@ -315,6 +413,7 @@ class ExecutionEngine:
 
         results: list[MetricResult] = []
         for name, metric in metrics:
+            self._progress_note(f"{name} ← {case.id}")
             try:
                 if metric.wants_variants:
                     res = await metric.compute(case=case, response=response,
@@ -326,6 +425,7 @@ class ExecutionEngine:
             except Exception as exc:  # noqa: BLE001
                 res = MetricResult(metric=name, value=0.0,
                                    error=f"metric error: {type(exc).__name__}: {exc}")
+            _log_metric_result(name, case.id, res)
             results.append(res)
         await self.repo.save_metric_results(report.run_id, entry["result_row"],
                                             results, source="metric")
@@ -350,6 +450,8 @@ class ExecutionEngine:
         for jtype, judge in judges:
             if state["cost_tripped"]:
                 break
+            alias = judge.params.get("model") or jtype
+            self._progress_note(f"judge {alias} ← {case.id}")
             try:
                 res = await judge.judge(case=case, response=response, ctx=ctx)
             except CostLimitExceeded as exc:
@@ -362,6 +464,7 @@ class ExecutionEngine:
                                    error=f"judge error: {type(exc).__name__}: {exc}")
             if res.metric != jtype:
                 res.metric = jtype
+            _log_metric_result(jtype, case.id, res, judge=alias)
             jresults.append(res)
         return jresults
 

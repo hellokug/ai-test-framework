@@ -1,4 +1,4 @@
-"""Judge / safety / RAG / agent / reliability metric tests (mock gateway)."""
+"""Judge / safety / agent / reliability metric tests (mock gateway)."""
 
 import pytest
 
@@ -16,19 +16,10 @@ from aite.metrics.agent_metrics import (
     ToolArgCorrectness,
     ToolCallCorrectness,
 )
-from aite.metrics.embedding import AnswerRelevancy, EmbeddingSimilarity
 from aite.metrics.judge.base import ScoreJudge
 from aite.metrics.judge.multi import MultiJudge
 from aite.metrics.judge.pairwise import PairwiseJudge
 from aite.metrics.llm_based import looks_like_refusal, parse_json_loose
-from aite.metrics.rag_metrics import (
-    CitationAccuracy,
-    ContextPrecision,
-    ContextRecall,
-    Faithfulness,
-    HitRate,
-)
-from aite.metrics.ragas_metrics import AnswerCorrectness
 from aite.metrics.reliability import (
     PerturbationRobustness,
     RepeatConsistency,
@@ -208,130 +199,6 @@ class TestSafety:
         assert res.value == 0.0
 
 
-class TestRAG:
-    def rag_case(self):
-        return TestCase(
-            id="r1", input="What is the capital of France?",
-            expected={"answer": "Paris", "facts": ["Paris is the capital"],
-                      "gold_doc": "Paris is the capital and largest city of France."},
-            retrieval_context=["Paris is the capital and largest city of France.",
-                               "The Eiffel Tower is located in Paris."])
-
-    @pytest.mark.asyncio
-    async def test_context_recall(self):
-        res = await ContextRecall().compute(case=self.rag_case(),
-                                            response=TargetResponse(output="Paris"),
-                                            ctx=EvalContext(run_name="t"))
-        assert res.value > 0.5
-
-    @pytest.mark.asyncio
-    async def test_context_precision(self):
-        res = await ContextPrecision().compute(case=self.rag_case(),
-                                               response=TargetResponse(output="x"),
-                                               ctx=EvalContext(run_name="t"))
-        assert 0.0 <= res.value <= 1.0
-
-    @pytest.mark.asyncio
-    async def test_context_precision_rank_weighted(self):
-        """RAGAS 口径：相关上下文排位越靠前分越高（规则模式）。"""
-        case = TestCase(id="p", input="What is the capital of France?",
-                        expected="Paris")
-        relevant = "Paris is the capital of France and its largest city."
-        noise = "Bananas are rich in potassium and vitamin C."
-        case_first = TestCase(id="p1", input=case.input, expected="Paris",
-                              retrieval_context=[relevant, noise])
-        case_last = TestCase(id="p2", input=case.input, expected="Paris",
-                             retrieval_context=[noise, relevant])
-        v_first = await ContextPrecision().compute(
-            case=case_first, response=TargetResponse(output="x"),
-            ctx=EvalContext(run_name="t"))
-        v_last = await ContextPrecision().compute(
-            case=case_last, response=TargetResponse(output="x"),
-            ctx=EvalContext(run_name="t"))
-        assert v_first.value == 1.0
-        assert v_last.value == 0.5
-        assert v_first.value > v_last.value
-
-    @pytest.mark.asyncio
-    async def test_context_precision_llm_mode(self):
-        ctx, _ = ctx_with(default='{"relevant": [true, false, true]}')
-        case = TestCase(id="p3", input="q", expected="a",
-                        retrieval_context=["c1", "c2", "c3"])
-        res = await ContextPrecision().compute(case=case,
-                                               response=TargetResponse(output="x"),
-                                               ctx=ctx)
-        # verdicts [T,F,T]: (1 + 2/3) / 2 = 0.8333
-        assert res.raw["mode"] == "llm"
-        assert abs(res.value - 5 / 6) < 1e-4
-
-    @pytest.mark.asyncio
-    async def test_context_recall_llm_mode(self):
-        ctx, _ = ctx_with(default='{"claims": 2, "attributed": 1, '
-                                  '"unattributed": ["fact-2"]}')
-        case = TestCase(id="r2", input="q", expected="Paris",
-                        retrieval_context=["ctx"])
-        res = await ContextRecall().compute(case=case,
-                                            response=TargetResponse(output="x"),
-                                            ctx=ctx)
-        assert res.raw["mode"] == "llm" and res.value == 0.5
-        assert res.raw["unattributed"] == ["fact-2"]
-
-    @pytest.mark.asyncio
-    async def test_hit_rate(self):
-        res = await HitRate(threshold=0.5, k=1).compute(case=self.rag_case(),
-                                                        response=TargetResponse(output="Paris"),
-                                                        ctx=EvalContext(run_name="t"))
-        assert res.value == 1.0
-
-    @pytest.mark.asyncio
-    async def test_faithfulness_fallback(self):
-        ctx = EvalContext(run_name="t")  # no gateway -> token overlap
-        res = await Faithfulness().compute(
-            case=self.rag_case(),
-            response=TargetResponse(output="Paris is the capital of France."),
-            ctx=ctx)
-        assert res.raw["mode"] == "token_overlap"
-        assert res.value > 0.8
-
-    @pytest.mark.asyncio
-    async def test_citation_accuracy(self):
-        res = await CitationAccuracy().compute(
-            case=self.rag_case(),
-            response=TargetResponse(output="The capital is Paris [1]. The tower too [2]."),
-            ctx=EvalContext(run_name="t"))
-        assert res.value == 1.0
-
-    @pytest.mark.asyncio
-    async def test_llm_metrics_tolerate_bad_judge_counts(self):
-        """真实 judge（小模型）可能回传 null 计数——回退 0 最差分而非抛错。"""
-        ctx, _ = ctx_with(default='{"claims": null, "supported": null, '
-                                  '"unsupported": []}')
-        res = await Faithfulness().compute(
-            case=self.rag_case(), response=TargetResponse(output="Paris"), ctx=ctx)
-        assert res.value == 0.0 and res.error is None
-        ctx, _ = ctx_with(default='{"claims": null, "attributed": null, '
-                                  '"unattributed": []}')
-        res = await ContextRecall().compute(
-            case=self.rag_case(), response=TargetResponse(output="Paris"), ctx=ctx)
-        assert res.value == 0.0 and res.error is None
-
-    @pytest.mark.asyncio
-    async def test_answer_relevancy_via_mock_embed(self):
-        ctx, _ = ctx_with()
-        res = await AnswerRelevancy().compute(
-            case=self.rag_case(), response=TargetResponse(output="Paris"),
-            ctx=ctx)
-        assert res.value > 0.0
-
-    @pytest.mark.asyncio
-    async def test_embedding_similarity(self):
-        ctx, _ = ctx_with()
-        res = await EmbeddingSimilarity().compute(
-            case=self.rag_case(), response=TargetResponse(output="Paris"),
-            ctx=ctx)
-        assert 0.0 <= res.value <= 1.0
-
-
 class TestAgentMetrics:
     def trace_response(self, tools):
         return TargetResponse(
@@ -418,40 +285,24 @@ class TestAgentMetrics:
         assert res.value == 0.0 and res.raw["checks"][0]["hit"] is False
 
     @pytest.mark.asyncio
+    async def test_llm_failure_error_carries_exception_type(self):
+        """TimeoutError 等异常 str 为空——error 必须带类型名才可诊断（原则 9）。"""
+        class BoomGateway(MockGateway):
+            async def complete(self, *args, **kwargs):
+                raise TimeoutError()
+
+        res = await TaskCompletion().compute(
+            case=TestCase(id="a", input="t"),
+            response=TargetResponse(output="x"),
+            ctx=EvalContext(run_name="t", gateway=BoomGateway()))
+        assert res.value == 0.0 and "TimeoutError" in (res.error or "")
+
+    @pytest.mark.asyncio
     async def test_tool_arg_correctness_requires_config(self):
         res = await ToolArgCorrectness().compute(
             case=TestCase(id="a", input="t", expected=None),
             response=self.arg_trace([]), ctx=EvalContext(run_name="t"))
         assert res.error
-
-
-class TestRagas:
-    @pytest.mark.asyncio
-    async def test_answer_correctness_high_match(self):
-        ctx, _ = ctx_with()
-        case = TestCase(id="c", input="q", expected="Paris is the capital of France.")
-        res = await AnswerCorrectness(threshold=0.4).compute(
-            case=case, response=TargetResponse(output="Paris is the capital of France."),
-            ctx=ctx)
-        assert res.value == 1.0 and res.passed is True
-        assert res.raw["factual_f1"] == 1.0 and res.raw["semantic_sim"] == 1.0
-
-    @pytest.mark.asyncio
-    async def test_answer_correctness_weight_params(self):
-        ctx, _ = ctx_with()
-        case = TestCase(id="c", input="q", expected="Paris is the capital.")
-        res = await AnswerCorrectness(weight_factual=0.5).compute(
-            case=case, response=TargetResponse(output="The capital is Paris."),
-            ctx=ctx)
-        assert res.value == pytest.approx(
-            0.5 * res.raw["factual_f1"] + 0.5 * res.raw["semantic_sim"], abs=1e-3)
-
-    @pytest.mark.asyncio
-    async def test_answer_correctness_needs_reference(self):
-        res = await AnswerCorrectness().compute(
-            case=TestCase(id="c", input="q", expected=None),
-            response=TargetResponse(output="x"), ctx=EvalContext(run_name="t"))
-        assert res.error and "reference" in res.error
 
 
 class TestReliability:

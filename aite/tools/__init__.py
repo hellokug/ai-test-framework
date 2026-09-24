@@ -40,6 +40,7 @@ from aite.tools.evalscope_adapter import EvalscopeAdapter  # noqa: F401  (regist
 from aite.tools.locust_adapter import LocustAdapter  # noqa: F401  (registers)
 from aite.tools.perf_adapter import PerfAdapter  # noqa: F401  (registers)
 from aite.tools.pytest_adapter import PytestAdapter  # noqa: F401  (registers)
+from aite.tools.rageval_adapter import RagevalAdapter  # noqa: F401  (registers)
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -102,7 +103,10 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
     perf_cfg = raw.get("perf")
     if perf_cfg is not None and not isinstance(perf_cfg, dict):
         raise ValueError("perf 段须为对象（prompt/parallel/number/...）")
-    if not tools_cfg.get("datasets") and not tests_dir and not perf_cfg:
+    rageval_cfg = raw.get("rageval")
+    if rageval_cfg is not None and not isinstance(rageval_cfg, dict):
+        raise ValueError("rageval 段须为对象（metrics/judge/embeddings/language）")
+    if not tools_cfg.get("datasets") and not tests_dir and not perf_cfg and not rageval_cfg:
         raise ValueError("tool suite requires tools.datasets (benchmark names)")
     run_name = raw.get("run_name") or "tool-run"
     stamp = utcnow().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -125,6 +129,7 @@ def parse_tool_suite(raw: dict) -> tuple[ToolRunRequest, dict]:
         tests_dir=tests_dir,
         cases=cases,
         perf=perf_cfg or {},
+        rag_eval=rageval_cfg or {},
     )
     return req, raw
 
@@ -266,21 +271,27 @@ async def run_tool_suite(raw: dict, repo: Any,
     bg_updates: set[asyncio.Task] = set()
 
     def progress_cb(ev: dict) -> None:
-        """适配器进度事件 → event_cb（SSE/CLI）+ total 已知即异步回写 run 行。"""
+        """适配器进度事件 → event_cb（SSE/CLI）+ 异步回写 run 行（total 首次已知
+        时写 total_cases；details.progress 每次都写——前端轮询 run 行即可见，
+        CLI 下发同样生效）。"""
         nonlocal last_total
         if event_cb:
             event_cb(ev)
         total = ev.get("total")
-        if total and total != last_total:
+        first_total = bool(total) and total != last_total
+        if first_total:
             last_total = total
 
-            async def _write_total():
-                with contextlib.suppress(Exception):
-                    await repo.update_run(run_id, total_cases=int(total))
+        async def _write():
+            with contextlib.suppress(Exception):
+                fields: dict[str, Any] = {"details": {"progress": ev}}
+                if first_total:
+                    fields["total_cases"] = int(total)
+                await repo.update_run(run_id, **fields)
 
-            task = asyncio.create_task(_write_total())
-            bg_updates.add(task)
-            task.add_done_callback(bg_updates.discard)
+        task = asyncio.create_task(_write())
+        bg_updates.add(task)
+        task.add_done_callback(bg_updates.discard)
 
     req.progress_cb = progress_cb
     try:

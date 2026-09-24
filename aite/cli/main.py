@@ -137,20 +137,37 @@ def run(
     storage_url = (sreq.config.storage.url if sreq.config
                    else storage_url_of(raw))
 
+    bar = RichProgressReporter() if not quiet else None
+    bar_state: dict = {}
+
     def _tool_progress(ev: dict) -> None:
-        """工具引擎运行期进度（evalscope 等）：日志解析出的 done/total 实时打印。"""
-        if quiet:
+        """工具引擎运行期进度：Rich 单行动态条（逐事件打印会刷屏——一行一案）。"""
+        if quiet or bar is None:
             return
-        console.print(f"[dim]  {ev.get('phase', 'progress')}: "
-                      f"{ev.get('done', '?')}/{ev.get('total', '?')}[/dim]")
+        phase = str(ev.get("phase") or "progress")
+        done, total = ev.get("done"), ev.get("total")
+        if done is None or not total:
+            return  # 无 done/total 结构的事件不落条（避免噪音行）
+        if bar_state.get("phase") != phase or bar_state.get("total") != total:
+            bar.start(int(total), phase)
+            bar_state.update(phase=phase, total=int(total), done=0)
+        delta = int(done) - bar_state.get("done", 0)
+        if delta > 0:
+            bar.update(delta)
+            bar_state["done"] = int(done)
+        bar.update(0, note=str(ev.get("note") or "")[:60])
 
     async def _run() -> int:
         async with repo_session(storage_url) as repo:
-            report = await execute_suite(
-                raw, repo, limit=limit, dataset_ids=dataset_ids,
-                concurrency=concurrency, max_cost_usd=max_cost_usd,
-                report_formats=report_formats, event_cb=_tool_progress,
-                progress=None if quiet else RichProgressReporter())
+            try:
+                report = await execute_suite(
+                    raw, repo, limit=limit, dataset_ids=dataset_ids,
+                    concurrency=concurrency, max_cost_usd=max_cost_usd,
+                    report_formats=report_formats, event_cb=_tool_progress,
+                    progress=None if quiet else RichProgressReporter())
+            finally:
+                if bar is not None:
+                    bar.finish()
             _print_report_summary(report)
             return report.exit_code
 

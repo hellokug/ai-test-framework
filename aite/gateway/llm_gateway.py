@@ -139,6 +139,10 @@ class LLMGateway:
     def default_model(self) -> str | None:
         return self._default_model
 
+    def model_aliases(self) -> list[str]:
+        """已注册模型别名（日志/诊断用）。"""
+        return list(self._models)
+
     def stats(self) -> dict[str, Any]:
         return {
             "total_calls": self.total_calls,
@@ -176,13 +180,25 @@ class LLMGateway:
         slot = self._models[alias]
         key = _cache_key(alias, messages, temperature, max_tokens, seed, json_mode)
         if cache and self._cache is not None and (text := self._cache.get(key)) is not None:
+            logger.debug("llm %s cached %.0fms", alias, 0.0)
             return GatewayResult(text=text, model=alias, cached=True)
 
         if slot.limiter:
             await slot.limiter.acquire(alias)
         self._check_budget()
 
-        text, usage = await self._call(slot, messages, temperature, max_tokens, seed, json_mode)
+        t0 = time.monotonic()
+        try:
+            text, usage = await self._call(slot, messages, temperature, max_tokens, seed, json_mode)
+        except Exception as exc:
+            # 空消息异常（如 TimeoutError 的 str 为空）只拼 {exc} 不可诊断——补类型名告警再抛
+            msg = str(exc)
+            logger.warning("llm %s FAILED after %.0fms: %s", alias,
+                           (time.monotonic() - t0) * 1000,
+                           f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__)
+            raise
+        logger.debug("llm %s %.0fms tokens=%s", alias,
+                     (time.monotonic() - t0) * 1000, usage.total_tokens if usage else "-")
         cost = estimate_cost_usd(slot.config.model, usage) or 0.0
         self._check_budget(cost)
         slot.calls += 1

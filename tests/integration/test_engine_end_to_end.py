@@ -216,3 +216,34 @@ async def test_run_row_persisted(repo, qa_file, tmp_path):
     assert len(results) == 2
     summaries = await repo.list_metric_summaries(report.run_id)
     assert any(s["metric"] == "exact_match" for s in summaries)
+
+
+@pytest.mark.asyncio
+async def test_target_failures_surface_in_report(repo, qa_file, tmp_path):
+    """target 执行失败的 case 必须进 report.details['failures']（CLI 失败详情数据源）——
+    真实教训：target 全 404 时指标全 0，用户既不知道哪失败也不知道为什么。"""
+    suite = suite_config(tmp_path, metrics=[{"exact_match": {}}])
+    engine = ExecutionEngine(repo)
+    report = await engine.run_suite(
+        suite, connector_override=MockConnector(fail_on={"q1"}))
+    assert report.error_cases == 1
+    failures = report.details["failures"]
+    assert len(failures) == 1
+    entry = failures[0]
+    assert entry["case"].startswith("q1")
+    assert "mock failure" in entry["detail"]
+    assert entry["dataset"]  # dataset 标签随 case 带出
+
+
+@pytest.mark.asyncio
+async def test_case_payloads_in_report_details(repo, qa_file, tmp_path):
+    """bad-case 分析数据源：报告 details 带逐 case 输入/输出/预期快照。"""
+    suite = suite_config(tmp_path, metrics=[{"exact_match": {"threshold": 1.0}}])
+    engine = ExecutionEngine(repo)
+    report = await engine.run_suite(
+        suite, connector_override=MockConnector(answers={"q2": "Paris but extra words"}))
+    payloads = report.details["case_payloads"]
+    assert set(payloads) == {"q1", "q2"}
+    assert "2+2" in payloads["q1"]["input"]
+    assert payloads["q2"]["expected"] == "Paris"
+    assert "Paris" in payloads["q2"]["output"]

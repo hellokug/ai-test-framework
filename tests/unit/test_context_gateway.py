@@ -24,21 +24,21 @@ def test_rule_only_suite_no_gateway():
 
 def test_needs_llm_from_metric_contract():
     """回归：LLM 能力判定走 Metric.needs_llm，不依赖硬编码名单——
-    新增/改名 LLM 指标（如 answer_correctness、context_precision）不再漏建 gateway。"""
-    gateway = build_gateway(_suite([{"answer_correctness": {}}]))
+    新增/改名 LLM 指标不再漏建 gateway。"""
+    gateway = build_gateway(_suite([{"task_completion": {}}]))
     assert gateway is not None
     assert gateway.default_model is not None
 
 
 def test_target_registered_as_default_when_no_judge_model():
-    gateway = build_gateway(_suite([{"faithfulness": {}}]))
+    gateway = build_gateway(_suite([{"task_completion": {}}]))
     assert gateway is not None
     # complete(model=None) 走缺省模型：未配 judge 时 = target 自身（自评口径）
     assert gateway.default_model == "target-model"
 
 
 def test_judge_model_registered_as_default():
-    suite = _suite([{"faithfulness": {}}], judges=[
+    suite = _suite([{"task_completion": {}}], judges=[
         {"type": "score", "model": {"type": "openai_compatible",
                                     "base_url": "http://j", "model": "judge-x"}}])
     gateway = build_gateway(suite)

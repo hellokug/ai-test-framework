@@ -31,8 +31,10 @@ aite dataset show ceval_full # 单个数据集详情
 | `financebench` | hf:PatronusAI/financebench | 金融开放问答（公司财报） |
 
 配套指标：RAGAS 五件套（faithfulness / answer_relevancy / context_precision /
-context_recall / answer_correctness）+ hit_rate / citation_accuracy，
-详见 `examples/accuracy/ragas.yaml`。
+context_recall / answer_correctness）**走 `engine: evalscope-rageval`**（evalscope
+官方内置 ragas 后端，开源口径，适配器见 aite/tools/）。自研指标实现已按
+「不造指标」定位红线删除；本表数据集的内置 recommend 只保留 token_f1/contains
+规则口径，供无 LLM 快速回归。
 
 ### Agent 评测
 

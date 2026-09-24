@@ -55,6 +55,13 @@ def looks_like_refusal(text: str) -> bool:
         any(marker in text for marker in REFUSAL_MARKERS_ZH)
 
 
+def fmt_exc(exc: BaseException) -> str:
+    """异常 → 可读错误串，带类型名（TimeoutError 等异常 str 为空，只拼 {exc}
+    会产出「llm failed: 」这类不可诊断的空错误——原则 9）。"""
+    msg = str(exc)
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
+
+
 class LLMMetricMixin:
     """Convenience for metrics that optionally call the gateway.
 

@@ -34,7 +34,9 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
 <body>
 <div class="wrap">
   <h1>aite · {{ report.run_name }}
-    <span class="badge {{ report.status }}">{{ report.status | upper }}</span></h1>
+    <span class="badge {{ report.status }}">评估 {{ report.status | upper }}</span>
+    <span class="badge {% if exec_status == 'success' %}passed{% elif exec_status == 'partial' %}error{% else %}failed{% endif %}"
+          title="执行健康度：case 调用成功/失败比例，与评估结论正交">执行 {{ exec_status }}</span></h1>
   {% set tgt = (report.config or {}).get('target') or {} %}
   <div class="sub">
     run_id <span class="mono">{{ report.run_id or '-' }}</span> ·
@@ -69,6 +71,10 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
       </tr>
       {% endfor %}
     </table>
+    <p class="sub" style="margin-top:8px">
+      说明：value = 各 case 得分均值（0~1，越高越好）；pass rate = 逐 case 达标占比（与均值是两个口径）；
+      result 为 — 的指标未配置阈值，仅记录、不参与通过判定（如 score = judge 对回答整体质量的 1-10 评分归一化）。
+    </p>
   </div>
 
   {% if grouped %}
@@ -94,11 +100,21 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
   <div class="card">
     <h2>Failing cases ({{ failed_count }})</h2>
     {% if not failed_cases %}<p style="color:var(--muted)">none 🎉</p>{% endif %}
-    {% for r in failed_cases[:200] %}
+    {% for row in failed_cases[:200] %}
+    {% set r = row.r %}
     <details>
       <summary>{{ r.case_id }} — {{ r.metric }}
-        {% if r.value is not none %} = {{ '%.4f' % r.value }}{% endif %}</summary>
-      {% if r.error %}<p style="color:var(--fail)">{{ r.error }}</p>{% endif %}
+        {% if r.value is not none %} = {{ '%.4f' % r.value }}{% endif %}
+        — {{ row.why }}</summary>
+      {% set p = row.payload %}
+      {% if p %}
+      <p><b>输入:</b> <span class="mono">{{ p.input }}</span></p>
+      <p><b>模型输出:</b> <span class="mono">{{ p.output or '（空）' }}</span></p>
+      <p><b>预期:</b> <span class="mono">{{ p.expected or '（无）' }}</span></p>
+      {% if p.target_error %}<p style="color:var(--fail)"><b>target error:</b> {{ p.target_error }}</p>{% endif %}
+      {% endif %}
+      {% if r.error %}<p style="color:var(--fail)"><b>判定错误:</b> {{ r.error }}</p>{% endif %}
+      <p><b>原因:</b> {{ row.why }}</p>
       <pre>{{ r.raw | tojson(indent=2) }}</pre>
     </details>
     {% endfor %}

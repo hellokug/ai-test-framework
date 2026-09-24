@@ -13,7 +13,7 @@ def test_builtin_components_registered():
     assert "local" in registry.registry.datasets
     assert "builtin" in registry.registry.datasets
     for metric in ("exact_match", "rouge_l", "latency_p95_ms", "repeat_consistency",
-                   "faithfulness", "tool_call_correctness", "attack_success_rate"):
+                   "tool_call_correctness", "attack_success_rate"):
         assert metric in registry.registry.metrics, metric
     assert "score" in registry.registry.judges
 

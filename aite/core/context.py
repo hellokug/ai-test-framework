@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from aite.core.types import EvalContext
+from aite.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from aite.core.loader import SuiteConfig
     from aite.gateway.llm_gateway import LLMGateway
+
+logger = get_logger("context")
 
 
 def build_gateway(config: SuiteConfig) -> LLMGateway | None:
@@ -40,6 +43,9 @@ def build_gateway(config: SuiteConfig) -> LLMGateway | None:
         gateway.register_model(model_cfg)
     if not judge_models:
         gateway.register_model(config.target, make_default=True)
+    logger.info("gateway llm models: %s (default=%s) — LLM 指标/判官走此注册表",
+                ", ".join(gateway.model_aliases()),
+                gateway.default_model or "-")
     return gateway
 
 

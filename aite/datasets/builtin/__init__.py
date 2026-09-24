@@ -43,17 +43,17 @@ BUILTIN_INFO: dict[str, dict] = {
         "task": "multi-hop QA with supporting facts (RAG)",
         "recommend": [
             {"name": "token_f1", "threshold": 0.3},
-            {"name": "context_recall", "threshold": 0.4},
         ],
     },
-    # ------------------------------------------------- RAGAS / RAG 评测数据集（§精度域）
+    # ------------------------------------------------- RAG 数据集（定位红线 2026-09-23：
+    # RAGAS 五件套一律走 engine: evalscope-rageval（开源 ragas）；本表 recommend 只保留
+    # 存量规则口径（token_f1/contains），供无 LLM 快速回归用）
     "rgb": {
         "file": "rgb_sample.jsonl",
         "upstream": "github:Chenmnicks/RGB (中英 RAG 鲁棒性基准)",
         "task": "RAG robustness: noise / rejection / integration / counterfactual (ZH)",
         "recommend": [
-            {"name": "faithfulness", "threshold": 0.5},
-            {"name": "context_precision", "threshold": 0.4},
+            {"name": "token_f1", "threshold": 0.1},
         ],
     },
     "crudrag": {
@@ -62,8 +62,6 @@ BUILTIN_INFO: dict[str, dict] = {
         "task": "Chinese RAG QA (Create/Read/Update/Delete tasks; sample = read)",
         "recommend": [
             {"name": "token_f1", "threshold": 0.15},
-            {"name": "context_recall", "threshold": 0.4},
-            {"name": "faithfulness", "threshold": 0.4},
         ],
     },
     "multihoprag": {
@@ -72,7 +70,6 @@ BUILTIN_INFO: dict[str, dict] = {
         "task": "multi-hop QA across news documents (comparison/inference/temporal/null)",
         "recommend": [
             {"name": "token_f1", "threshold": 0.2},
-            {"name": "context_recall", "threshold": 0.4},
         ],
     },
     "financebench": {
@@ -81,7 +78,6 @@ BUILTIN_INFO: dict[str, dict] = {
         "task": "open-book financial QA over company filings (RAG, EN)",
         "recommend": [
             {"name": "contains", "threshold": 0.4},
-            {"name": "answer_correctness", "threshold": 0.4},
         ],
     },
     # ------------------------------------------------------- Agent 评测数据集

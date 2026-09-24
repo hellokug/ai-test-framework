@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aite"
 version = "0.1.0"
-description = "AI Test & Evaluation Framework - unified evaluation for LLM / Agent / RAG + performance, reliability, safety"
+description = "AI 测试框架：不造评估指标，集成开源评测引擎——开源入口统一收口、开源输出统一格式化为平台结果模型（LLM / Agent / RAG · 功能 · 精度 · 性能 · 可靠性 · 安全）"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -61,6 +61,11 @@ locust = [
 # 可靠性 chaos（模块 I）：进程发现/注入经 psutil（懒加载，缺失优雅降级）。
 chaos = [
     "psutil>=5.9",
+]
+# RAGAS 五件套打分（engine: evalscope-rageval）：委托 evalscope RAGEval 后端的
+# 官方 ragas 集成（ragas>=0.4），aite 不 import 其指标算法。
+rageval = [
+    "evalscope[rag]>=1.9",
 ]
 agent = [
     "langchain-core>=0.2",

@@ -31,13 +31,13 @@ from typing import Any
 from aite.datasets import userstore
 from aite.datasets.domain_corpora import DOMAIN_CORPORA
 
-# 生成的 RAG 数据集默认推荐指标：RAGAS 五件套（无 gateway 走规则口径，
-# 有 gateway 时 faithfulness / context_precision / context_recall 自动升级 LLM 判定）
+# 生成的 RAG 数据集默认推荐指标：存量规则口径（token_f1/contains，指标不造新的）。
+# RAGAS 五件套（faithfulness/context_precision/context_recall/answer_correctness/
+# answer_relevancy）走 engine: evalscope-rageval（开源 ragas），见 docs/roadmap.md
+# 「存量自研指标迁移」。
 DEFAULT_RECOMMEND = [
-    {"name": "faithfulness", "threshold": 0.5},
-    {"name": "context_recall", "threshold": 0.5},
-    {"name": "context_precision", "threshold": 0.5},
-    {"name": "answer_correctness", "threshold": 0.4},
+    {"name": "token_f1", "threshold": 0.15},
+    {"name": "contains", "threshold": 0.3},
 ]
 
 
