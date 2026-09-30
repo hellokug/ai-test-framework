@@ -17,12 +17,10 @@ target:                            # 被测模型端点（OpenAI 兼容）
 tools:
   datasets: [swe_bench_lite_agentic]   # evalscope 数据集名：swe_bench_verified_mini_agentic
                                        #   （50 题精选）/ swe_bench_lite_agentic（300 题）等
-  limit_per_subset: 1                 # 每数据集实例数；首跑验证管线，真实评测去掉或加大
+  limit_per_subset: 20                 # 每数据集实例数；首跑验证管线，真实评测去掉或加大
   metric_thresholds: {score: 0.3}   # swe_bench agentic 指标无名，collect 兜底命名 score（即 resolve rate）       # acc 即 resolve rate（可 auto，可省略）
   extra_args:
-    # evalscope 装在独立环境（本机 py3.14 装不上其依赖 editdistance）；
-    # 留空则要求 aite 环境自身可导入 evalscope
-    python_exe: ./.venv-evalscope/Scripts/python.exe
+    # python_exe 由 data/common.yaml 缺省提供（conda evalscope 环境），无需在此重抄
     timeout_s: 14400                  # agent 任务子进程墙钟上限（缺省 4h）
     # extra_params 原生透传（TaskConfig → dataset_args），如：
     # extra_params: {build_docker_images: true, pull_remote_images_if_available: true}

@@ -1,0 +1,35 @@
+module: accuracy
+run_name: aa_lcr
+description: >
+  aa_lcr基准测试
+
+engine: evalscope
+
+target:
+  profile: deepseek                # 引用 data/common.yaml 预制端点
+  # params: {temperature: 0}             # 可选：数学推理建议温度 0（逐键覆盖预制）
+  # model: qwen2.5:14b                   # AIME 很难：3B 级模型 acc 常为 0，换强推理模型才有区分度
+
+tools:
+  datasets: [aa_lcr]                     # 选基准 = 连口径与指标一起选；aite tool benchmarks evalscope 查全部
+  judge: {profile: deepseek, model: deepseek-reasoner}   # 判官配在 tools 段（不在 target 下！）
+                                                         # 新版 evalscope：LLM 判官类基准不配即拒跑
+  # resume 缺省 auto（状态感知）：上次没跑完（断电/余额不足）→ 重跑就地续推
+  # 只补缺失项；跑完 → 再跑自动全新起跑。true=强制复用最近目录（改判官只重判
+  # 不重生成）；false=永远全新。改 limit/模型/生成参数 = 身份变更，一律全新。
+  # resume: auto
+  extra_args:
+    eval_batch_size: 10                  # 评测并发数（生成+判官两段共用；远程 API 缺省 8）
+    timeout_s: 14400                     # 整场子进程墙钟上限（aite 看门狗）
+    # 原生透传 TaskConfig.generation_config（build_config 原样并入）：
+    generation_config:
+      timeout: 1800                      # 单请求墙钟秒——openai 客户端缺省 600s，3B 推理
+      max_tokens: 16384                  #   一题常 10 分钟+ 必超时（实弹教训 2026-09-27）
+      temperature: 0                     # max_tokens 是生成长度上限，兜底防个别题无限长
+    # python_exe 已由 data/common.yaml 的 tools 缺省提供，无需在此重抄；
+    # 未建 common.yaml 时取消下行注释：
+    # python_exe: ./.venv-evalscope/Scripts/python.exe
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

@@ -245,6 +245,9 @@ def load_suite(source: str | Path | dict[str, Any]) -> SuiteConfig:
         data = dict(source)
     if not isinstance(data, dict):
         raise ValueError("suite config must be a mapping")
+    from aite.core.profiles import apply_common
+
+    apply_common(data)   # 模型 profile 展开 + common 工具缺省并入（幂等，就地）
     data.setdefault("run_name", data.get("run_name") or "")
     if "metrics" in data:
         raw = data["metrics"]

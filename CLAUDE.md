@@ -4,6 +4,13 @@
 
 ### 架构与目标
 - 项目目标与四层架构（接口层 / 编排层 / 插件层 / 基础层）确定后不随意改动。
+- **定位红线（2026-09-23 用户确认）：不造任何评估指标。** 评测能力一律来自集成
+  开源引擎（evalscope / lm-eval / ragas / deepeval / swebench harness / locust /
+  pytest…），aite 只做三件事：开源入口统一收口（suite `engine:` 路由）、开源输出
+  统一格式化为平台结果模型（run_metric_summary/报告/趋势）、数据集与任务治理。
+  新增评测能力 = 在 `aite/tools/` 新增适配器，禁止在 `aite/metrics/` 下新写指标
+  算法；存量自研指标为历史包袱（2026-09-01「自研引擎保留作补充」口径自本日起
+  收缩为存量兼容），按 `docs/roadmap.md`「存量自研指标迁移」逐步替换。
 - 契约级内容视为架构变更，须先讨论并在 `docs/roadmap.md` 记录决策后再改：
   `aite/core/interfaces.py`、`aite/core/types.py`、`/api/v1` 路由契约、`aite/storage/models.py` 表结构。
 - 模块内部实现可自由演进，不受此限。

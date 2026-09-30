@@ -5,9 +5,16 @@ import pathlib
 
 import pytest
 
-from aite.tools import parse_tool_suite
-from aite.tools.base import ToolRunRequest, get_tool
+from aite.core import profiles
+from aite.tools import (
+    normalize_resume_mode,
+    parse_tool_suite,
+    run_tool_suite,
+    tool_identity_hash,
+)
+from aite.tools.base import ToolAdapter, ToolMetricRow, ToolRunRequest, ToolRunResult, get_tool
 from aite.tools.evalscope_adapter import EvalscopeAdapter, _normalize_metric_names
+from aite.tools.subproc import kill_tree
 
 
 def test_normalize_metric_names():
@@ -121,11 +128,223 @@ class TestEvalscopeAdapter:
         assert result.rows[0].threshold == 0.5     # 显式优先
         assert result.rows[0].passed is False
 
+    def test_collect_threshold_alias_acc_vs_mean_acc(self, tmp_path):
+        """阈值键容错：报告原始名 acc ↔ 配置键 mean_acc 双向命中，不再静默不判定。"""
+        write_report(tmp_path, "m@gsm8k.json", {
+            "dataset_name": "gsm8k",
+            "metrics": [{"name": "acc", "num": 10, "score": 0.8}]})
+        result = EvalscopeAdapter().collect(
+            make_request(work_dir=tmp_path, metric_thresholds={"mean_acc": 0.5}))
+        assert result.rows[0].threshold == 0.5 and result.rows[0].passed is True
+
+        write_report(tmp_path, "m@arc.json", {
+            "dataset_name": "arc",
+            "metrics": [{"name": "mean_acc", "num": 10, "score": 0.2}]})
+        result = EvalscopeAdapter().collect(
+            make_request(work_dir=tmp_path, metric_thresholds={"acc": 0.5}))
+        row = next(r for r in result.rows if r.dataset == "evalscope:arc")
+        assert row.threshold == 0.5 and row.passed is False
+
+    def test_auto_threshold_hits_report_raw_name_acc(self, tmp_path):
+        """auto 阈值：推荐表键 mean_acc，报告若报原始名 acc 亦命中。"""
+        write_report(tmp_path, "m@mmlu.json", {
+            "dataset_name": "mmlu",
+            "metrics": [{"name": "acc", "num": 10, "score": 0.3}]})
+        result = EvalscopeAdapter().collect(
+            make_request(work_dir=tmp_path, auto_thresholds=True))
+        assert result.rows[0].threshold == 0.25 and result.rows[0].passed is True
+
+    def test_tasks_from_stdout_skips_banner(self):
+        """独立环境列举的 stdout 解析：banner 行混入时取末段 JSON 数组。"""
+        from aite.tools.evalscope_adapter import _tasks_from_stdout
+
+        stdout = "evalscope 1.9.1\nloading...\n[{\"name\": \"mmlu\", \"metrics\": [\"mean_acc\"]}]"
+        assert _tasks_from_stdout(stdout)[0]["name"] == "mmlu"
+        with pytest.raises(RuntimeError, match="JSON"):
+            _tasks_from_stdout("no json here")
+
+    def test_build_config_judge_prefab(self, monkeypatch):
+        """tools.judge 预制 → 原生 typed judge 结构（model_id/api_url/api_key）。"""
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-judge")
+        req = make_request(judge={"base_url": "https://api.deepseek.com/v1",
+                                  "model": "deepseek-reasoner",
+                                  "api_key_env": "DEEPSEEK_API_KEY"})
+        cfg = EvalscopeAdapter().build_config(req)
+        jmodel = cfg["judge"]["models"][0]
+        assert jmodel["model_id"] == "deepseek-reasoner"
+        assert jmodel["api_url"] == "https://api.deepseek.com/v1/chat/completions"
+        assert jmodel["api_key"] == "sk-judge"
+
+    def test_build_config_judge_requires_endpoint(self):
+        req = make_request(judge={"model": "deepseek-reasoner"})
+        with pytest.raises(ValueError, match="base_url"):
+            EvalscopeAdapter().build_config(req)
+
+    def test_build_config_judge_conflicts_with_native(self):
+        """预制引用与 extra_args 原生透传二选一，不允许静默覆盖。"""
+        req = make_request(judge={"base_url": "http://x/v1", "model": "j"},
+                           extra={"judge": {"models": []}})
+        with pytest.raises(ValueError, match="二选一"):
+            EvalscopeAdapter().build_config(req)
+
+    def test_build_config_native_judge_passthrough(self):
+        """高级形态：extra_args.judge 直写原生结构原样透传。"""
+        req = make_request(extra={"judge": {"strategy": "rule"}})
+        assert EvalscopeAdapter().build_config(req)["judge"] == {"strategy": "rule"}
+
+    def test_dispatch_line_splits_progress_and_log_mirror(self):
+        """日志行分流：进度模式驱动进度条，其余行镜像为 log 事件（空行丢、长行截断）。"""
+        from aite.tools.evalscope_adapter import _dispatch_line
+
+        seen = []
+        _dispatch_line("Running[task]  50%|  5/10", seen.append)
+        assert seen[-1]["type"] == "progress" and seen[-1]["done"] == 5
+        _dispatch_line("Start loading benchmark dataset", seen.append)
+        assert seen[-1]["type"] == "progress" and "加载数据集" in seen[-1]["phase"]
+        _dispatch_line("Downloading dataset shard 3/10", seen.append)
+        assert seen[-1] == {"type": "log", "line": "Downloading dataset shard 3/10"}
+        _dispatch_line("x" * 500, seen.append)
+        assert seen[-1]["type"] == "log" and len(seen[-1]["line"]) == 300
+        before = len(seen)
+        _dispatch_line("   ", seen.append)
+        assert len(seen) == before                        # 空行不产生事件
+
+    def test_build_config_resume_sets_use_cache(self):
+        """断点续推：use_cache 指向工作目录（evalscope 就地复用预测/判分）。"""
+        req = make_request(resume=True, work_dir=pathlib.Path("/w/aa_lcr/20260929-120000"))
+        cfg = EvalscopeAdapter().build_config(req)
+        assert cfg["use_cache"] == str(req.work_dir)
+        assert EvalscopeAdapter().build_config(make_request()).get("use_cache") is None
+
+    def test_subprocess_cfg_paths_absolutized(self):
+        """use_cache 与 work_dir 一起强制绝对路径：子进程 cwd 已切进目录，相对
+        路径会在其下二次拼接（2026-09-29 套娃实弹：产物整套嵌套一层）。"""
+        cfg = {"work_dir": "reports/tool/x", "use_cache": "reports/tool/x"}
+        EvalscopeAdapter._normalize_cfg_paths(cfg, pathlib.Path("/abs/run"))
+        assert cfg["work_dir"].replace("\\", "/") == "/abs/run"
+        assert cfg["use_cache"].replace("\\", "/") == "/abs/run"
+        cfg2 = {"work_dir": "w"}
+        EvalscopeAdapter._normalize_cfg_paths(cfg2, pathlib.Path("/abs/run"))
+        assert "use_cache" not in cfg2
+
+    def test_resume_identity_conflict_auto_fallback(self):
+        """续推撞上身份校验不符（上次目录无快照）→ 自动 rerun_review 重试一次。"""
+        import asyncio
+
+        adapter = EvalscopeAdapter()
+        calls = []
+
+        async def fake_impl(req, exe):
+            calls.append(dict(req.extra))
+            if len(calls) == 1:
+                raise RuntimeError("evalscope task failed: ValueError: Cached evaluation "
+                                   "identity does not match the current run "
+                                   "(previous=unknown, current=sha256:abc)")
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(adapter, "_run_subprocess_impl", fake_impl)
+        monkeypatch.setattr(adapter, "collect", lambda req: "collected")
+        try:
+            result = asyncio.run(adapter._run_subprocess(make_request(resume=True), "py"))
+            assert result == "collected"
+            assert "rerun_review" not in calls[0] and calls[1]["rerun_review"] is True
+        finally:
+            monkeypatch.undo()
+
+    def test_resume_identity_conflict_requires_resume_flag(self):
+        """非续推场景的同类报错不兜底（直接抛出）。"""
+        import asyncio
+
+        adapter = EvalscopeAdapter()
+
+        async def fake_impl(req, exe):
+            raise RuntimeError("evalscope task failed: Cached evaluation identity "
+                               "does not match the current run")
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(adapter, "_run_subprocess_impl", fake_impl)
+        try:
+            with pytest.raises(RuntimeError, match="identity"):
+                asyncio.run(adapter._run_subprocess(make_request(), "py"))
+        finally:
+            monkeypatch.undo()
+
+    def test_is_identity_conflict_matcher(self):
+        from aite.tools.evalscope_adapter import _is_identity_conflict
+
+        assert _is_identity_conflict("ValueError: Cached evaluation identity does "
+                                     "not match the current run (previous=unknown)")
+        assert not _is_identity_conflict("Error code: 402 - Insufficient Balance")
+
+    def test_bootstrap_scripts_are_valid_python(self):
+        """引导串虽不执行也必须是合法 Python——缩进坏了子进程秒炸
+        IndentationError（实弹教训 2026-09-28：离线单测全绿拦不住它）。"""
+        import ast
+
+        for src in (EvalscopeAdapter.RUN_TASK_BOOTSTRAP,
+                    EvalscopeAdapter.LIST_TASKS_BOOTSTRAP):
+            ast.parse(src)
+
+
+class TestKillTree:
+    def test_kill_tree_terminates_process(self):
+        import subprocess
+        import sys
+
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        kill_tree(proc)
+        assert proc.wait(timeout=15) is not None
+
 
 class TestToolSuiteParsing:
     def test_parse_requires_datasets(self):
         with pytest.raises(ValueError, match="tools.datasets"):
             parse_tool_suite({"engine": "evalscope", "tools": {}})
+
+    def test_parse_extracts_tools_judge(self, monkeypatch, tmp_path):
+        # 隔离本地 data/common.yaml（真实环境可能已注册同名预制，展开会改变断言对象）
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        req, _ = parse_tool_suite({"engine": "evalscope",
+                                   "tools": {"datasets": ["aime26"],
+                                             "judge": {"profile": "deepseek"}}})
+        assert req.judge == {"profile": "deepseek"}
+
+    def test_parse_rejects_non_dict_judge(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        with pytest.raises(ValueError, match="tools.judge"):
+            parse_tool_suite({"engine": "evalscope",
+                              "tools": {"datasets": ["aime26"], "judge": "deepseek"}})
+
+    def test_parse_resume_reuses_latest_dir(self, tmp_path):
+        """断点续推：resume=true 复用最新历史输出目录（时间戳名排序即时序）。"""
+        base = tmp_path / "reports" / "tool" / "evalscope" / "aa_lcr"
+        base.mkdir(parents=True)
+        for stamp in ("20260928-100000", "20260929-120000"):
+            (base / stamp).mkdir()
+        req, _ = parse_tool_suite({"engine": "evalscope", "run_name": "aa_lcr",
+                                   "output_dir": str(tmp_path / "reports"),
+                                   "tools": {"datasets": ["aa_lcr"], "resume": True}})
+        assert req.resume is True
+        assert req.work_dir == base / "20260929-120000"
+
+    def test_parse_resume_without_history_starts_fresh(self, tmp_path):
+        req, _ = parse_tool_suite({"engine": "evalscope", "run_name": "aa_lcr",
+                                   "output_dir": str(tmp_path / "reports"),
+                                   "tools": {"datasets": ["aa_lcr"], "resume": True}})
+        assert req.resume is True
+        assert req.work_dir.parent.name == "aa_lcr"      # 新时间戳目录照常创建
+        assert len(req.work_dir.name) == 15
+
+    def test_parse_resume_default_auto_fresh_without_state(self, tmp_path):
+        """缺省 auto：历史目录无 run_state.json（旧版产物/被删）→ 不赌身份，全新起跑。"""
+        base = tmp_path / "reports" / "tool" / "evalscope" / "aa_lcr"
+        (base / "20260928-100000").mkdir(parents=True)
+        req, _ = parse_tool_suite({"engine": "evalscope", "output_dir": str(tmp_path / "reports"),
+                                   "tools": {"datasets": ["aa_lcr"]}})
+        assert req.resume is True            # auto 档仍武装 use_cache（身份快照照写）
+        assert req.work_dir != base / "20260928-100000"
 
     def test_parse_tests_dir_allows_empty_datasets(self):
         req, _ = parse_tool_suite({"engine": "pytest", "tools": {"tests_dir": "my_ft"}})
@@ -449,3 +668,190 @@ class TestProgressParsing:
         from aite.tools.evalscope_adapter import parse_progress
         ev = parse_progress("...INFO: Pulling SWE-Bench images   0%| 0/1 [Elapsed: 01:00]")
         assert ev == {"type": "progress", "phase": "拉取实例镜像", "done": 0, "total": 1}
+
+
+class TestResumePolicy:
+    """resume 三态决策矩阵（缺省 auto）：run_state.json 完成态 + 生成侧身份。"""
+
+    def _raw(self, tmp_path, **tools):
+        tools.setdefault("datasets", ["aa_lcr"])
+        return {"engine": "evalscope", "run_name": "aa_lcr",
+                "output_dir": str(tmp_path / "reports"), "tools": tools}
+
+    def _seed(self, tmp_path, stamp, raw=None, status="running"):
+        """播种历史目录；raw 给定时写入与该配置匹配的身份哈希。"""
+        d = tmp_path / "reports" / "tool" / "evalscope" / "aa_lcr" / stamp
+        d.mkdir(parents=True)
+        if raw is not None:
+            (d / "run_state.json").write_text(json.dumps({
+                "status": status, "identity_hash": tool_identity_hash(raw),
+            }, ensure_ascii=False), encoding="utf-8")
+        return d
+
+    def test_auto_resumes_incomplete(self, tmp_path, monkeypatch):
+        """auto + 上次未完成 + 身份一致 → 就地续推最近目录。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        raw = self._raw(tmp_path)
+        seeded = self._seed(tmp_path, "20260929-120000", raw, status="running")
+        req, _ = parse_tool_suite(raw)
+        assert req.resume is True and req.work_dir == seeded
+
+    def test_auto_starts_fresh_when_completed(self, tmp_path, monkeypatch):
+        """auto + 上次已完成 → 全新起跑（跑完的任务再跑 = 新任务）。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        raw = self._raw(tmp_path)
+        seeded = self._seed(tmp_path, "20260929-120000", raw, status="completed")
+        req, _ = parse_tool_suite(raw)
+        assert req.work_dir != seeded and req.work_dir.parent == seeded.parent
+
+    def test_force_reuses_completed_dir(self, tmp_path, monkeypatch):
+        """force（resume: true）+ 已完成 → 照样复用（改判官重判/重出报告场景）。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        raw = self._raw(tmp_path, resume=True)
+        seeded = self._seed(tmp_path, "20260929-120000", raw, status="completed")
+        req, _ = parse_tool_suite(raw)
+        assert req.work_dir == seeded
+
+    def test_identity_change_forces_fresh_even_if_incomplete(self, tmp_path, monkeypatch):
+        """身份变更（limit 5 → 全量）→ 未完成也不续推：不混入不可比预测。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        seeded_raw = self._raw(tmp_path, limit_per_subset=5)
+        seeded = self._seed(tmp_path, "20260929-120000", seeded_raw, status="running")
+        raw = self._raw(tmp_path, resume=True)   # force 也压不过身份变更
+        req, _ = parse_tool_suite(raw)
+        assert req.work_dir != seeded
+
+    def test_force_keeps_legacy_dir_without_state(self, tmp_path, monkeypatch):
+        """force + 旧版目录（无状态文件）→ 照续推（身份交 evalscope 侧校验）。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        seeded = self._seed(tmp_path, "20260929-120000")
+        raw = self._raw(tmp_path, resume=True)
+        req, _ = parse_tool_suite(raw)
+        assert req.work_dir == seeded
+
+    def test_off_always_fresh(self, tmp_path, monkeypatch):
+        """resume: false → 即使上次未完成也全新（显式新任务）。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        seeded_raw = self._raw(tmp_path)
+        seeded = self._seed(tmp_path, "20260929-120000", seeded_raw, status="running")
+        raw = self._raw(tmp_path, resume=False)
+        req, _ = parse_tool_suite(raw)
+        assert req.resume is False and req.work_dir != seeded
+
+    def test_normalize_resume_mode(self):
+        assert normalize_resume_mode(None) == "auto"
+        assert normalize_resume_mode("auto") == "auto"
+        assert normalize_resume_mode(True) == "force"
+        assert normalize_resume_mode("TRUE") == "force"
+        assert normalize_resume_mode("force") == "force"
+        assert normalize_resume_mode(False) == "off"
+        assert normalize_resume_mode("false") == "off"
+        assert normalize_resume_mode("off") == "off"
+        with pytest.raises(ValueError, match="resume"):
+            normalize_resume_mode("sometimes")
+
+    def test_identity_ignores_judge_and_infra(self, tmp_path, monkeypatch):
+        """判官/基础设施参数不在生成侧身份内；模型/limit/生成参数在。"""
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        base_raw = self._raw(tmp_path)
+        with_judge = self._raw(tmp_path, judge={"profile": "deepseek",
+                                                "model": "deepseek-reasoner"})
+        assert tool_identity_hash(base_raw) == tool_identity_hash(with_judge)
+        assert tool_identity_hash(base_raw) != tool_identity_hash(
+            self._raw(tmp_path, limit_per_subset=5))
+        other_model = self._raw(tmp_path)
+        other_model["target"] = {"base_url": "http://x/v1", "model": "other"}
+        assert tool_identity_hash(base_raw) != tool_identity_hash(other_model)
+        assert tool_identity_hash(base_raw) != tool_identity_hash(
+            self._raw(tmp_path, extra_args={"generation_config": {"temperature": 0}}))
+        infra = self._raw(tmp_path, extra_args={"timeout_s": 60, "python_exe": "x",
+                                                "eval_batch_size": 2,
+                                                "rerun_review": True})
+        assert tool_identity_hash(base_raw) == tool_identity_hash(infra)
+
+
+class TestResumeStateLifecycle:
+    """run_tool_suite 落盘 run_state.json：running → completed / failed。"""
+
+    def _fake_repo(self):
+        class FakeRepo:
+            async def upsert_suite(self, name, cfg):
+                return "suite-1"
+
+            async def create_run(self, name, cfg, suite_id):
+                return "run-1"
+
+            async def save_metric_summary(self, run_id, s):
+                return None
+
+            async def update_run(self, run_id, **kw):
+                return None
+
+        return FakeRepo()
+
+    def _run(self, tmp_path, monkeypatch, boom=False):
+        import asyncio
+
+        from aite.tools.base import register_tool, unregister_tool
+
+        @register_tool("fakebench_state")
+        class FakeBench(ToolAdapter):
+            def build_config(self, req):
+                return {}
+
+            async def run(self, req):
+                if boom:
+                    raise RuntimeError("boom")
+                return ToolRunResult(
+                    rows=[ToolMetricRow(dataset="evalscope:aa_lcr", metric="acc",
+                                        value=0.5, count=10)],
+                    raw_score={"aa_lcr": 0.5})
+
+            def collect(self, req):
+                return ToolRunResult()
+
+            def list_tasks(self):
+                return []
+
+        try:
+            raw = {"engine": "fakebench_state", "run_name": "aa_lcr",
+                   "output_dir": str(tmp_path / "reports"),
+                   "tools": {"datasets": ["aa_lcr"]}}
+            monkeypatch.setattr(profiles, "common_path",
+                                lambda: tmp_path / "nope.yaml")
+            report = asyncio.run(run_tool_suite(raw, self._fake_repo()))
+        finally:
+            unregister_tool("fakebench_state")
+        return report
+
+    def _state_of(self, tmp_path):
+        stamps = tmp_path / "reports" / "tool" / "fakebench_state" / "aa_lcr"
+        stamp = next(iter(stamps.iterdir()))
+        return json.loads((stamp / "run_state.json").read_text(encoding="utf-8")), stamp
+
+    def test_success_marks_completed(self, tmp_path, monkeypatch):
+        report = self._run(tmp_path, monkeypatch)
+        state, _ = self._state_of(tmp_path)
+        assert report.status == "passed"
+        assert state["status"] == "completed" and state["identity_hash"]
+
+    def test_failure_marks_failed_still_resumable(self, tmp_path, monkeypatch):
+        self._run(tmp_path, monkeypatch, boom=True)
+        state, _ = self._state_of(tmp_path)
+        assert state["status"] == "failed"
+
+    def test_interrupted_run_is_resumed_by_auto(self, tmp_path, monkeypatch):
+        """失败目录 + auto → 下次 parse 就地续推同一目录（断电/402 场景）。"""
+        self._run(tmp_path, monkeypatch, boom=True)
+        _, stamp = self._state_of(tmp_path)
+        assert json.loads((stamp / "run_state.json").read_text(
+            encoding="utf-8"))["status"] == "failed"
+        raw = {"engine": "fakebench_state", "run_name": "aa_lcr",
+               "output_dir": str(tmp_path / "reports"),
+               "tools": {"datasets": ["aa_lcr"]}}
+        # 身份按同一（隔离 common 的）解析口径计算，否则哈希对不上
+        monkeypatch.setattr(profiles, "common_path", lambda: tmp_path / "nope.yaml")
+        req, _ = parse_tool_suite(raw)
+        assert req.work_dir == stamp
+
+

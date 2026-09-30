@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 功能测试 · V1 静态稿</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=7">
+</head>
+<body data-module="functional" data-module-label="功能测试">
+<script type="text/plain" id="page-list">[
+  {"id":"runs","label":"运行总览","count":"23"},
+  {"id":"detail","label":"运行详情"},
+  {"id":"scenarios","label":"场景目录","count":"13"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 运行总览 ============ -->
+  <section data-page="runs">
+    <header class="topbar">
+      <div><h1>功能测试 · 运行总览</h1><div class="crumb">engine=pytest · 场景级 pass_rate · 阈值 auto=1.0 零容忍</div></div>
+      <div class="actions"><button class="btn" data-open-drawer="newRunModal">＋ 新建运行</button></div>
+    </header>
+    <section class="stats">
+      <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">23</div><span class="delta up">▲ 5 本周</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>场景通过率</div><div class="value">91.7%</div><span class="delta up">▲ 2.4pp</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>内置场景</div><div class="value">13</div><span class="delta flat">+2 本月</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>失败场景</div><div class="value">3</div><span class="delta down">▼ 1</span></div>
+    </section>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="chip on" data-single>全部 <small>23</small></span>
+      <span class="chip" data-single>已通过</span>
+      <span class="chip" data-single>失败 <small>2</small></span>
+      <span style="flex:1"></span>
+      <select class="in" style="width:200px;height:32px;padding:4px 10px"><option>全部目标模型</option><option>qwen2.5:3b</option><option>DeepSeek-V3</option></select>
+    </div>
+    <section class="card"><table id="runsTbl"></table>
+      <div class="foot-note"><span>共 23 条记录（domain=functional）</span></div></section>
+  </section>
+
+  <!-- ============ 运行详情 ============ -->
+  <section data-page="detail" hidden>
+    <header class="topbar">
+      <div>
+        <h1>ft-full-qwen3b <span class="badge failed" style="vertical-align:3px"><i></i>失败</span></h1>
+        <div class="crumb">run #7a21c9e4 · engine=pytest · qwen2.5:3b (Ollama) · 13 场景 84 例 · 阈值 auto（pass_rate=1.0）· 09-23 20:12</div>
+      </div>
+      <div class="actions"><button class="btn">HTML 报告 ↗</button><button class="btn" onclick="showPage('runs')">← 返回</button></div>
+    </header>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>场景汇总</h3><div class="sub">每场景一行 pass_rate · junit-xml 留档 work_dir</div></div></div>
+      <table id="sumTbl" class="sumtable"></table>
+    </section>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>失败详情</h3><div class="sub">断言 → 输入 → 输出（repr_failure，单例 &lt;1KB）</div></div></div>
+      <div class="detail-stack" id="failList"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>用例结果 <span class="dim">(84)</span></h3></div>
+        <input class="in" style="width:240px;height:32px;padding:4px 12px" placeholder="按 case id 过滤（tools.cases 精确定向）…"></div>
+      <table id="casesTbl"></table>
+    </section>
+  </section>
+
+  <!-- ============ 场景目录 ============ -->
+  <section data-page="scenarios" hidden>
+    <header class="topbar">
+      <div><h1>场景目录</h1><div class="crumb">内置场景 = 隐式功能数据集 · 自定义场景 = 目录 + cases.jsonl</div></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.7">
+        自定义场景：建目录放 <span class="tag mono">cases.jsonl</span>（一行 = id + desc + messages + expect 断言 DSL），
+        套件 <span class="tag mono">tools.tests_dir</span> 指过去零改动消费；受管数据集在
+        <a href="common.html#datasets" style="color:var(--ac)">公共 · 数据集管理</a> 的功能型 tab。
+        单用例复现：套件 <span class="tag mono">tools.cases: [用例 id]</span> 精确定向。
+      </div>
+    </div>
+    <div class="scene-grid" id="sceneGrid"></div>
+  </section>
+</main>
+
+<!-- 新建运行弹窗 -->
+<div class="mask" id="newRunModal" hidden>
+  <div class="modal" style="width:640px">
+    <h3>新建功能运行</h3>
+    <div class="field"><label>套件</label>
+      <select class="in"><option>ft-full（13 场景 84 例 · qwen2.5:3b）</option><option>ft-api-contract（4 场景 38 例）</option><option>ft-agent-tasks（工具调用 12 例）</option></select></div>
+    <div class="form-grid">
+      <div class="field"><label>用例级过滤 tools.cases（可选）</label><input class="in" placeholder="留空 = 全部；如 api_limits.max_tokens_one"></div>
+      <div class="field"><label>chaos 故障注入（可选）</label><select class="in"><option>不注入</option></select></div>
+    </div>
+    <div class="row"><button class="btn" data-close>取消</button><button class="btn primary">启动（后台执行）</button></div>
+  </div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 功能测试 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=4"></script>
+<script>
+const RUNS = [
+  ["ft-full-qwen3b", "#7a21c9e4", "qwen2.5:3b", "failed", 91.7, "84 / 3 fail", "09-23 20:12"],
+  ["ft-api-contract-deepseek", "#b09d41aa", "DeepSeek-V3", "failed", 86.8, "38 / 5 fail", "09-23 15:31"],
+  ["ft-agent-tasks-qwen", "#5ce208b1", "qwen2.5:3b", "passed", 100.0, "12 / 0", "09-23 11:20"],
+  ["ft-smoke-ollama", "#d3417f0a", "qwen2.5:3b", "passed", 100.0, "14 / 0", "09-22 09:15"],
+  ["ft-full-nightly", "#18c7b2e9", "DeepSeek-V3", "passed", 98.8, "84 / 1 fail", "09-22 02:00"],
+];
+document.getElementById("runsTbl").innerHTML = `
+  <thead><tr><th>运行</th><th>目标模型</th><th>状态</th><th>场景通过率</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${RUNS.map(r => `<tr class="clickable" onclick="showPage('detail')">
+    <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
+    <td class="dim">${r[2]}</td><td>${badge(r[3])}</td><td>${passCell(r[4])}</td>
+    <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
+    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")}</tbody>`;
+
+const SUMS = [
+  ["basic_chat", "基础对话", 1.0, true, 4], ["structured_output", "结构化输出", 1.0, true, 3],
+  ["tool_calling", "工具调用", 0.95, true, 5], ["long_context", "长上下文", 1.0, true, 2],
+  ["api_params", "API 契约·请求侧", 0.77, false, 22], ["api_stream", "API 契约·流式", 0.75, false, 4],
+  ["api_limits", "API 契约·输出侧", 0.86, false, 7], ["api_shape", "API 契约·响应体", 1.0, true, 5],
+  ["agent_tasks", "Agent 工具任务", 0.92, true, 12],
+];
+document.getElementById("sumTbl").innerHTML = `
+  <thead><tr><th>场景</th><th>说明</th><th>pass_rate</th><th>阈值判定（auto=1.0）</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${SUMS.map((s, i) => `<tr class="${i === 0 ? "" : ""}">
+    <td class="mono">${s[0]}</td><td class="dim">${s[1]}</td><td>${passCell(s[2] * 100)}</td>
+    <td class="num dim">pass_rate ≥ 1.0</td><td class="num">${s[4]}</td>
+    <td>${badge(s[3] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+const FAILS = [
+  { case: "api_params.extra_param_ignored", assert: "http_status = 400（未知参数必须拒绝）",
+    input: `POST /v1/chat/completions {"model":"qwen2.5:3b","messages":[…],"temperature":0.7,"top_k":40}`,
+    output: `HTTP 200 — n/extra 参数被静默忽略（Ollama 已知规范差异，标准端点应转绿）` },
+  { case: "api_stream.sse_done_marker", assert: "流式以 data: [DONE] 结束",
+    input: `POST /v1/chat/completions {"stream":true, …}`,
+    output: `流正常返回 12 个 chunk，但缺少 [DONE] 终止帧（ finish_reason=stop 后连接直接关闭）` },
+  { case: "tool_calling.weather_args", assert: "tool_args_contains {city: 北京}",
+    input: `messages: ["北京明天穿什么？"] + tools:[get_weather]`,
+    output: `模型调用 get_weather，但参数为 {"city": "Beijing"}（中文名未按用例约束保留）` },
+];
+document.getElementById("failList").innerHTML = FAILS.map(f => `
+  <div style="border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);border-radius:10px;padding:12px 16px">
+    <div class="mono" style="font-size:13px;color:var(--bad)">✕ ${f.case}</div>
+    <div class="detail-stack" style="margin-top:10px">
+      <div class="kv"><span>断言</span><div style="font-size:12.5px">${f.assert}</div></div>
+      <div class="kv"><span>输入</span><pre>${f.input}</pre></div>
+      <div class="kv"><span>输出</span><pre>${f.output}</pre></div>
+    </div></div>`).join("");
+
+const CASES = [
+  ["basic_chat.intro", "开放对话", 1.0, "passed"], ["basic_chat.greeting", "问候", 1.0, "passed"],
+  ["api_params.extra_param_ignored", "未知参数拒绝", 0.0, "failed"], ["api_stream.sse_done_marker", "[DONE] 帧", 0.0, "failed"],
+  ["agent_tasks.weather_args", "参数抽取", 1.0, "passed"],
+];
+document.getElementById("casesTbl").innerHTML = `
+  <thead><tr><th>Case（nodeid）</th><th>说明</th><th>结果</th></tr></thead>
+  <tbody>${CASES.map(c => `<tr><td class="mono">${c[0]}</td><td class="dim">${c[1]}</td>
+    <td>${passCell(c[2] * 100)} ${badge(c[3])}</td></tr>`).join("")}</tbody>`;
+
+const SCENES = [
+  ["basic_chat", "开放对话基础能力：非空、无乱码、无内部标签泄露", 4, "模型能力"],
+  ["structured_output", "JSON 结构化输出：解析正确、字段齐全", 3, "模型能力"],
+  ["tool_calling", "工具选择与参数抽取（含中文与订单号精确抽取）", 5, "模型能力"],
+  ["long_context", "长上下文大海捞针（16k 确定性 haystack）", 2, "模型能力"],
+  ["api_params", "API 契约·请求侧 22 例：参数校验/可选参数/json_mode/tool_choice/输入鲁棒性", 22, "API 契约"],
+  ["api_stream", "API 契约·流式 4 例：SSE 拼接/finish_reason/[DONE]/分块", 4, "API 契约"],
+  ["api_limits", "API 契约·输出侧 7 例：max_tokens/stop 序列/tool_calls 信号", 7, "API 契约"],
+  ["api_shape", "API 契约·响应体 5 例：OpenAI 规范响应结构", 5, "API 契约"],
+  ["agent_tasks", "Agent 任务：工具选择/参数抽取/多轮续作/能力边界拒答", 12, "Agent"],
+];
+document.getElementById("sceneGrid").innerHTML = SCENES.map(s => `
+  <div class="scene-card"><b>${s[0]}</b><p>${s[1]}</p>
+    <div class="meta"><span class="tag">${s[3]}</span><span class="tag">${s[2]} 例</span>
+    <span class="tag" style="margin-left:auto;cursor:pointer">用例级过滤跑 →</span></div></div>`).join("");
+</script>
+</body>
+</html>

@@ -59,10 +59,11 @@ class TestRenderers:
         from aite.reporting.renderers import report_relpath
 
         p = report_relpath(sample_report())
-        model, datasets, leaf = p.parts
-        assert model == "qwen2.5-3b"                     # 第一层模型，冒号净化
-        assert datasets == "gsm8k+business_qa.jsonl"     # 第二层数据集，+ 连接
-        assert re.match(r"^\d{8}-\d{6}_01234567$", leaf)  # 第三层 时间_短id
+        module, model, datasets, leaf = p.parts
+        assert module == "misc"                          # 第一层模块（suite.module，缺省 misc）
+        assert model == "qwen2.5-3b"                     # 第二层模型，冒号净化
+        assert datasets == "gsm8k+business_qa.jsonl"     # 第三层数据集，+ 连接
+        assert re.match(r"^\d{8}-\d{6}_01234567$", leaf)  # 第四层 时间_短id
 
     def test_junit_renderer_xml(self, tmp_path):
         import xml.etree.ElementTree as ET

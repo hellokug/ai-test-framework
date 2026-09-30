@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from aite import config
 from aite.service import execute_suite, resolve_suite
-from aite.service.web_service import load_run_timeseries
+from aite.service.web_service import filter_runs_by_domain, load_run_timeseries
 from aite.web.deps import get_state
+from aite.web.sse import stream_events
 
 router = APIRouter(tags=["runs"])
 
@@ -25,6 +27,7 @@ class LaunchRequest(BaseModel):
     suite_name: str | None = None
     limit: int | None = None
     chaos: list[dict[str, Any]] | None = None   # 故障注入声明（模块 I，包裹本次执行）
+    resume: str | None = None   # 工具域续推档位 auto/true/false（None = yaml 值/缺省 auto）
 
 
 @router.get("/health")
@@ -34,7 +37,18 @@ async def health():
 
 @router.get("/runs")
 async def list_runs(state: Any = Depends(get_state), limit: int = 50, offset: int = 0,
-                    run_name: str | None = None):
+                    run_name: str | None = None, domain: str | None = None):
+    """domain 过滤（V1 规划 §10.3）：按新→旧扫描 config.MAX_DOMAIN_SCAN 条，
+    service 层内存过滤后再分页（原则 1：业务过滤不进 repo/SQL）。"""
+    try:
+        if domain:
+            runs = filter_runs_by_domain(
+                await state.repo.list_runs(limit=config.MAX_DOMAIN_SCAN,
+                                           run_name=run_name), domain)
+            total = len(runs)
+            return {"items": runs[offset:offset + limit], "count": total}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     runs = await state.repo.list_runs(limit=limit, offset=offset, run_name=run_name)
     return {"items": runs, "count": len(runs)}
 
@@ -62,15 +76,17 @@ async def launch_run(body: LaunchRequest, state: Any = Depends(get_state)):
 
     bg_id = await state.repo.create_bg_task(
         "run_suite", {"run_name": sreq.run_name, "limit": body.limit,
-                      "chaos": bool(body.chaos)})
+                      "chaos": bool(body.chaos), "resume": body.resume})
     task = asyncio.create_task(
-        _execute_run(state, bg_id, sreq, body.limit, chaos_raw=body.chaos))
+        _execute_run(state, bg_id, sreq, body.limit, chaos_raw=body.chaos,
+                     resume=body.resume))
     state.tasks[bg_id] = task
     return {"task_id": bg_id, "run_name": sreq.run_name, "status": "started"}
 
 
 async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None,
-                       chaos_raw: list[dict] | None = None) -> None:
+                       chaos_raw: list[dict] | None = None,
+                       resume: str | None = None) -> None:
     """后台执行（四域统一走 service 的 execute_suite）。"""
 
     def on_event(event: dict) -> None:
@@ -79,7 +95,8 @@ async def _execute_run(state: Any, bg_id: str, sreq: Any, limit: int | None,
     await state.repo.update_bg_task(bg_id, status="running")
     try:
         report = await execute_suite(sreq.raw, state.repo, limit=limit,
-                                     event_cb=on_event, chaos_raw=chaos_raw)
+                                     event_cb=on_event, chaos_raw=chaos_raw,
+                                     resume=resume)
         await state.repo.update_bg_task(
             bg_id, status="done", run_id=report.run_id,
             result={"status": report.status, "summaries": len(report.summaries),
@@ -151,17 +168,7 @@ async def run_timeseries(run_id: str, state: Any = Depends(get_state)):
 
 
 async def _stream(state: Any, request: Request, channel: str):
-    async def gen():
-        async for event in state.bus.subscribe(channel):
-            if await request.is_disconnected():
-                break
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            if event.get("type") in ("done", "error", "end"):
-                break
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+    return stream_events(state.bus, request, channel)
 
 
 @router.get("/tasks/{task_id}/stream")

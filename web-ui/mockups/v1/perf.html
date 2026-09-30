@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 性能压测 · V1 静态稿</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=7">
+</head>
+<body data-module="perf" data-module-label="性能测试">
+<script type="text/plain" id="page-list">[
+  {"id":"tasks","label":"压测任务","count":"9"},
+  {"id":"dashboard","label":"压测大屏"},
+  {"id":"datasets","label":"性能数据集","count":"7"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 压测任务 ============ -->
+  <section data-page="tasks">
+    <header class="topbar">
+      <div><h1>压测任务</h1><div class="crumb">engine=evalscope-perf / locust · 提交 = POST /runs（engine 路由）</div></div>
+    </header>
+    <div class="grid2" style="grid-template-columns:1.25fr 1fr;align-items:start">
+      <!-- 创建表单 -->
+      <section class="card">
+        <div class="card-head"><div><h3>创建压测任务</h3><div class="sub">控件与后端契约一一对应（roadmap F1）</div></div></div>
+        <div class="seg-title">引擎与模式</div>
+        <div class="field"><label>压测引擎</label>
+          <div class="radio-cards">
+            <div class="radio-card on"><b>evalscope-perf</b><small>LLM 原生 TTFT/TPOT/ITL，梯度/warmup 内置</small></div>
+            <div class="radio-card"><b>locust</b><small>通用 HTTP / 分布式 / QPS 闭环限速</small></div>
+          </div></div>
+        <div class="field"><label>压测模式</label>
+          <div class="radio-cards">
+            <div class="radio-card on"><b>baseline</b><small>固定并发基准</small></div>
+            <div class="radio-card"><b>ramp</b><small>from/to/step 并发爬坡</small></div>
+            <div class="radio-card"><b>probe</b><small>SLA 下二分摸高</small></div>
+            <div class="radio-card"><b>soak</b><small>duration 长稳</small></div>
+          </div>
+          <span class="hint">probe 仅 evalscope-perf；locust 必配时长键（无请求数上限语义）</span></div>
+        <div class="seg-title">负载来源（三选一）</div>
+        <div class="field"><label>负载</label>
+          <div class="radio-cards three">
+            <div class="radio-card"><b>固定 prompt</b><small>与 v1 直配同构</small></div>
+            <div class="radio-card on"><b>平台数据集</b><small>perf 型场景（长度分布可控）</small></div>
+            <div class="radio-card"><b>synthetic</b><small>count + prompt_length 确定性生成</small></div>
+          </div></div>
+        <div class="field"><label>数据集（perf 型）</label>
+          <select class="in"><option>rag-prefix-50（2000 条 · 前缀共享率 0.5 · 80~640 tok）</option><option>qa-uniform（1000 条 · 均匀分布）</option></select>
+          <span class="hint">在「性能数据集」页生成与管理</span></div>
+        <div class="seg-title">压力参数</div>
+        <div class="form-grid">
+          <div class="field"><label>并发数组 parallel</label><input class="in" value="4, 8, 16"></div>
+          <div class="field"><label>QPS（开环 rate / 闭环 qps）</label><input class="in" placeholder="留空 = 并发模式"></div>
+          <div class="field"><label>duration 总时长（秒）</label><input class="in" value="180"></div>
+          <div class="field"><label>level_duration 每档（秒，可选）</label><input class="in" placeholder="与 duration 互斥"></div>
+          <div class="field"><label>warmup（条）</label><input class="in" value="5"></div>
+          <div class="field"><label>spawn_rate（locust）</label><input class="in" placeholder="user/s"></div>
+          <div class="field"><label>jitter 到达抖动（秒）</label><input class="in" placeholder="缺省 0"></div>
+          <div class="field"><label>arrival 到达模型（locust）</label>
+            <select class="in"><option>无（同步波次）</option><option>poisson 泊松</option><option>spike 浪涌</option><option>custom 曲线</option></select></div>
+        </div>
+        <div class="seg-title">模型参数</div>
+        <div class="form-grid">
+          <div class="field"><label>base_url</label><input class="in" value="http://gpu-box-01:8000/v1"></div>
+          <div class="field"><label>model</label><input class="in" value="DeepSeek-V3"></div>
+          <div class="field"><label>api_key_env</label><input class="in" value="OPENAI_API_KEY"></div>
+          <div class="field"><label>max_tokens（定长或 [min,max]）</label><input class="in" value="[128, 512]"></div>
+        </div>
+        <details><summary class="check" style="margin:6px 0 12px">高级（chaos 注入 / extra_body / tokenizer）</summary>
+          <div class="field"><label>chaos 故障注入（复用可靠性选择器）</label><select class="in"><option>不注入</option><option>process:suspend ×1 @ 60s</option></select></div>
+        </details>
+        <div class="row" style="display:flex;justify-content:flex-end;gap:10px">
+          <button class="btn">保存为套件</button><button class="btn primary">启动压测</button></div>
+      </section>
+      <!-- 任务列表 -->
+      <section class="card">
+        <div class="card-head"><div><h3>任务历史</h3><div class="sub">GET /perf/tasks（域任务）</div></div>
+          <span class="chip on" data-single>全部</span><span class="chip" data-single>运行中</span></div>
+        <table id="taskTbl" class="sumtable"></table>
+        <div class="hint dim" style="font-size:11.5px;margin-top:10px">停止 = POST /{id}/stop（stopping → cancelled；子进程进程组强杀待补）</div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ 压测大屏 ============ -->
+  <section data-page="dashboard" hidden>
+    <header class="topbar">
+      <div>
+        <h1>locust-ramp-deepseek <span class="badge passed" style="vertical-align:3px"><i></i>已成功</span></h1>
+        <div class="crumb">run #b21c07af · engine=locust · ramp 4→16 · 180s · DeepSeek-V3 · GET /runs/{id}/timeseries</div>
+      </div>
+      <div class="actions"><button class="btn">HTML 报告 ↗</button><button class="btn" onclick="showPage('tasks')">← 任务列表</button></div>
+    </header>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>统计结果表</h3><div class="sub">overall 与档级 · 与 CLI 汇总同源（timeseries.summaries）</div></div>
+        <div class="chips"><span class="chip on" data-single>overall</span><span class="chip" data-single>u4</span><span class="chip" data-single>u8</span><span class="chip" data-single>u16</span></div></div>
+      <table class="sumtable" id="sumTbl"></table>
+    </section>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="card"><div class="card-head"><div><h3>TTFT（首 token 时延 ms）</h3></div></div><div class="chart" data-chart="cTTFT"></div></div>
+      <div class="card"><div class="card-head"><div><h3>端到端延迟（ms）</h3></div></div><div class="chart" data-chart="cLat"></div></div>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="card"><div class="card-head"><div><h3>TPOT（每输出 token 时延 ms）</h3></div></div><div class="chart" data-chart="cTPOT"></div></div>
+      <div class="card"><div class="card-head"><div><h3>ITL（token 间隔 ms）</h3></div></div><div class="chart" data-chart="cITL"></div></div>
+    </div>
+    <div class="stats" style="grid-template-columns:repeat(3,1fr)">
+      <div class="card"><div class="card-head"><div><h3>RPS（请求/秒）</h3></div></div><div class="chart" data-chart="cRPS"></div></div>
+      <div class="card"><div class="card-head"><div><h3>吞吐（tok/s）</h3></div></div><div class="chart" data-chart="cTok"></div></div>
+      <div class="card"><div class="card-head"><div><h3>并发阶梯</h3></div></div><div class="chart" data-chart="cUsers"></div></div>
+    </div>
+    <section class="card">
+      <div class="card-head"><div><h3>错误统计</h3><div class="sub">错误码/文本 × 次数 · chaos 注入窗在全图叠加阴影</div></div></div>
+      <div class="chart" data-chart="cErr" style="height:200px"></div>
+    </section>
+  </section>
+
+  <!-- ============ 性能数据集 ============ -->
+  <section data-page="datasets" hidden>
+    <header class="topbar">
+      <div><h1>性能数据集</h1><div class="crumb">模块 J：长度分布 / 前缀共享率 / 输出控制 · 确定性可复现（seed=version）</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="genDrawer">＋ 生成场景数据集</button></div>
+    </header>
+    <section class="card"><table id="dsTbl" class="sumtable"></table></section>
+  </section>
+</main>
+
+<!-- 生成器抽屉 -->
+<div class="drawer" id="genDrawer" hidden>
+  <div class="drawer-head"><h3>生成压测场景数据集</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="field"><label>场景名</label><input class="in" value="rag-prefix-50"></div>
+    <div class="field"><label>语料池（目录或 jsonl）</label><input class="in" value="./data/corpora/business.txt"></div>
+    <div class="form-grid">
+      <div class="field"><label>条数 count</label><input class="in" value="2000"></div>
+      <div class="field"><label>seed</label><input class="in" value="42"></div>
+    </div>
+    <div class="field"><label>输入长度分桶（token）/ 权重</label>
+      <div class="form-grid">
+        <input class="in" value="80, 320, 640"><input class="in" value="0.5, 0.3, 0.2">
+      </div>
+      <span class="hint">桶配比决定 TTFT 形态；同 seed 逐字节可复现</span></div>
+    <div class="form-grid">
+      <div class="field"><label>输出长度（定长或区间）</label><input class="in" value="[128, 512]"></div>
+      <div class="field"><label>前缀共享率 prefix_sharing</label><input class="in" value="0.5"></div>
+    </div>
+    <div class="field"><label>prefix_groups（同组共享长前缀，模拟 RAG KV 命中）</label>
+      <input class="in" value="共享系统提示词组 ×4"></div>
+    <div class="row" style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn">干跑校验（validate）</button><button class="btn primary">生成（POST /perf/datasets）</button></div>
+    <div class="seg-title">产物 stats 摘要（上一次生成）</div>
+    <div class="detail-stack">
+      <div class="kv"><span>count</span><pre>2000 条 · 生成 1.2s</pre></div>
+      <div class="kv"><span>长度分桶</span><pre>{"80":1002, "320":601, "640":397}（实测配比 vs 目标 0.5/0.3/0.2）</pre></div>
+      <div class="kv"><span>前缀命中</span><pre>shared_ratio=0.50 · 组内平均前缀长 512 tok</pre></div>
+      <div class="kv"><span>输出长度</span><pre>min/max_tokens 透传 vLLM（ignore_eos 定长）；一般端点为区间采样</pre></div>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>关闭</button></div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 性能压测 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=4"></script>
+<script>
+/* ---------- 任务列表 ---------- */
+const TASKS = [
+  ["locust-ramp-deepseek", "locust", "ramp 4→16", "DeepSeek-V3", "succeeded", "180s", "09-23 22:31"],
+  ["perf-probe-sla", "evalscope-perf", "probe SLA", "DeepSeek-V3", "running", "—", "09-24 10:02"],
+  ["evalscope-soak-720", "evalscope-perf", "soak", "qwen2.5-72b", "cancelled", "512/720s", "09-23 02:00"],
+  ["qa-baseline-u8", "evalscope-perf", "baseline 8", "qwen2.5-3b", "succeeded", "60s", "09-22 19:44"],
+  ["spike-validation", "locust", "baseline + spike", "DeepSeek-V3", "failed", "120s", "09-21 16:10"],
+];
+document.getElementById("taskTbl").innerHTML = `
+  <thead><tr><th>任务</th><th>引擎</th><th>模式</th><th>状态</th><th>时长</th><th></th></tr></thead>
+  <tbody>${TASKS.map(t => `<tr class="clickable" onclick="showPage('dashboard')">
+    <td class="rname"><b>${t[0]}</b><div class="rid">${t[3]}</div></td>
+    <td><span class="tag mono">${t[1]}</span></td><td class="dim">${t[2]}</td><td>${badge(t[4])}</td>
+    <td class="num dim">${t[5]}</td>
+    <td>${t[4] === "running" ? '<button class="btn sm danger">停止</button>' : `<button class="btn sm">重试</button>`}</td></tr>`).join("")}</tbody>`;
+
+/* ---------- 大屏统计表 ---------- */
+const SUMS = [
+  ["overall", "ttft_p50_ms", "112.4", "—", "2312", true],
+  ["overall", "ttft_p95_ms", "247.0", "≤ 500", "2312", true],
+  ["overall", "latency_avg_ms", "1830", "—", "2312", null],
+  ["overall", "tpot_p95_ms", "9.8", "—", "2312", null],
+  ["overall", "qps", "1.64", "—", "2312", null],
+  ["overall", "error_rate", "0.004", "≤ 0.01", "2312", true],
+  ["u16", "ttft_p95_ms", "505.0", "≤ 500", "1200", false],
+  ["u16", "qps", "3.38", "—", "1200", null],
+];
+document.getElementById("sumTbl").innerHTML = `
+  <thead><tr><th>档位</th><th>指标</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${SUMS.map((s, i) => `<tr class="${s[0] === "overall" ? "overall" : ""}">
+    <td class="mono">${s[0]}</td><td class="mono dim">${s[1]}</td><td class="num mono">${s[2]}</td>
+    <td class="num dim">${s[3]}</td><td class="num">${s[4]}</td>
+    <td>${s[5] === null ? '<span class="faint">—</span>' : badge(s[5] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+/* ---------- 八图 mock 数据（180s · 10s 桶 ×19 点 · ramp 4→8→16） ---------- */
+const T = Array.from({ length: 19 }, (_, i) => i * 10);
+const USERS = T.map((_, i) => [4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16][i]);
+const wave = (base, amp, noise) => T.map((_, i) => +(base + amp * Math.sin(i / 2.5) + (Math.random() - 0.5) * noise).toFixed(1));
+const mkAvgP95 = (base, amp, noise, k) => { const avg = wave(base, amp, noise); return { avg, p95: avg.map(v => +(v * k).toFixed(1)) }; };
+const TTFT = mkAvgP95(120, 30, 14, 1.9), LAT = mkAvgP95(1600, 500, 160, 1.7),
+  TPOT = mkAvgP95(8.5, 2.2, 1.2, 1.6), ITL = mkAvgP95(6.2, 1.6, 0.9, 1.8),
+  RPSv = mkAvgP95(2.2, 1.0, 0.25, 1.15), TOK = mkAvgP95(70, 34, 12, 1.25);
+window.cTTFT = t => perfLineOption(t, { dates: T, ...TTFT, color: t.charts.pass });
+window.cLat = t => perfLineOption(t, { dates: T, ...LAT, color: t.charts.err });
+window.cTPOT = t => perfLineOption(t, { dates: T, ...TPOT, color: t.charts.radar[2] });
+window.cITL = t => perfLineOption(t, { dates: T, ...ITL, color: t.charts.radar[1] });
+window.cRPS = t => perfLineOption(t, { dates: T, ...RPSv, color: t.charts.pass });
+window.cTok = t => perfLineOption(t, { dates: T, ...TOK, color: t.charts.radar[1] });
+window.cUsers = t => { const c = t.charts; return {
+  grid: { left: 6, right: 12, top: 12, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  xAxis: { type: "category", data: T, ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis, formatter: v => v + "s" } },
+  yAxis: { type: "value", ...baseAxis(c), axisLabel: { color: c.axis } },
+  series: [{ type: "line", step: "end", symbol: "none", lineStyle: { width: 2.2, color: c.ac2 || c.err },
+    areaStyle: { color: vGrad(c.pass, 0.10) }, data: USERS }] }; };
+window.cErr = t => { const c = t.charts; return {
+  grid: { left: 6, right: 48, top: 16, bottom: 4, containLabel: true },
+  tooltip: { backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  xAxis: { type: "value", ...baseAxis(c), splitLine: { lineStyle: { color: c.split } }, axisLabel: { color: c.axis } },
+  yAxis: { type: "category", data: ["HTTP 429 Too Many Requests", "ReadTimeout", "ConnectionError"],
+    ...baseAxis(c), axisLabel: { color: c.axis }, splitLine: { show: false } },
+  series: [{ type: "bar", barWidth: 16, itemStyle: { color: c.err, borderRadius: 4 }, data: [12, 3, 1],
+    label: { show: true, position: "right", color: c.axis, fontSize: 11 } }] }; };
+
+/* ---------- 性能数据集 ---------- */
+const DS = [
+  ["rag-prefix-50", "generated", "seed42", "2000 条 · 桶 80/320/640 @ 0.5/0.3/0.2 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "09-23 21:08"],
+  ["qa-uniform", "generated", "seed7", "1000 条 · 均匀 128~512 tok · 零前缀命中", "data/datasets/perf/qa-uniform-*.jsonl", "09-22 17:30"],
+  ["long-out-soak", "generated", "seed99", "600 条 · 输出定长 1024（ignore_eos）", "data/datasets/perf/long-out-soak-*.jsonl", "09-20 22:15"],
+];
+document.getElementById("dsTbl").innerHTML = `
+  <thead><tr><th>场景</th><th>来源</th><th>版本</th><th>stats</th><th>产物</th><th>生成时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${DS.map(d => `<tr>
+    <td class="rname"><b class="mono">${d[0]}</b></td><td><span class="tag">${d[1]}</span></td>
+    <td class="mono dim">${d[2]}</td><td class="dim" style="white-space:normal">${d[3]}</td>
+    <td class="mono faint" style="font-size:11px">${d[4]}</td><td class="dim">${d[5]}</td>
+    <td style="text-align:right"><button class="btn sm" data-open-drawer="genDrawer">克隆配置</button>
+    <button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+module: accuracy
+run_name: ceval
+description: >
+  C-Eval 中文知识基准：52 科（STEM/人文/社科/其他）MCQ，5-shot，
+  规则判分（选项字母精确匹配）。钉 computer_network 单科 × 5 题冒烟；
+  真评删掉 dataset_args 与 limit_per_subset 跑全量 52 科。
+
+engine: evalscope
+
+target:
+  profile: deepseek                 # 引用 data/common.yaml 预制端点（deepseek-chat）
+
+tools:
+  datasets: [ceval]
+  limit_per_subset: 1              # 每子集条数（冒烟）；真评删除此行
+  metric_thresholds: {mean_acc: 0.25}   # 4 选 1 随机基线作门槛
+  resume: true
+  extra_args:
+    eval_batch_size: 10
+    timeout_s: 14400
+    dataset_args:
+      ceval: {subset_list: [computer_network]}   # 52 科抽 1 科冒烟；真评删除此段
+    generation_config:
+      timeout: 900
+      max_tokens: 4096
+      temperature: 0
+    # python_exe 已由 data/common.yaml 的 tools 缺省提供，无需在此重抄
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

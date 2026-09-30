@@ -1,0 +1,29 @@
+# 全局 common 配置模板：复制为 ./data/common.yaml 后生效（data/ 不入库，环境自有）。
+# 作用：①模型预制——端点/密钥引用/请求参数录入一次，suite 里 target: {profile: <名>}
+#        一行引用，内联字段逐键覆盖（params/rate_limit 深合并）；工具域判官同样
+#        可引用：evalscope 的 tools: {judge: {profile: <名>}}、rageval 的
+#        rageval: {judge: {profile: <名>}}（新版 evalscope 对 LLM 判官类基准
+#        强制要求显式 judge，不配起跑即拒）；
+#       ②工具环境缺省——tools 段同名键并入每个工具型 suite（suite 内联覆盖）。
+# 查看：aite common show；密钥不入本文件，一律 api_key_env 环境变量引用。
+
+models:
+  ollama-local:                          # 本机 Ollama：target: {profile: ollama-local}
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:7b
+    params: {temperature: 0.2, max_tokens: 4096}
+    rate_limit: {rpm: 120, concurrency: 8}
+    stream: true
+
+  deepseek:                              # 云端 API：target: {profile: deepseek}
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY        # 运行前 set DEEPSEEK_API_KEY=sk-xxx
+    params: {temperature: 0.3, max_tokens: 8192}
+    rate_limit: {rpm: 300, concurrency: 16}
+    stream: false
+
+tools:                                   # 工具适配器环境缺省（与 suite tools 同键同语义）
+  extra_args:
+    python_exe: ./.venv-evalscope/Scripts/python.exe   # evalscope 独立环境解释器
+    # timeout_s: 14400                   # 子进程墙钟上限（缺省见 aite/config.py）

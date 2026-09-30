@@ -85,6 +85,56 @@ def compute_platform_stats(runs: list[dict], active_tasks: int) -> dict:
     }
 
 
+# ------------------------------------------------------------ 域过滤（§V1 规划 10.3）
+DOMAINS = ("functional", "accuracy", "perf", "reliability")
+_PERF_ENGINES = frozenset({"evalscope-perf", "locust"})
+
+
+def run_domain(run: dict) -> str:
+    """run → 所属域（单一事实来源，/runs 与 /stats 的 domain 过滤共用）。
+
+    engine 取 config_snapshot.engine（工具域 suite raw 原样入库）；带 engine
+    按引擎归类，无 engine = 自研引擎评测 run → accuracy；self-built run 的
+    config_snapshot 带 chaos 声明 → reliability。
+    """
+    config = run.get("config") or {}
+    engine = config.get("engine")
+    if engine in _PERF_ENGINES:
+        return "perf"
+    if engine == "pytest":
+        return "functional"
+    if engine:
+        return "accuracy"          # evalscope / evalscope-rageval 等工具评测
+    if config.get("chaos"):
+        return "reliability"
+    return "accuracy"
+
+
+def filter_runs_by_domain(runs: list[dict], domain: str) -> list[dict]:
+    """按域过滤 run 列表；未知域显式报错（原则 9）。"""
+    if domain not in DOMAINS:
+        raise ValueError(f"未知域 {domain!r}（合法：{'/'.join(DOMAINS)}）")
+    return [r for r in runs if run_domain(r) == domain]
+
+
+async def import_functional_dataset(repo: Any, *, name: str, jsonl: str,
+                                    notes: str = "", force: bool = False) -> dict:
+    """REST 摄取功能数据集：JSONL 文本 → 临时文件 → 域校验/落盘/登记。"""
+    import tempfile
+
+    from aite.functional.ingest import ingest_functional
+
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(jsonl)
+        tmp_path = f.name
+    try:
+        return await ingest_functional(repo, tmp_path, name, notes=notes,
+                                       force=force)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 def load_run_timeseries(run: dict) -> dict | None:
     """按 run 详情读取压测时序文件；无产出返回 None（404 语义由路由定）。"""
     work_dir = (run.get("details") or {}).get("work_dir")
@@ -97,5 +147,7 @@ def load_run_timeseries(run: dict) -> dict | None:
         raise RuntimeError(f"corrupted timeseries: {exc}") from exc
 
 
-__all__ = ["compute_platform_stats", "load_run_timeseries", "parse_jsonl_records",
-           "select_manual_tasks", "to_import_cases"]
+__all__ = ["compute_platform_stats", "filter_runs_by_domain",
+           "import_functional_dataset", "load_run_timeseries",
+           "parse_jsonl_records", "run_domain", "select_manual_tasks",
+           "to_import_cases"]

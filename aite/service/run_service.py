@@ -53,6 +53,17 @@ def apply_tool_limit(raw: dict, limit: int | None) -> None:
         raw.setdefault("tools", {}).setdefault("limit_per_subset", limit)
 
 
+def apply_tool_resume(raw: dict, resume: str | bool | None) -> None:
+    """CLI/Web 的 resume 参数 → 工具域透传（None = 用 suite yaml 值/缺省 auto）。
+
+    档位语义归一与校验在 parse_tool_suite 的 normalize_resume_mode（auto/
+    true/false），错误值在此直接 ValueError fail-fast。
+    """
+    if resume is None:
+        return
+    raw.setdefault("tools", {})["resume"] = resume
+
+
 async def execute_suite(
     raw: dict,
     repo: Any,
@@ -65,15 +76,18 @@ async def execute_suite(
     max_cost_usd: float | None = None,
     report_formats: str | None = None,
     chaos_raw: list[dict] | None = None,
+    resume: str | bool | None = None,
 ) -> RunReport:
     """统一执行入口：engine 路由 → 工具适配层 / 自研引擎。
 
     chaos_raw 非空时（工具域）故障注入包裹业务执行，注入事件写入
-    run details.chaos_events（I5 业务观测时间线）。
+    run details.chaos_events（I5 业务观测时间线）。resume（工具域断点续推
+    档位 auto/true/false）仅工具域生效，None = 用 yaml 值/缺省 auto。
     """
     sreq = resolve_suite(raw)
     if sreq.is_tool:
         apply_tool_limit(raw, limit)
+        apply_tool_resume(raw, resume)
         from aite.tools import run_tool_suite
 
         if not chaos_raw:

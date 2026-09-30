@@ -27,7 +27,6 @@ from aite.core.registry import (
     resolve_dataset,
     resolve_judge,
     resolve_metric,
-    resolve_renderer,
 )
 from aite.core.types import (
     CaseMetricRecord,
@@ -489,18 +488,10 @@ class ExecutionEngine:
 
     # ------------------------------------------------------------------ reports
     def _render_reports(self, config: SuiteConfig, report: RunReport) -> dict[str, str]:
-        out_dir = Path(config.output_dir) / report_relpath(report)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        written: dict[str, str] = {}
-        for fmt in config.report:
-            try:
-                renderer = resolve_renderer(fmt)()
-                path = renderer.render(report, out_dir)
-                written[fmt] = str(path)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("renderer %s failed: %s", fmt, exc)
-                written[fmt] = f"error: {exc}"
-        return written
+        from aite.reporting.renderers import render_report_formats
+
+        return render_report_formats(
+            report, Path(config.output_dir) / report_relpath(report), config.report)
 
     def _emit(self, event_type: str, **payload: Any) -> None:
         if self.event_cb is None:

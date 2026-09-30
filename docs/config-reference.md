@@ -172,3 +172,77 @@ aite serve [--host 0.0.0.0] [--port 8300] [--db url]
 ```
 
 退出码：0=passed，1=failed/error（CI 直接消费）。`AITE_DB` 环境变量可全局覆盖 DB。
+
+## 工具引擎（engine: evalscope 等）
+
+suite 带 `engine:` 字段即路由到工具域（无 `engine` = 上文自研引擎）：
+`evalscope`（精度基准）| `evalscope-rageval`（RAGAS）| `pytest`（功能）|
+`evalscope-perf`（压测）| `locust`（压测）。顶层共用
+run_name/description/module/target/report/output_dir/storage；`datasets`/
+`metrics`/`judges` 等自研域字段在工具域不生效。
+
+### tools 段（engine: evalscope）
+
+| 键 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `datasets` | list | 必填 | evalscope 基准名（`aite tool benchmarks evalscope` 查全部 257+；首跑自动拉 HF，`HF_ENDPOINT` 缺省 hf-mirror） |
+| `limit_per_subset` | int | 全量 | 每科目条数（evalscope `limit` 语义：ceval limit=3 实跑 52×3=156 题） |
+| `metric_thresholds` | map\|"auto" | 无 | 判定线；键须对齐报告指标名（`acc`↔`mean_acc` 双向容错）。`"auto"` = 按随机基线推荐（仅选择题类：4选1=0.25、2选1=0.5；开放题不给默认） |
+| `judge` | map | — | 判官预制：`{profile: <common 模型预制>}` 一行引用（内联键逐键覆盖，如 `model:`），或全内联 `{base_url, model, api_key_env, params}`。新版 evalscope 对 LLM 判官类基准**强制要求显式 judge**（不配起跑即拒）。与 `extra_args.judge`（原生透传）互斥 |
+| `resume` | auto\|true\|false | auto | 断点续推档位（CLI `--resume` / API `resume` 同名透传）。**auto（缺省，状态感知）**：最近一次输出目录没跑完（断电/402 中断）→ 就地续推只补缺失项；跑完 → 再跑自动全新起跑。**true（force）**：强制复用最近目录——改判官后只重判不重生成、或对已完成目录重出报告；旧版目录无状态文件时照续（身份交 evalscope 校验）。**false**：永远全新目录。任一档位下，生成侧身份（模型/端点/数据集/limit/生成参数，见 `run_state.json` 的 identity_hash）变更一律全新起跑，续推不混入不可比预测；判官变更不算身份变更（走 rerun_review 重判）。evalscope 侧身份快照缺失/异版本校验不符时自动降级 `rerun_review` 一次 |
+| `cases` | list[str] | 全部 | pytest 引擎用例 id 过滤 |
+| `tests_dir` | str | — | pytest 引擎自建用例目录（datasets 可空） |
+| `extra_args.python_exe` | str | common 缺省 | 独立环境解释器（venv/conda 任意路径均可；不配则要求主环境可导入 evalscope） |
+| `extra_args.timeout_s` | float | 14400 | evalscope 子进程墙钟上限（aite 看门狗，超时杀整棵进程树） |
+| `extra_args.<其余>` | any | — | 原样透传 evalscope TaskConfig。常用：`eval_batch_size`（评测并发，生成+判官两段共用，远程 API 缺省 8）、`generation_config: {timeout, max_tokens, temperature}`（单请求墙钟/生成长度，缺省 timeout 600s 对推理模型必超时）、`eval_backend`、`judge`（高级原生形态，如多判官列表） |
+
+target 段只有 `base_url/model/api_key_env/params/stream`（经 profile 展开）进
+evalscope；`rate_limit` 是自研引擎网关概念，对 evalscope 并发**不生效**（并发
+只由 `eval_batch_size` 控制）。
+
+### rageval 段（engine: evalscope-rageval）
+
+```yaml
+rageval:
+  metrics: [faithfulness, context_precision, context_recall]  # 可选五件套：
+                              # + answer_relevancy, answer_correctness
+  judge: {profile: deepseek, temperature: 0.1}   # 判官，同支持预制引用；
+                              # 内联 {model, base_url, api_key_env, provider,
+                              # temperature, max_tokens}（max_tokens 缺省 8192，
+                              # 上游 instructor 适配器硬编码 1024 已垫片修复）
+  embeddings: {model_name_or_path: BAAI/bge-large-zh-v1.5}  # 必配（evalscope
+                              # RAGEval 硬性字段；answer_relevancy/correctness 依赖）
+  language: chinese           # 缺省
+  batch_size: 4               # ragas 批量
+  raise_exceptions: false     # true = 判官失败即中止（缺省记 NaN 出失败明细）
+```
+
+编排自动分派：数据集 records 自带 `response` → 方案 B 直接打分；无 response →
+方案 A 经 target 逐 case 调被测端点生成后再打分；混合形态显式报错。
+
+### perf / locust
+
+`perf:` 段（parallel/number/prompt/input_file…）与 locust 见 README 对应章节与
+`examples/perf/*.yaml`；压测并发键为 `perf.parallel`，与精度域
+`eval_batch_size`、自研域 `rate_limit.concurrency` 互不相通。
+
+### common.yaml（预制，data/common.yaml）
+
+`models.<名>`：模型预制（base_url/model/api_key_env/params/rate_limit/stream），
+被三处引用——自研域 `target: {profile: X}`、evalscope `tools: {judge: {profile: X}}`、
+`rageval: {judge: {profile: X}}`；内联字段逐键覆盖（dict 深合并），解析后
+`profile` 键移除（快照自包含）。`tools.extra_args`：工具环境缺省（如
+python_exe），并入每个工具型 suite（suite 内联覆盖）。查看：`aite common show`。
+
+### 工具域 CLI
+
+```
+aite tool benchmarks evalscope     # 列基准（主环境无 evalscope 时自动经
+                                   #   common 的 python_exe 子进程列举）
+aite run -c suite.yaml             # 工具型 suite 同一入口
+aite report show <run_id> --formats rich,json,html,junit
+```
+
+运行期可见性：evalscope 日志实时镜像到控制台（进度条上方暗色行）+ 进度条/
+阶段播报；Web SSE 同源透传。原生报告落 `reports/tool/<engine>/<run>/<stamp>/`，
+平台报告（HTML 等）按 `<模块>/<模型>/<数据集>/` 归位。

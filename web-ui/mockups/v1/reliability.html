@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 可靠性 · V1 静态稿</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=7">
+</head>
+<body data-module="reliability" data-module-label="可靠性">
+<script type="text/plain" id="page-list">[
+  {"id":"observe","label":"故障观测"},
+  {"id":"history","label":"实验历史","count":"12"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 故障观测 ============ -->
+  <section data-page="observe">
+    <header class="topbar">
+      <div><h1>故障观测</h1><div class="crumb">注入 → 生效确认 → 探针观测 → 恢复 → RTO 判定 · POST /chaos/observe（≤600s）</div></div>
+      <div class="actions"><button class="btn primary">开始观测</button></div>
+    </header>
+    <div class="grid2" style="grid-template-columns:1.1fr 1fr;align-items:start">
+      <!-- 表单 -->
+      <section class="card">
+        <div class="seg-title" style="margin-top:0">1 · 实验对象（GET /chaos/targets）</div>
+        <div class="field"><label>目标过滤（节点/容器/进程名，大小写不敏感子串）</label>
+          <input class="in" value="gpu-box-01 / vllm"></div>
+        <div class="tree">
+          <div class="node sel">🖥 gpu-box-01（linux · 8C32G）</div>
+          <div class="kids">
+            <div class="node">📦 vllm-server（容器 · 0.0.0.0:8000）</div>
+            <div class="node sel">⚙ vllm serve --model DeepSeek-V3（pid 4821）</div>
+            <div class="node">⚙ prometheus（pid 1188）</div>
+          </div>
+          <div class="node">💻 win-lab-02（windows）</div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>exclude 排除名单</label><input class="in" value="bash, cmd, aite"></div>
+        <div class="seg-title">2 · 武器与参数（GET /chaos/weapons）</div>
+        <div class="field"><label>注入器 / kind</label>
+          <select class="in"><option>process · suspend（挂起进程）</option><option>process · kill</option>
+          <option>toxiproxy · latency</option><option>toxiproxy · timeout</option><option>toxiproxy · bandwidth</option></select></div>
+        <div class="form-grid">
+          <div class="field"><label>match 匹配模式</label><select class="in"><option>contains 名称+命令行</option><option>exact</option><option>prefix</option><option>regex</option></select></div>
+          <div class="field"><label>select 选择策略</label><select class="in"><option>first（最小 pid）</option><option>all</option><option>random(k)</option><option>percent(p)</option></select></div>
+          <div class="field"><label>注入参数（param_schema 驱动）</label><input class="in" placeholder="suspend 无参数；latency_ms 必填"></div>
+          <div class="field"><label>fault_duration 注入窗（秒）</label><input class="in" value="10"></div>
+        </div>
+        <div class="seg-title">3 · 观测与背景流量</div>
+        <div class="form-grid">
+          <div class="field"><label>探针 URL（推理端点）</label><input class="in" value="http://127.0.0.1:8000/v1/chat/completions"></div>
+          <div class="field"><label>探针超时（秒）</label><input class="in" value="3"></div>
+          <div class="field"><label>interval 打点间隔（秒）</label><input class="in" value="5"></div>
+          <div class="field"><label>duration 观测时长（秒 ≤600）</label><input class="in" value="60"></div>
+        </div>
+        <div class="field"><label>post_window 恢复后补测窗口（秒）</label><input class="in" value="6"></div>
+        <label class="check"><input type="checkbox" checked> 背景流量（复合任务：注入窗 = 背景流量时长）</label>
+        <div class="form-grid" style="margin-top:10px">
+          <div class="field"><label>背景数据集（perf 型）</label><select class="in"><option>rag-prefix-50</option></select></div>
+          <div class="field"><label>并发 / duration</label><input class="in" value="8 并发 · 120s"></div>
+        </div>
+      </section>
+      <!-- 结果 -->
+      <section style="display:flex;flex-direction:column;gap:14px">
+        <section class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:0">
+          <div class="stat"><div class="label"><i style="background:var(--bad)"></i>RTO</div><div class="value">3.26<span style="font-size:14px;color:var(--tx3)">s</span></div></div>
+          <div class="stat"><div class="label"><i style="background:var(--warn)"></i>失败探针</div><div class="value">2</div></div>
+          <div class="stat"><div class="label"><i style="background:var(--ok)"></i>判定</div><div class="value" style="font-size:20px;padding-top:4px;color:var(--ok)">affected·达标</div></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h3>事件时间线</h3><div class="sub">details.chaos_events</div></div></div>
+          <div class="timeline">
+            <div class="tl-item"><div class="tl-dot warn">!</div><div class="tl-time">14:32:05.102</div>
+              <div class="tl-body"><b>injected</b><div class="sub">process:suspend → vllm serve (pid 4821) · match=contains · select=first</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:05.110</div>
+              <div class="tl-body"><b>verified</b><div class="sub">注入生效确认 8ms（STATUS_STOPPED）· verify 失败将回滚并抛 ChaosVerifyError</div></div></div>
+            <div class="tl-item"><div class="tl-dot bad">✕</div><div class="tl-time">14:32:10.004</div>
+              <div class="tl-body"><b>probe fail ×2</b><div class="sub">ReadTimeout 3000ms（挂起进程不响应）</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:15.103</div>
+              <div class="tl-body"><b>recovered</b><div class="sub">定时恢复（fault_duration 到点）· finally 兜底逆序恢复双路互斥</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:18.371</div>
+              <div class="tl-body"><b>probe pass（恢复后首个）</b><div class="sub">RTO = 3.264s（last_fail → 首个 pass）</div></div></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h3>探针序列</h3><div class="sub">pass/fail 时间点 + 时延 · 注入窗阴影</div></div></div>
+          <div class="chart" data-chart="cProbe" style="height:200px"></div>
+        </section>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ 实验历史 ============ -->
+  <section data-page="history" hidden>
+    <header class="topbar">
+      <div><h1>实验历史</h1><div class="crumb">带 chaos_events 的 run · 背景流量 run 可跳压测大屏看曲线</div></div>
+    </header>
+    <section class="card"><table id="histTbl"></table></section>
+  </section>
+</main>
+
+<div class="ribbon">V1 静态稿 · 可靠性 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=4"></script>
+<script>
+const HIST = [
+  ["suspend-vllm-rto", "process:suspend → vllm(pid 4821)", "背景 locust 8 并发", "3.26s / ≤4s", "passed", "09-23 14:32"],
+  ["latency-300ms-degrade", "toxiproxy:latency 300ms", "纯观测", "—", "succeeded", "09-22 20:11"],
+  ["kill-worker-drill", "process:kill → worker ×1", "背景 rag-prefix-50", "8.9s / ≤15s", "failed", "09-21 03:00"],
+  ["bandwidth-1mbps", "toxiproxy:bandwidth 1MB", "纯观测", "—", "succeeded", "09-20 15:40"],
+];
+document.getElementById("histTbl").innerHTML = `
+  <thead><tr><th>实验</th><th>故障</th><th>背景流量</th><th>RTO / 预期</th><th>结果</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${HIST.map(h => `<tr class="clickable" onclick="showPage('observe')">
+    <td class="rname"><b>${h[0]}</b></td><td class="mono dim" style="font-size:12px">${h[1]}</td>
+    <td class="dim">${h[2]}</td><td class="num mono">${h[3]}</td><td>${badge(h[4] === "succeeded" ? "passed" : h[4])}</td>
+    <td class="dim">${h[5]}</td><td style="text-align:right"><button class="btn sm">时间线</button></td></tr>`).join("")}</tbody>`;
+
+window.cProbe = t => { const c = t.charts; return {
+  grid: { left: 6, right: 12, top: 26, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  legend: { top: 0, right: 0, textStyle: { color: c.axis, fontSize: 11 }, itemWidth: 12, itemHeight: 3, icon: "roundRect" },
+  xAxis: { type: "category", data: ["14:32:00", ":05", ":10", ":15", ":20", ":25", ":30", ":35", ":40", ":45"],
+    ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis } },
+  yAxis: { type: "value", ...baseAxis(c), axisLabel: { color: c.axis, formatter: "{value}ms" } },
+  series: [
+    { name: "探针时延", type: "bar", barWidth: 10, itemStyle: { color: c.pass, borderRadius: 3 },
+      data: [412, 388, { value: 3000, itemStyle: { color: c.err } }, { value: 3000, itemStyle: { color: c.err } }, 296, 188, 142, 131, 126, 118] },
+    { name: "注入窗", type: "line", data: [], markArea: { silent: true,
+      itemStyle: { color: hexA(c.err, 0.10) }, data: [[{ xAxis: ":05" }, { xAxis: ":15" }]] } },
+  ] }; };
+</script>
+</body>
+</html>

@@ -14,6 +14,10 @@ from fastapi.staticfiles import StaticFiles
 from aite import __version__ as aite_version
 from aite import config
 from aite.service import close_interrupted_runs
+from aite.service.accuracy_tasks import build_accuracy_task_kit
+from aite.service.functional_tasks import build_functional_task_kit
+from aite.service.perf_tasks import build_perf_task_kit
+from aite.service.reliability_tasks import build_reliability_task_kit
 from aite.storage.db import Database
 from aite.storage.repositories import SqlAlchemyRepository
 from aite.utils.logging import get_logger
@@ -36,15 +40,27 @@ class AppState:
         self.bus = EventBus()
         self.token = token
         self.tasks: dict[str, asyncio.Task] = {}
+        # 四域任务 kit（docs/domain-backends.md §2）：bus 共享 → SSE 频道同源
+        self.task_kits = {
+            "functional": build_functional_task_kit(self.bus),
+            "accuracy": build_accuracy_task_kit(self.bus),
+            "perf": build_perf_task_kit(self.bus),
+            "reliability": build_reliability_task_kit(self.bus),
+        }
 
     async def startup(self) -> None:
         await self.repo.init()
         # 状态机闭合：上次进程崩溃/强杀残留的中间态任务标记为 error
         stale = await self.repo.mark_stale_bg_tasks()
         interrupted = await close_interrupted_runs(self.repo)
-        if stale or interrupted:
-            logger.warning("启动收敛：%d 个残留后台任务 + %d 个中断 run 标记为 error",
-                           stale, interrupted)
+        # 四域任务状态机收敛（原则 8）：running/stopping 残留 → stale
+        stale_domain = 0
+        for kit in self.task_kits.values():
+            stale_domain += await kit.mark_stale(self.repo)
+        if stale or interrupted or stale_domain:
+            logger.warning("启动收敛：%d 个残留后台任务 + %d 个中断 run + "
+                           "%d 个域任务标记为 error/stale",
+                           stale, interrupted, stale_domain)
 
     async def shutdown(self) -> None:
         bg_ids = list(self.tasks)
@@ -83,6 +99,8 @@ def create_app(storage_url: str = config.DEFAULT_DB_URL,
         agents,
         cases,
         chaos,
+        datasets,
+        domain_tasks,
         manual_eval,
         models,
         perfdata,
@@ -96,7 +114,8 @@ def create_app(storage_url: str = config.DEFAULT_DB_URL,
     )
 
     for router in (runs, suites, cases, models, trends, reports, manual_eval,
-                   tasks, tools, agents, perfdata, chaos, testcases):
+                   tasks, tools, agents, perfdata, chaos, testcases,
+                   datasets, domain_tasks):
         app.include_router(router.router, prefix="/api/v1")
 
     if STATIC_DIR.exists():

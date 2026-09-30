@@ -22,6 +22,29 @@ from aite.core.registry import register_renderer
 from aite.core.types import utcnow
 
 
+def render_report_formats(report, out_dir: Path,
+                          formats: list[str]) -> dict[str, str]:
+    """按格式列表渲染报告 → {格式: 文件路径}（engine 与工具域共用的单一实现）。
+
+    单个格式渲染失败不中断其他格式（错误串占位，原则 9 显式可见）。
+    """
+    from aite.core.registry import resolve_renderer
+    from aite.utils.logging import get_logger
+
+    logger = get_logger("renderers")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, str] = {}
+    for fmt in formats or []:
+        try:
+            path = resolve_renderer(fmt)().render(report, out_dir)
+            written[fmt] = str(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("renderer %s failed: %s", fmt, exc)
+            written[fmt] = f"error: {exc}"
+    return written
+
+
 def _failing_reason(r, threshold: float | None, higher: bool) -> str:
     """bad-case 的「为什么不通过」：判定错误 / 未配阈值 / 值与阈值的方向关系。"""
     if r.error:
@@ -40,8 +63,19 @@ def _path_safe(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]+', "-", s).strip(". ") or "unknown"
 
 
-def _dataset_ident(d: dict) -> str:
-    """数据集标识：builtin 取 id，local 取路径文件名。"""
+def _config_datasets(config: dict) -> list:
+    """suite 数据集清单：自研引擎在 ``datasets``，工具域 suite 快照在
+    ``tools.datasets``（裸字符串基准名/本地路径）。"""
+    ds = config.get("datasets")
+    if not ds:
+        ds = (config.get("tools") or {}).get("datasets")
+    return ds if isinstance(ds, list) else []
+
+
+def _dataset_ident(d) -> str:
+    """数据集标识：dict 取 id，local 取路径文件名；工具域快照为裸字符串。"""
+    if isinstance(d, str):
+        return d.replace("\\", "/").split("/")[-1]
     return str(d.get("id") or str(d.get("path") or "").replace("\\", "/").split("/")[-1])
 
 
@@ -56,7 +90,7 @@ def report_relpath(report: RunReport) -> Path:
     module = _path_safe(str(report.config.get("module") or "misc"))
     target = report.config.get("target") or {}
     model = _path_safe(str(target.get("model") or "unknown"))
-    idents = [_path_safe(_dataset_ident(d)) for d in report.config.get("datasets") or []]
+    idents = [_path_safe(_dataset_ident(d)) for d in _config_datasets(report.config)]
     ds_dir = "+".join(idents) if idents else "unknown"
     if len(ds_dir) > 50:  # 防路径过长
         ds_dir = f"{idents[0]}+{len(idents) - 1}more"
@@ -65,10 +99,11 @@ def report_relpath(report: RunReport) -> Path:
 
 
 def datasets_label(config: dict) -> str:
-    """紧凑数据集描述：``builtin/gsm8k, local/business_qa.jsonl``。"""
+    """紧凑数据集描述：``builtin/gsm8k, local/business_qa.jsonl, aime26``。"""
     parts = [
+        _dataset_ident(d) if isinstance(d, str) else
         "/".join(x for x in (str(d.get("type", "?")), _dataset_ident(d)) if x)
-        for d in config.get("datasets") or []
+        for d in _config_datasets(config)
     ]
     return ", ".join(parts)
 

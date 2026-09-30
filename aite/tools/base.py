@@ -34,6 +34,9 @@ class ToolRunRequest:
     cases: list[str] | None = None  # pytest 引擎：用例 id 过滤（None = 全部；单用例复现场景）
     perf: dict = field(default_factory=dict)  # evalscope-perf 引擎：压测配置（prompt/parallel/number/...）
     rag_eval: dict = field(default_factory=dict)  # evalscope-rageval 引擎：RAGAS 配置（metrics/judge/embeddings/language）
+    judge: dict = field(default_factory=dict)  # evalscope 引擎：判官预制（tools.judge {profile: <common>} 展开后同 target 形态）
+    resume: bool = False           # evalscope 引擎：断点续推（use_cache 就地复用预测/判分）；
+                                   # auto/force 档位下为 True，档位语义见 tools/__init__.normalize_resume_mode
     progress_cb: Callable[[dict], None] | None = None  # 运行期进度事件回调（SSE/CLI 可见性）
 
 

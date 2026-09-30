@@ -7,9 +7,11 @@ PYTHONIOENCODING、TimeoutExpired 与日志落盘。失败文案含调用方上�
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -65,6 +67,21 @@ def _write(log_path: Path, text: str, append: bool) -> None:
             fh.write("\n" + text)
     else:
         log_path.write_text(text, encoding="utf-8")
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """终止整个进程树。Windows 上 ``proc.kill()`` 只杀直接子进程——evalscope
+    长任务的孙进程（判分/agentic 辅助）会残留占资源；taskkill /T 一并收割，
+    taskkill 不可用或失败时回退单杀。"""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=15)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    with contextlib.suppress(OSError, ProcessLookupError):
+        proc.kill()
 
 
 def glob_report_files(base: Path, patterns: tuple[str, ...]) -> dict[str, str]:

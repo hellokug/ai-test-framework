@@ -27,6 +27,8 @@ tools:
     context_precision: 0.5
 
 rageval:
+  raise_exceptions: true               # 定位用：判官失败直接抛真实异常（定位完改回 false 出分数）
+  batch_size: 2                        # 限判官并发，缓解限流导致的 NaN
   metrics:                             # 官方 ragas 指标名（= ragas.metrics 属性）
     - faithfulness
     - context_precision
@@ -35,6 +37,7 @@ rageval:
     base_url: https://api.deepseek.com/v1
     model: deepseek-flash
     api_key_env: DEEPSEEK_API_KEY      # 运行前 set DEEPSEEK_API_KEY=sk-xxx
+    max_tokens: 8192                   # 判分 JSON 输出上限（ragas 缺省 1024 会截断）
   embeddings:                          # 必配（evalscope RAGEval 必填字段）
     model_name_or_path: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
     # ⚠️ torch < 2.6 的环境必须选 safetensors 权重的模型（CVE-2025-32434 防护，

@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 精度评测 · V1 静态稿</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=7">
+</head>
+<body data-module="accuracy" data-module-label="精度评测">
+<script type="text/plain" id="page-list">[
+  {"id":"runs","label":"评测运行","count":"128"},
+  {"id":"detail","label":"运行详情"},
+  {"id":"trends","label":"趋势对比"},
+  {"id":"manual","label":"人工评测","count":"6"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 评测运行 ============ -->
+  <section data-page="runs">
+    <header class="topbar">
+      <div><h1>评测运行</h1><div class="crumb">最近 7 天新增 12 次运行</div></div>
+      <div class="actions">
+        <button class="btn" data-open-drawer="newRunModal">＋ 创建评测任务</button>
+      </div>
+    </header>
+    <section class="stats">
+      <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">128</div><span class="delta up">▲ 12 本周</span>
+        <svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none"><polyline points="0,27 12,25 24,26 36,21 48,22 60,17 72,18 84,12 100,7"/></svg></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>用例通过率</div><div class="value">92.4%</div><span class="delta up">▲ 1.8pp</span>
+        <svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none"><polyline points="0,20 12,22 24,18 36,19 48,14 60,16 72,11 84,12 100,8" style="stroke:var(--ok)"/></svg></div>
+      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>评测数据集</div><div class="value">19</div><span class="delta up">＋2 本月</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--warn)"></i>受测模型</div><div class="value">9</div><span class="delta flat">— 持平</span></div>
+    </section>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="chip on" data-single>全部 <small>128</small></span>
+      <span class="chip" data-single>已通过</span>
+      <span class="chip" data-single>运行中 <small>1</small></span>
+      <span class="chip" data-single>失败</span>
+      <span class="chip" data-single>已排队</span>
+      <span style="flex:1"></span>
+      <select class="in" style="width:180px;height:32px;padding:4px 10px"><option>全部套件</option><option>evalscope-ceval</option><option>ragas-qa</option><option>gsm8k-math</option></select>
+      <input class="in" style="width:200px;height:32px;padding:4px 12px" placeholder="按模型过滤…">
+    </div>
+    <section class="card">
+      <table id="runsTbl"></table>
+      <div class="foot-note"><span>共 128 条记录（域过滤 domain=accuracy）</span>
+        <div class="pager"><span>‹</span><span class="on">1</span><span>2</span><span>3</span><span>›</span></div></div>
+    </section>
+  </section>
+
+  <!-- ============ 运行详情（实时运行视图） ============ -->
+  <section data-page="detail" hidden>
+    <header class="topbar">
+      <div>
+        <h1>swe-evalscope-deepseek <span class="badge running" style="vertical-align:3px"><i></i>运行中</span></h1>
+        <div class="crumb">run #b21c07af · engine=evalscope · 目标 DeepSeek-V3 · 版本 v1.2.0 · 数据集 swe_bench_lite_agentic(120) · 阈值 resolve_rate ≥ 0.30 · 09-23 13:05</div>
+      </div>
+      <div class="actions">
+        <button class="btn">停止</button>
+        <button class="btn" onclick="showPage('runs')">← 返回列表</button>
+      </div>
+    </header>
+
+    <!-- 实时进度 -->
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head">
+        <div><h3>实时进度</h3><div class="sub">SSE 实时推送（GET /runs/{id}/stream）· 每 5s 兜底轮询，终态自动刷新全页</div></div>
+        <span class="tag mono">阶段：Evaluating[swe_bench_lite_agentic] 68/120</span>
+      </div>
+      <div class="progress-line"><i style="width:56.7%"></i></div>
+      <div class="mini-stats">
+        <div class="mstat"><b>120</b><span>总数据条数</span></div>
+        <div class="mstat ac"><b>68</b><span>已运行</span></div>
+        <div class="mstat"><b>52</b><span>剩余条数</span></div>
+        <div class="mstat bad"><b>9</b><span>失败 / 错误</span></div>
+        <div class="mstat ok"><b>~17 分钟</b><span>预计剩余时间</span></div>
+      </div>
+      <div class="dim" style="font-size:12px;margin-top:12px">
+        已耗时 23 分钟 · 速率 ≈ 3.0 条/分钟 · 预计完成 15:22 ·
+        已产生 token 用量 1.24M input / 0.31M output（usage 实时入库）
+      </div>
+    </section>
+
+    <!-- 阶段性指标 -->
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>指标汇总 <span class="tag" style="color:var(--run);border-color:color-mix(in srgb,var(--run) 40%,transparent)">阶段性</span></h3>
+        <div class="sub">已完成 68 例的即时聚合 · 完成后出最终判定与报告</div></div></div>
+      <table id="sumTbl" class="sumtable"></table>
+    </section>
+
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- 全部失败用例 -->
+      <section class="card">
+        <div class="card-head"><div><h3>失败用例 <span class="dim">(全部 9 条)</span></h3><div class="sub">断言 → 输入 → 输出，完整可追溯</div></div>
+          <button class="btn sm">下载 failures.jsonl</button></div>
+        <div class="detail-stack" id="failBox"></div>
+        <div class="foot-note"><span>还有 6 条失败用例</span><a href="javascript:void 0" class="dim" style="font-size:12px">展开全部 ↓</a></div>
+      </section>
+      <!-- 抽样复核 -->
+      <section class="card">
+        <div class="card-head"><div><h3>抽样结果复核</h3><div class="sub">随机抽样 10 例（seed 42）· 防止“分数对但行为怪”</div></div>
+          <button class="btn sm">重新抽样</button></div>
+        <table class="sumtable" id="sampleTbl"></table>
+        <div class="foot-note">
+          <span>待复核 <b style="color:var(--warn)">5</b></span>
+          <span style="display:flex;gap:8px"><button class="btn sm">送人工评测</button><button class="btn sm">导出抽样包</button></span>
+        </div>
+      </section>
+    </div>
+
+    <!-- 运行日志 -->
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head">
+        <div><h3>运行日志</h3><div class="sub">页面只保留实时尾部 · 完整日志与输入输出明细落盘 work_dir，给下载链接</div></div>
+        <div class="chips" style="margin:0">
+          <button class="btn sm">完整日志 .log</button>
+          <button class="btn sm">输入输出明细 .jsonl</button>
+          <button class="btn sm">产物包 .zip</button>
+        </div>
+      </div>
+      <div class="logbox">
+        <div><span class="ln">14:32:01</span>INFO&nbsp; run start · engine=evalscope · dataset=swe_bench_lite_agentic · total=120 · parallel=8</div>
+        <div><span class="ln">14:32:05</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 0/120</div>
+        <div><span class="ln">14:33:12</span>完成&nbsp; swe-0001 · resolved · 1.8s</div>
+        <div><span class="ln">14:33:40</span>完成&nbsp; swe-0002 · unresolved · 2.1s</div>
+        <div><span class="ln">14:35:02</span><span class="lerr">错误</span>&nbsp; swe-0009 · ReadTimeout（自动重试 1 次仍失败，计入 error）</div>
+        <div><span class="ln">14:41:27</span><span class="lwarn">警告</span>&nbsp; swe-0017 · patch 应用失败：hunk 失配（failures.jsonl 已记录）</div>
+        <div><span class="ln">14:52:10</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 60/120</div>
+        <div><span class="ln">14:55:38</span>完成&nbsp; swe-0068 · resolved · 3.4s</div>
+        <div><span class="ln">14:55:39</span>进度&nbsp; 68/120 · 56.7% · 预计剩余 ~17 分钟 <span class="lcursor"></span></div>
+      </div>
+    </section>
+
+    <!-- 用例结果（完整列表） -->
+    <section class="card">
+      <div class="card-head"><div><h3>用例结果 <span class="dim">(已完成 68)</span></h3><div class="sub">点击行首展开输出与评分依据 · 随进度增量出现</div></div>
+        <div class="chips" style="margin:0">
+          <select class="in" style="width:150px;height:32px;padding:4px 10px"><option>全部</option><option>仅失败</option><option>仅通过</option></select>
+          <input class="in" style="width:200px;height:32px;padding:4px 12px" placeholder="按 case id / 文本过滤…"></div></div>
+      <table id="casesTbl"></table>
+    </section>
+  </section>
+
+  <!-- ============ 版本质量对比（趋势页重构） ============ -->
+  <section data-page="trends" hidden>
+    <header class="topbar">
+      <div><h1>版本质量对比</h1><div class="crumb">横轴 = 版本号 · 纵轴 = 分数 · 基线虚线 · 同模型跨版本不允许劣化</div></div>
+      <div class="actions"><button class="btn">导出对比报告</button></div>
+    </header>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="ds-flabel">对比模式</span>
+      <span class="chip on" data-tmode="h">横向 · 同模型跨版本</span>
+      <span class="chip" data-tmode="v">纵向 · 跨模型</span>
+      <span class="ds-flabel gap">数据集</span>
+      <select class="in" id="tDataset" style="width:240px;height:32px;padding:4px 10px">
+        <option value="ceval">ceval（指标 mean_acc）</option>
+        <option value="gsm8k">gsm8k（指标 mean_acc）</option>
+        <option value="financebench">financebench（指标 token_f1）</option>
+      </select>
+      <span class="ds-flabel gap">模型</span>
+      <span class="chips" id="modelChips" style="margin:0"></span>
+    </div>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head">
+        <div><h3 id="verTitle">版本 × 分数</h3><div class="sub" id="verSub"></div></div>
+        <div class="chips" style="margin:0">
+          <span class="lchip dim" style="font-size:12px;display:flex;align-items:center;gap:6px"><i style="width:14px;height:3px;border-radius:2px;background:var(--ok);display:inline-block"></i>≥ 基线</span>
+          <span class="lchip dim" style="font-size:12px;display:flex;align-items:center;gap:6px"><i style="width:14px;height:3px;border-radius:2px;background:var(--bad);display:inline-block"></i>&lt; 基线（劣化）</span>
+          <span class="lchip dim" style="font-size:12px;display:flex;align-items:center;gap:6px"><i style="width:14px;height:0;border-top:2px dashed var(--tx3);display:inline-block"></i>基线</span>
+        </div>
+      </div>
+      <div class="chart tall" data-chart="chartVer" style="height:320px"></div>
+    </section>
+    <div class="grid2">
+      <section class="card">
+        <div class="card-head"><div><h3>版本质量判定表</h3><div class="sub">每一行 = 一次版本评测 · Δ = 分数 − 基线</div></div></div>
+        <table class="sumtable" id="verdictTbl"></table>
+      </section>
+      <section class="card">
+        <div class="card-head"><div><h3>劣化检测</h3><div class="sub">规则：分数 &lt; 基线 → 劣化（阻断项）</div></div></div>
+        <div class="detail-stack" id="degrBox"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ 人工评测 ============ -->
+  <section data-page="manual" hidden>
+    <header class="topbar">
+      <div><h1>人工评测</h1><div class="crumb">来自运行详情「送人工评测」的任务</div></div>
+      <div class="actions"><button class="btn">导出评分 CSV</button></div>
+    </header>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="chip on" data-single>待评 <small>2</small></span>
+      <span class="chip" data-single>已评 <small>4</small></span>
+    </div>
+    <div class="manual-grid" id="manualGrid"></div>
+  </section>
+</main>
+
+<!-- 创建评测任务（结构化表单：后台自动回填套件配置，前台无 YAML） -->
+<div class="mask" id="newRunModal" hidden>
+  <div class="modal" style="width:860px;max-height:90vh;overflow:auto">
+    <h3>创建评测任务 <span class="dim" style="font-size:12.5px;font-weight:400">— 逐项选择，后台自动生成配置并启动</span></h3>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>任务标识与被测对象</small></div>
+      <div class="p-row">
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（模型-数据集-日期）；建议包含模型与数据集名，便于列表检索</span></span></span>
+        <input class="in" placeholder="如 evalscope-ceval-qwen72b-20260924"></div>
+      <div class="p-row" style="align-items:start">
+        <span class="p-label" style="margin-top:8px">目标模型<span class="qmark">?<span class="tip">被测模型，来自「公共 · 模型管理」；单选。评测对象只认端点，不区分部署方式</span></span></span>
+        <div class="radio-cards three" style="margin:0">
+          <div class="radio-card on"><b>qwen2.5-72b</b><small>gpu-box-01 vLLM · 内网</small></div>
+          <div class="radio-card"><b>DeepSeek-V3</b><small>api.deepseek.com</small></div>
+          <div class="radio-card"><b>claude-3.5-sonnet</b><small>api.anthropic.com</small></div>
+          <div class="radio-card"><b>gpt-4o-mini</b><small>api.openai.com</small></div>
+          <div class="radio-card"><b>qwen2.5:3b</b><small>本地 Ollama（调试用）</small></div>
+        </div></div>
+      <div class="p-row">
+        <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">开放式 / 生成类答案由裁判模型对照参考答案打分；纯规则指标（精确匹配、contains 等）无需裁判。auto = 按数据集特征自动推荐</span></span></span>
+        <select class="in" style="max-width:300px">
+          <option>auto（按数据集自动推荐）</option>
+          <option>不使用（仅规则指标）</option>
+          <option>qwen2.5-72b</option>
+          <option>DeepSeek-V3</option>
+          <option>claude-3.5-sonnet</option>
+        </select></div>
+      <div class="p-row">
+        <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">必填，写入 run 记录。同一模型的不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
+        <input class="in" style="max-width:300px" placeholder="如 v1.2.0 / 20260924-snapshot"></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>数据集配置</b><small>选择数据 · 控制规模 · 保证可复现</small></div>
+      <div class="p-row" style="align-items:start">
+        <span class="p-label" style="margin-top:8px">评测数据集<span class="qmark">?<span class="tip">可多选。搜索框内支持按归属 / 存储位置 / 能力维度 / 类型筛选，直接输入 = 模糊搜索</span></span></span>
+        <div class="ds-picker" id="dsPicker">
+          <div class="ds-search" id="dsSearchBox">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+            <span class="ds-tokens" id="dsTokens"></span>
+            <input id="dsSearch" placeholder="模糊搜索：数据集名称 / 领域 / 标签…">
+            <span class="ds-filter-btn">筛选 <b>▾</b></span>
+            <div class="ds-menu" id="dsMenu" hidden></div>
+          </div>
+          <div class="ds-list" id="dsList"></div>
+          <div class="ds-foot"><span id="dsFoot"></span><span>开源 = 内置/公开基准 · 个人 = 自建导入 · 客户 = 客户业务数据</span></div>
+        </div></div>
+      <div class="p-row">
+        <span class="p-label">每子集抽样条数<span class="qmark">?<span class="tip">每个数据集最多跑多少条；超过则按 seed 随机抽样，免去跑全集</span></span></span>
+        <div class="chips" style="margin:0">
+          <span class="chip" data-single>全量</span>
+          <span class="chip on" data-single>100</span>
+          <span class="chip" data-single>300</span>
+          <span class="chip" data-single>500</span>
+          <input class="in" style="width:90px;height:30px;padding:4px 10px" placeholder="自定义">
+        </div></div>
+      <div class="p-row">
+        <span class="p-label">总抽样条数<span class="qmark">?<span class="tip">所有数据集合计的抽样上限；多数据集同跑时控制整体规模。留空 = 不限制</span></span></span>
+        <input class="in" style="max-width:300px" placeholder="如 5000；留空 = 不限制"></div>
+      <div class="p-row">
+        <span class="p-label">随机种子 seed<span class="qmark">?<span class="tip">同 seed 抽到的样本一致：结果可复现、跨 run 可比。改 seed 会换一批抽样样本</span></span></span>
+        <input class="in" style="max-width:300px" value="42"></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">3</span><b>压力配置</b><small>并发与时长控制</small></div>
+      <div class="p-row">
+        <span class="p-label">并发数<span class="qmark">?<span class="tip">同时发起的请求 worker 数：越大越快、对端点压力越大；限流端点建议 2~4。留空 = 引擎默认</span></span></span>
+        <input class="in" type="number" min="1" placeholder="如 8；留空 = 用引擎默认" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">最大运行时间<span class="qmark">?<span class="tip">单次 run 的超时上限，到时强制终止并保留已完成部分的结果。留空 = 不限制</span></span></span>
+        <input class="in" placeholder="如 3600（秒）；留空 = 不限制" style="max-width:300px"></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">4</span><b>扩展参数</b><small>常见模型参数 · 留空 = 不传，使用端点默认值</small></div>
+      <div class="p-row">
+        <span class="p-label">max_tokens<span class="qmark">?<span class="tip">单条样本输出 token 上限；过小会截断作答、影响判分</span></span></span>
+        <input class="in" type="number" min="1" placeholder="如 1024" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">temperature<span class="qmark">?<span class="tip">采样温度 0–2.0：0 = 贪心解码，越高越随机。评测一般 0 或端点默认</span></span></span>
+        <input class="in" type="number" step="0.1" min="0" max="2" placeholder="如 0.0 = 贪心解码" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">top_p<span class="qmark">?<span class="tip">核采样：只从累计概率前 p 的候选词中采样（0–1）</span></span></span>
+        <input class="in" type="number" step="0.05" min="0" max="1" placeholder="如 0.8" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">top_k<span class="qmark">?<span class="tip">每步只保留概率最高的 k 个候选；部分端点不支持</span></span></span>
+        <input class="in" type="number" min="1" placeholder="如 40" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">thinking 推理开关<span class="qmark">?<span class="tip">后台按引擎翻译：Qwen → enable_thinking · OpenAI o 系 → reasoning_effort · Claude → thinking budget</span></span></span>
+        <select class="in" style="max-width:300px"><option>端点默认</option><option>关闭（非思考模式）</option><option>开启（思考模式）</option></select></div>
+      <div class="adv-json" id="advJson">
+        <button type="button" class="adv-head" id="advJsonToggle">
+          <span class="adv-badge">高级</span>
+          <b>JSON 扩展参数</b>
+          <small>长尾参数兜底 · 与上方字段同名时以 JSON 为准</small>
+          <span class="adv-caret">▾</span>
+        </button>
+        <div class="adv-body" id="advJsonBody" hidden>
+          <textarea class="in" rows="3" placeholder='{"presence_penalty": 0.1, "stop": ["\n\n"], "enable_thinking": false}'></textarea>
+          <span class="hint">必须为合法 JSON 对象，否则 422 拦截；按字段合并进请求体</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">5</span><b>指标阈值判定</b><small>分数是否达标的判据</small></div>
+      <div class="p-row">
+        <span class="p-label">判定模式<span class="qmark">?<span class="tip">auto：选择题类用随机基线（如 0.25），其余指标不设默认避免误导；自定义 = 逐指标设 ≥/≤ 规则；不判定 = 仅记录分数</span></span></span>
+        <select class="in" id="thMode" style="max-width:300px">
+          <option>auto（内置基准推荐阈值）</option>
+          <option>不判定（仅记录分数）</option>
+          <option>自定义</option>
+        </select></div>
+      <div class="field" id="thCustom" hidden style="margin:2px 0 0 146px">
+        <div id="thRows"></div>
+        <button class="btn sm" id="thAdd">＋ 添加指标阈值</button>
+        <span class="hint">指标名需与该数据集的指标一致（如 mean_acc / exact_match）；写入 metric_thresholds</span>
+      </div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">6</span><b>执行方式</b><small>创建 ≠ 执行</small></div>
+      <div class="radio-cards" id="execCards" style="margin:0">
+        <div class="radio-card on" data-exec="now"><b>立即执行</b><small>创建后自动 run（pending → running）</small></div>
+        <div class="radio-card" data-exec="scheduled"><b>定时执行</b><small>到点自动 run，到点前可修改/取消</small></div>
+        <div class="radio-card" data-exec="manual"><b>仅创建</b><small>配置固化排队，稍后在任务列表手动运行</small></div>
+      </div>
+      <div class="p-row" id="schedAtField" hidden style="margin:12px 0 0">
+        <span class="p-label">定时时间<span class="qmark">?<span class="tip">由后台调度器到点触发 run；触发前任务为 pending，可编辑/取消</span></span></span>
+        <input class="in" type="datetime-local" value="2026-09-25T10:00" style="max-width:300px"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
+      <div class="dim" style="font-size:12.5px;line-height:1.7">
+        ✓ <b style="color:var(--tx)">创建任务 = 配置固化</b>（POST /accuracy/tasks，生成 task_id，相当于后台写好 YAML；
+        此时不执行）——实际执行绑定 task_id：立即/定时由调度触发，同一份配置再次执行会生成<b style="color:var(--tx)">新 task_id</b>
+        （retry 链，原配置不变）。模型参数按字段合并进请求体（留空不传），阈值写入 metric_thresholds，
+        多数据集自动填充推荐指标（metrics: auto），抽样与种子写入配置保证可复现。
+      </div>
+    </div>
+    <div class="row"><button class="btn" data-close>取消</button><button class="btn primary">创建任务</button></div>
+  </div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 精度评测 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=4"></script>
+<script>
+/* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选） ---------- */
+const DS_ITEMS = [
+  { n: "ceval", m: "1606 题 · 52 学科", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版", on: true },
+  { n: "gsm8k", m: "1319 题 · 数学推理", own: "开源", loc: "离线", dims: ["数学推理"], type: "LLM", src: "内置抽样版" },
+  { n: "mmlu", m: "14042 题 · 英文学科", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
+  { n: "agieval", m: "综合推理评测", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
+  { n: "race", m: "阅读理解", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
+  { n: "hellaswag", m: "常识推理 · hf 在线引用未落地", own: "开源", loc: "在线", dims: ["知识问答"], type: "LLM", src: "hf:Rowan/hellaswag" },
+  { n: "financebench", m: "金融问答 150 题", own: "开源", loc: "离线", dims: ["RAG"], type: "RAG", src: "内置抽样版" },
+  { n: "multihoprag", m: "多跳检索问答", own: "开源", loc: "离线", dims: ["RAG"], type: "RAG", src: "内置抽样版" },
+  { n: "rgb", m: "噪声/拒答/反事实", own: "开源", loc: "离线", dims: ["RAG", "鲁棒性"], type: "RAG", src: "内置抽样版" },
+  { n: "swe-bench-lite", m: "SWE-bench Lite 实例集", own: "开源", loc: "离线", dims: ["代码", "Agent"], type: "Agent", src: "内置抽样版" },
+  { n: "gaia", m: "GAIA 通用助手任务", own: "开源", loc: "在线", dims: ["Agent"], type: "Agent", src: "hf:gaia-benchmark/GAIA" },
+  { n: "xlam_fc", m: "函数调用 60k 抽样", own: "开源", loc: "离线", dims: ["Agent"], type: "Agent", src: "内置抽样版" },
+  { n: "finance_private", m: "12 题 · gold+干扰文档", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
+  { n: "gov_private", m: "12 题 · 政务语料", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
+  { n: "legal_private", m: "12 题 · 法律语料", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
+  { n: "long-ctx-haystack", m: "16k 大海捞针 · 自建", own: "个人", loc: "离线", dims: ["长上下文"], type: "LLM", src: "自建 cases" },
+  { n: "my-qa-100", m: "自建问答 100 条 · hf 仓库引用", own: "个人", loc: "在线", dims: ["知识问答"], type: "LLM", src: "hf:zhimeng/qa-100" },
+  { n: "acme-support-qa", m: "客服问答 5000 条（ACME 项目）", own: "客户", loc: "离线", dims: ["知识问答"], type: "LLM", src: "客户提供 jsonl" },
+  { n: "bos-rag-corpus", m: "客户知识库检索语料 · 对象存储引用", own: "客户", loc: "在线", dims: ["RAG"], type: "RAG", src: "s3://bos/prod" },
+];
+/* ---------- 搜索框内筛选：token + 两级下拉（类型 → 值）；直接输入 = 模糊搜索 ---------- */
+const DS_FILTER_TYPES = [
+  { key: "own", label: "归属", hint: "数据来源", values: ["开源", "个人", "客户"], multi: false },
+  { key: "loc", label: "存储位置", hint: "在线 = 远端引用按需拉取", values: ["在线", "离线"], multi: false },
+  { key: "dim", label: "能力维度", hint: "可叠加多个", values: ["知识问答", "数学推理", "代码", "RAG", "Agent", "鲁棒性", "长上下文"], multi: true },
+  { key: "type", label: "数据集类型", hint: "", values: ["LLM", "Agent", "RAG"], multi: false },
+];
+let dsTokens = [];                       // [{type, value}]
+let dsMenuType = null;                   // 当前下拉展开到的筛选类型（null = 类型列表级）
+
+function renderDs(filter = "") {
+  const f = filter.trim().toLowerCase();
+  const sel = {};
+  const dims = [];
+  dsTokens.forEach(t => t.type === "dim" ? dims.push(t.value) : sel[t.type] = t.value);
+  const hits = DS_ITEMS.map((d, i) => ({ ...d, i }))
+    .filter(d => (!sel.own || d.own === sel.own)
+              && (!sel.loc || d.loc === sel.loc)
+              && (!dims.length || d.dims.some(x => dims.includes(x)))
+              && (!sel.type || d.type === sel.type)
+              && (!f || (d.n + d.m + d.dims.join() + d.type + d.src).toLowerCase().includes(f)));
+  const cls = { 开源: "t-open", 个人: "t-personal", 客户: "t-cust" };
+  document.getElementById("dsList").innerHTML = hits.length
+    ? hits.map(d => `<div class="ds-row ${d.on ? "on" : ""}" data-i="${d.i}">
+        <span class="cb">✓</span><span class="ds-name">${d.n}</span>
+        <span class="ds-meta">${d.m}</span>
+        <span class="ds-tags"><span class="tag ${cls[d.own]}">${d.own}</span><span class="tag ${d.loc === "在线" ? "t-online" : ""}">${d.loc}</span><span class="tag">${d.type}</span>${d.dims.map(t => `<span class="tag">${t}</span>`).join("")}</span></div>`).join("")
+    : `<div class="ds-empty">当前筛选无匹配 —— 点 × 移除筛选条件，或先在「公共 · 数据集管理」导入</div>`;
+  document.querySelectorAll("#dsList .ds-row").forEach(r => r.addEventListener("click", () => {
+    DS_ITEMS[r.dataset.i].on = !DS_ITEMS[r.dataset.i].on;
+    r.classList.toggle("on"); updateDsFoot();
+  }));
+  updateDsFoot();
+}
+function updateDsFoot() {
+  const n = DS_ITEMS.filter(d => d.on).length;
+  document.getElementById("dsFoot").innerHTML = `已选 <b>${n}</b> 个数据集 · 共 ${DS_ITEMS.length} 个可用`;
+}
+
+/* ----- token 渲染与下拉菜单 ----- */
+function dsRenderTokens() {
+  document.getElementById("dsTokens").innerHTML = dsTokens.map((t, i) => {
+    const label = DS_FILTER_TYPES.find(x => x.key === t.type).label;
+    return `<span class="ds-token"><b>${label}</b>:${t.value}<i data-rm="${i}">✕</i></span>`;
+  }).join("");
+  document.querySelectorAll("#dsTokens [data-rm]").forEach(x => x.addEventListener("click", e => {
+    e.stopPropagation();
+    dsTokens.splice(+x.dataset.rm, 1);
+    dsRenderTokens(); renderDs(document.getElementById("dsSearch").value);
+  }));
+}
+function dsApply() { renderDs(document.getElementById("dsSearch").value); }
+function dsOpenMenu(typeKey = null) {
+  dsMenuType = typeKey;
+  const menu = document.getElementById("dsMenu");
+  if (typeKey === null) {
+    menu.innerHTML = `<div class="ds-mhead"><span>选择筛选类型</span><span class="ds-mback" id="dsClose">收起</span></div>` +
+      DS_FILTER_TYPES.map(ft => `<div class="ds-mitem" data-t="${ft.key}"><span>${ft.label}</span><small>${ft.hint}</small></div>`).join("");
+    menu.querySelectorAll("[data-t]").forEach(el => el.addEventListener("click", () => dsOpenMenu(el.dataset.t)));
+  } else {
+    const ft = DS_FILTER_TYPES.find(x => x.key === typeKey);
+    const picked = dsTokens.filter(t => t.type === typeKey).map(t => t.value);
+    menu.innerHTML = `<div class="ds-mhead"><span class="ds-mback" id="dsBack">← 筛选类型</span><span>${ft.label}${ft.multi ? " · 可多选" : ""}</span></div>` +
+      ft.values.map(v => `<div class="ds-mitem" data-v="${v}"><span>${v}</span><span>${picked.includes(v) ? "✓" : ""}</span></div>`).join("");
+    menu.querySelectorAll("[data-v]").forEach(el => el.addEventListener("click", () => {
+      const v = el.dataset.v;
+      if (ft.multi) {                                   // 维度：可叠多个
+        const at = dsTokens.findIndex(t => t.type === typeKey && t.value === v);
+        at >= 0 ? dsTokens.splice(at, 1) : dsTokens.push({ type: typeKey, value: v });
+        dsOpenMenu(typeKey);                            // 留在本级继续加
+      } else {                                          // 单值：替换同类型 token
+        dsTokens = dsTokens.filter(t => t.type !== typeKey);
+        dsTokens.push({ type: typeKey, value: v });
+        menu.hidden = true;
+      }
+      dsRenderTokens(); dsApply();
+    }));
+  }
+  document.getElementById("dsClose")?.addEventListener("click", () => menu.hidden = true);
+  document.getElementById("dsBack")?.addEventListener("click", () => dsOpenMenu(null));
+  menu.hidden = false;
+}
+const dsSearchInput = document.getElementById("dsSearch");
+// 打开菜单的三个入口：键盘 tab 聚焦 / 点击输入（含已聚焦的二次点击）/ 点击搜索框任意位置（图标、按钮）
+dsSearchInput.addEventListener("focus", () => dsOpenMenu());
+dsSearchInput.addEventListener("click", () => dsOpenMenu());
+document.getElementById("dsSearchBox").addEventListener("click", e => {
+  if (!e.target.isConnected) return;   // 菜单换级重渲染后点击源已脱离 DOM，忽略冒泡
+  if (!!e.target.closest("#dsMenu")) return;  // 菜单内部点击不重开
+  dsOpenMenu();
+});
+dsSearchInput.addEventListener("input", e => { renderDs(e.target.value); document.getElementById("dsMenu").hidden = true; });
+document.addEventListener("click", e => {
+  if (!e.target.isConnected) return;
+  if (!e.target.closest("#dsPicker")) document.getElementById("dsMenu").hidden = true;
+});
+dsRenderTokens();
+renderDs();
+
+/* ---------- 阈值判定：模式切换 + 自定义规则行 ---------- */
+const thMode = document.getElementById("thMode");
+const thCustom = document.getElementById("thCustom");
+const thRows = document.getElementById("thRows");
+function syncThMode() { thCustom.hidden = !thMode.value.startsWith("自定义"); }
+function thAddRow(metric = "", cmp = "≥", val = "") {
+  const row = document.createElement("div");
+  row.className = "th-row";
+  row.innerHTML = `<input class="in" placeholder="指标名，如 mean_acc" value="${metric}">
+    <select class="in"><option ${cmp === "≥" ? "selected" : ""}>≥</option><option ${cmp === "≤" ? "selected" : ""}>≤</option></select>
+    <input class="in" type="number" step="0.01" placeholder="0.70" value="${val}">
+    <button class="btn sm danger" type="button" title="删除">✕</button>`;
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  thRows.appendChild(row);
+}
+thMode.addEventListener("change", syncThMode);
+document.getElementById("thAdd").addEventListener("click", () => thAddRow());
+thAddRow("mean_acc", "≥", "0.7");
+syncThMode();
+
+/* ---------- 高级 JSON 扩展参数：显眼展开面板 ---------- */
+const advJson = document.getElementById("advJson");
+document.getElementById("advJsonToggle").addEventListener("click", () => {
+  const open = advJson.classList.toggle("open");
+  document.getElementById("advJsonBody").hidden = !open;
+});
+
+/* ---------- 执行方式：定时执行时展开时间选择 ---------- */
+const schedField = document.getElementById("schedAtField");
+document.querySelectorAll("#execCards .radio-card").forEach(c => c.addEventListener("click", () => {
+  schedField.hidden = c.dataset.exec !== "scheduled";
+}));
+
+/* ---------- 评测运行列表 ---------- */
+const RUNS = [
+  ["nightly-ceval-regression", "#a1b2c3d4", "qwen2.5-72b", "pending", null, "—", "→ 09-25 10:00 定时"],
+  ["evalscope-ceval-qwen72b", "#e04d5512", "qwen2.5-72b", "passed", 84.6, "1606", "09-22 21:47"],
+  ["swe-evalscope-deepseek", "#b21c07af", "DeepSeek-V3", "running", 78.5, "120 / 9 err", "09-23 13:05"],
+  ["rag-ragas-qa", "#3c91d7f0", "Qwen2.5-72B", "passed", 91.0, "64 / 3 err", "09-22 18:12"],
+  ["gsm8k-math-qwen", "#7f3a92c1", "qwen2.5-3b", "passed", 92.0, "200 / 6 err", "09-21 10:02"],
+  ["mmlu-claude-sonnet", "#9aa31f70", "claude-3.5-sonnet", "failed", 62.5, "400 / 150 err", "09-20 16:20"],
+  ["quickstart-openai", "#c7d80e33", "gpt-4o-mini", "passed", 96.2, "42 / 1 err", "09-19 14:32"],
+  ["manual-eval-round2", "#5f19c2ab", "人工评审", "pending", null, "30", "09-18 18:03"],
+];
+document.getElementById("runsTbl").innerHTML = `
+  <thead><tr><th>运行</th><th>目标模型</th><th>状态</th><th>通过率</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${RUNS.map(r => `<tr class="clickable" onclick="showPage('detail')">
+    <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
+    <td class="dim">${r[2]}</td><td>${badge(r[3])}</td><td>${passCell(r[4])}</td>
+    <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
+    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")}</tbody>`;
+
+/* ---------- 运行详情：阶段性指标 + 失败用例 + 抽样复核 + 完整列表 ---------- */
+const SUMS = [
+  ["resolve_rate", "overall", "0.824", "≥ 0.30", 68, true],
+  ["resolve_rate", "难度 hard", "0.750", "—", 24, null],
+  ["resolve_rate", "难度 medium", "0.864", "—", 44, null],
+];
+document.getElementById("sumTbl").innerHTML = `
+  <thead><tr><th>指标</th><th>数据集 / 分组</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${SUMS.map((s, i) => `<tr class="${i === 0 ? "overall" : ""}">
+    <td class="mono">${s[0]}</td><td class="${i ? "dim" : ""}">${s[1]}</td>
+    <td class="num mono">${s[2]}</td><td class="num dim">${s[3]}</td><td class="num">${s[4]}</td>
+    <td>${s[5] === null ? '<span class="faint">—</span>' : badge(s[5] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+const FAILS = [
+  { c: "swe-0009", a: "patch 非空（必须产出补丁）", inp: "issue: fancyimpose 依赖安装后 import 报错…", out: "ReadTimeout ×2 —— 模型未在 30s 内产出任何内容" },
+  { c: "swe-0017", a: "FAIL_TO_PASS 全部通过", inp: "issue: sympy latex 打印矩阵括号错误…", out: "patch 应用失败：hunk 失配（上下文行漂移）" },
+  { c: "swe-0042", a: "PASS_TO_PASS 不回归", inp: "issue: astropy 坐标变换精度…", out: "新增测试通过，但 3 个既有用例回归" },
+];
+document.getElementById("failBox").innerHTML = FAILS.map(f => `
+  <div class="fail-block">
+    <div class="mono" style="font-size:12.5px;color:var(--bad)">✕ ${f.c}</div>
+    <div class="detail-stack" style="margin-top:8px">
+      <div class="kv"><span>断言</span><div style="font-size:12.5px">${f.a}</div></div>
+      <div class="kv"><span>输入</span><pre>${f.inp}</pre></div>
+      <div class="kv"><span>输出</span><pre>${f.out}</pre></div>
+    </div></div>`).join("");
+
+const SAMPLE = [
+  ["swe-0003", "issue: json 序列化浮点精度…", "patch: 修改 repr 逻辑 +2 测试", "resolved", "待复核"],
+  ["swe-0012", "issue: 时区解析偏移…", "patch: 3 行修复", "resolved", "待复核"],
+  ["swe-0028", "issue: 文档字符串与实现不一致…", "无 patch，直接回答了问题", "unresolved", "✕ 已标记问题"],
+  ["swe-0051", "issue: 循环导入…", "patch: 调整 import 顺序", "resolved", "✓ 复核通过"],
+  ["swe-0066", "issue: 边界条件除零…", "patch: 加守卫 +1 测试", "resolved", "待复核"],
+];
+document.getElementById("sampleTbl").innerHTML = `
+  <thead><tr><th>Case</th><th>输入摘要</th><th>输出摘要</th><th>自动判定</th><th>人工复核</th></tr></thead>
+  <tbody>${SAMPLE.map(s => `<tr>
+    <td class="mono" style="font-size:12px">${s[0]}</td>
+    <td class="dim" style="white-space:normal;font-size:12px">${s[1]}</td>
+    <td class="dim" style="white-space:normal;font-size:12px">${s[2]}</td>
+    <td>${badge(s[3] === "resolved" ? "passed" : "failed")}</td>
+    <td>${s[4].startsWith("待") ? '<button class="btn sm">复核</button>' : `<span class="dim" style="font-size:12px">${s[4]}</span>`}</td></tr>`).join("")}</tbody>`;
+
+const CASES = [
+  ["swe-0001", "django-12345", 1.0, true, "patch 应用成功，FAIL_TO_PASS 全部通过"],
+  ["swe-0002", "sympy-882", 0.0, false, "patch 应用失败：hunk 失配"],
+  ["swe-0006", "flask-5510", 1.0, true, "新增测试通过，无回归"],
+  ["swe-0009", "fancyimpose-77", 0.0, false, "ReadTimeout ×2，未产出 patch"],
+  ["swe-0068", "requests-991", 1.0, true, "全部测试通过"],
+];
+document.getElementById("casesTbl").innerHTML = `
+  <thead><tr><th style="width:30px"></th><th>Case</th><th>指标</th><th>值</th><th>结果</th></tr></thead>
+  <tbody>${CASES.map((c, i) => `
+    <tr class="clickable" onclick="toggleCase(${i})">
+      <td><span class="expander" id="exp-${i}">▸</span></td>
+      <td class="rname"><b class="mono">${c[0]}</b><div class="rid">${c[1]}</div></td>
+      <td class="mono">resolve_rate</td><td class="num mono">${c[2].toFixed(1)}</td><td>${badge(c[3] ? "passed" : "failed")}</td></tr>
+    <tr class="detail-row" id="det-${i}" hidden><td></td><td colspan="4"><div class="detail-stack">
+      <div class="kv"><span>output</span><pre>${c[4]}</pre></div>
+      <div class="kv"><span>usage</span><pre>{"prompt_tokens": 3210, "completion_tokens": 512, "cached_tokens": 1024}</pre></div>
+      <div class="kv"><span>timings</span><pre>{"latency_ms": 1830}</pre></div>
+    </div></td></tr>`).join("")}</tbody>`;
+function toggleCase(i) {
+  const det = document.getElementById(`det-${i}`), exp = document.getElementById(`exp-${i}`);
+  det.hidden = !det.hidden; exp.textContent = det.hidden ? "▸" : "▾";
+}
+
+/* ---------- 版本质量对比（趋势页核心） ---------- */
+const VER = ["v1.0.0", "v1.1.0", "v1.2.0", "v1.3.0-rc"];
+const PALETTE = ["#8b7cf6", "#22d3ee", "#f472b6", "#4ade80", "#fbbf24"];
+const TRENDS = {
+  ceval: { metric: "mean_acc", models: {
+    "qwen2.5-72b":       { base: 0.85, scores: [0.846, 0.851, 0.864, 0.823] },
+    "DeepSeek-V3":       { base: 0.87, scores: [0.871, 0.875, 0.881, 0.884] },
+    "claude-3.5-sonnet": { base: 0.80, scores: [0.795, 0.801, 0.786, 0.798] },
+    "GPT-4o":            { base: 0.86, scores: [0.858, 0.862, 0.871, 0.869] },
+  }},
+  gsm8k: { metric: "mean_acc", models: {
+    "qwen2.5-72b":       { base: 0.90, scores: [0.902, 0.911, 0.918, 0.921] },
+    "DeepSeek-V3":       { base: 0.92, scores: [0.925, 0.919, 0.928, 0.931] },
+    "claude-3.5-sonnet": { base: 0.93, scores: [0.934, 0.928, 0.931, 0.936] },
+  }},
+  financebench: { metric: "token_f1", models: {
+    "qwen2.5-72b":       { base: 0.78, scores: [0.772, 0.783, 0.791, 0.788] },
+    "claude-3.5-sonnet": { base: 0.82, scores: [0.826, 0.831, 0.818, 0.835] },
+  }},
+};
+let tMode = "h", tDs = "ceval";
+let tModels = new Set(["qwen2.5-72b"]);
+
+function renderModelChips() {
+  const models = Object.keys(TRENDS[tDs].models);
+  if (!models.some(m => tModels.has(m))) tModels = new Set([models[0]]);
+  document.getElementById("modelChips").innerHTML = models.map(m =>
+    `<span class="chip ${tModels.has(m) ? "on" : ""}" data-m="${m}">${m}</span>`).join("");
+  document.querySelectorAll("#modelChips .chip").forEach(c => c.addEventListener("click", () => {
+    const m = c.dataset.m;
+    if (tMode === "h") tModels = new Set([m]);
+    else { tModels.has(m) && tModels.size > 1 ? tModels.delete(m) : tModels.add(m); }
+    renderModelChips(); rebuildVer();
+  }));
+}
+function activeModels() { return Object.keys(TRENDS[tDs].models).filter(m => tModels.has(m)); }
+
+function verOption(t) {
+  const c = t.charts;
+  const models = activeModels();
+  const css = getComputedStyle(document.body);
+  const okC = css.getPropertyValue("--ok").trim() || "#4ade80";
+  const badC = css.getPropertyValue("--bad").trim() || "#fb7185";
+  const vals = models.flatMap(m => [...TRENDS[tDs].models[m].scores, TRENDS[tDs].models[m].base]);
+  const lo = Number((Math.floor(Math.min(...vals) * 50) / 50 - 0.01).toFixed(2));
+  const hi = Number((Math.ceil(Math.max(...vals) * 50) / 50 + 0.02).toFixed(2));
+  const series = models.map((m, i) => {
+    const cfg = TRENDS[tDs].models[m];
+    const col = PALETTE[i % PALETTE.length];
+    return {
+      name: m, type: "line", smooth: false, symbol: "circle", symbolSize: 11,
+      data: cfg.scores.map(v => {
+        const degr = v < cfg.base;
+        return { value: v,
+          itemStyle: { color: degr ? badC : okC, borderColor: col, borderWidth: 2 },
+          label: { show: degr, position: "bottom", distance: 8,
+            color: badC, fontSize: 11, fontWeight: 600,
+            formatter: `▼ 劣化 ${((cfg.base - v) * 100).toFixed(1)}pp` } };
+      }),
+      lineStyle: { width: 2.4, color: col },
+      itemStyle: { color: col },
+      markLine: { silent: true, symbol: "none",
+        lineStyle: { type: "dashed", color: col, opacity: 0.55, width: 1.4 },
+        label: { show: i === 0, position: "insideEndTop", color: c.axis, fontSize: 11, formatter: `基线 ${cfg.base.toFixed(2)}` },
+        data: [{ yAxis: cfg.base }] },
+    };
+  });
+  return {
+    grid: { left: 8, right: 20, top: 30, bottom: 26, containLabel: true },
+    tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder,
+      textStyle: { color: c.tipTx, fontSize: 12 },
+      valueFormatter: v => (+v).toFixed(3) },
+    legend: { top: 0, textStyle: { color: c.axis, fontSize: 12 } },
+    xAxis: { type: "category", data: VER, ...baseAxis(c), splitLine: { show: false },
+      axisLabel: { color: c.axis, fontWeight: 600 } },
+    yAxis: { type: "value", min: lo, max: hi,
+      ...baseAxis(c), axisLabel: { color: c.axis } },
+    series,
+  };
+}
+window.chartVer = verOption;
+
+function rebuildVer() {
+  const ds = TRENDS[tDs], models = activeModels();
+  document.getElementById("verTitle").textContent =
+    tMode === "h" ? `横向 · ${[...tModels][0]} × ${tDs}` : `纵向 · ${models.length} 个模型 × ${tDs}`;
+  document.getElementById("verSub").textContent =
+    `指标 ${ds.metric} · 版本 ${VER.join(" → ")} · 虚线 = 各模型基线（baseline_ref）`;  // 判定表
+  const rows = [];
+  for (const m of models) {
+    const cfg = ds.models[m];
+    cfg.scores.forEach((v, k) => rows.push({ m, ver: VER[k], v, base: cfg.base, last: k === VER.length - 1 }));
+  }
+  document.getElementById("verdictTbl").innerHTML = `
+    <thead><tr><th>模型</th><th>版本</th><th>分数</th><th>基线</th><th>Δ</th><th>判定</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const d = (r.v - r.base) * 100, ok = d >= 0;
+      return `<tr style="${r.last ? "font-weight:650" : ""}">
+        <td class="mono" style="font-size:12px">${r.m}</td><td class="mono">${r.ver}</td>
+        <td class="num mono">${r.v.toFixed(3)}</td><td class="num mono dim">${r.base.toFixed(2)}</td>
+        <td class="num mono" style="color:${ok ? "var(--ok)" : "var(--bad)"}">${d >= 0 ? "+" : ""}${d.toFixed(1)}pp</td>
+        <td><span class="badge ${ok ? "passed" : "failed"}"><i></i>${ok ? "达标" : "劣化"}</span></td></tr>`;
+    }).join("")}</tbody>`;
+  // 劣化检测
+  const degr = rows.filter(r => r.v < r.base);
+  document.getElementById("degrBox").innerHTML = degr.length
+    ? degr.map(r => `<div style="border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);border-radius:10px;padding:10px 14px">
+        <div class="mono" style="font-size:12.5px;color:var(--bad)">✕ ${r.m} · ${r.ver}</div>
+        <div class="dim" style="font-size:12.5px;margin-top:4px">分数 ${r.v.toFixed(3)} &lt; 基线 ${r.base.toFixed(2)}（▼ ${((r.base - r.v) * 100).toFixed(1)}pp）—— 建议阻断发布，回溯该版本变更</div></div>`).join("")
+    : `<div style="border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;padding:12px 14px;color:var(--ok);font-size:13px">✓ 当前筛选范围内无劣化 —— 全部版本 ≥ 基线</div>`;
+  autoCharts();   // 模型/模式/数据集变化时重建图表（否则曲线不刷新）
+}
+
+document.getElementById("tDataset").addEventListener("change", e => {
+  tDs = e.target.value;
+  tModels = new Set([Object.keys(TRENDS[tDs].models)[0]]);
+  renderModelChips(); rebuildVer();
+});
+document.querySelectorAll("[data-tmode]").forEach(c => c.addEventListener("click", () => {
+  document.querySelectorAll("[data-tmode]").forEach(x => x.classList.remove("on"));
+  c.classList.add("on"); tMode = c.dataset.tmode;
+  if (tMode === "h") tModels = new Set([[...tModels][0]]);
+  renderModelChips(); rebuildVer();
+}));
+renderModelChips();
+rebuildVer();
+
+/* ---------- 人工评测 ---------- */
+const MANUAL = [
+  { t: "quickstart-openai · c12", inp: "把这段话翻译成英文：今天天气不错。", exp: "自然、语法正确的英文翻译", out: "The weather is really nice today.", rubric: "忠实原文；无漏译；语体一致", done: true, score: 9, by: "zhimeng" },
+  { t: "rag-ragas-qa · c07", inp: "aite 支持哪些压测引擎？", exp: "evalscope-perf 与 locust", out: "支持 evalscope-perf（LLM 原生指标）与 locust（通用 HTTP/分布式）两个引擎。", rubric: "答案完整；无编造；引用上下文", done: false },
+  { t: "manual-eval-round2 · c22", inp: "（客服话术生成任务输入）", exp: "符合品牌语气的中文回复", out: "亲，这边建议您先重启一下路由器看看呢~", rubric: "语气 0-4；准确性 0-4；格式 0-2", done: false },
+];
+document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
+  <div class="card">
+    <div class="card-head"><div><h3 style="font-size:14px" class="mono">${m.t}</h3></div>${badge(m.done ? "passed" : "pending")}</div>
+    <div class="detail-stack">
+      <div class="kv"><span>输入</span><pre>${m.inp}</pre></div>
+      <div class="kv"><span>期望</span><pre>${m.exp}</pre></div>
+      <div class="kv"><span>输出</span><pre>${m.out}</pre></div>
+      <div class="kv"><span>评分标准</span><div class="dim" style="font-size:12.5px">${m.rubric}</div></div>
+    </div>
+    ${m.done
+      ? `<div class="dim" style="margin-top:12px;font-size:13px">★ ${m.score}.0 <span class="faint">· ${m.by} · 09-22 19:04</span></div>`
+      : `<div class="score-form"><input class="in" type="number" min="0" max="10" step="0.5" placeholder="0-10">
+         <input class="in" placeholder="评审人"><input class="in wide" placeholder="备注（可选）">
+         <button class="btn sm primary">提交评分</button></div>`}
+  </div>`).join("");
+</script>
+</body>
+</html>

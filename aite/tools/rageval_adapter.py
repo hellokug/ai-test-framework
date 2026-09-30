@@ -25,6 +25,7 @@ suite 形态::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 from typing import Any
@@ -52,6 +53,27 @@ def _resolve_api_key(cfg: dict) -> str | None:
     import os
 
     return os.environ.get(env) if env else None
+
+
+def _patch_ragas_instructor_model_args(judge_cfg: dict) -> None:
+    """ragas instructor 适配器 create_llm 硬编码 model_args=InstructorModelArgs()
+    （缺省 max_tokens=1024）——llm_factory 的 kwargs 与 evalscope 配置的
+    max_tokens/temperature 均不会生效，判分 JSON 输出超限即 IncompleteOutputException
+    截断（2026-09-24/27 实测，中文长文档必现）。子类化注入配置值（缺省 8192 =
+    DeepSeek 系 API 输出封顶）；ragas 上游修复后自动闲置。"""
+    import ragas.llms.adapters.instructor as instructor_adapter
+
+    max_tokens = int(judge_cfg.get("max_tokens", 8192))
+    temperature = float(judge_cfg.get("temperature", 0.01))
+    real_args = instructor_adapter.InstructorModelArgs
+
+    class _PatchedModelArgs(real_args):
+        def __init__(self, **kwargs):
+            kwargs.setdefault("max_tokens", max_tokens)
+            kwargs.setdefault("temperature", temperature)
+            super().__init__(**kwargs)
+
+    instructor_adapter.InstructorModelArgs = _PatchedModelArgs
 
 
 def _patch_ragas_langchain_compat() -> None:
@@ -176,6 +198,13 @@ class RagevalAdapter(ToolAdapter):
                 "answer_correctness 指标本身也依赖它）")
 
         api_key = _resolve_api_key(judge)
+        if api_key is None:
+            if judge.get("api_key_env"):
+                raise ValueError(
+                    f"judge.api_key_env 指向的环境变量 {judge['api_key_env']} 未设置")
+            api_base = judge.get("base_url") or ""
+            if "localhost" in api_base or "127.0.0.1" in api_base:
+                api_key = "EMPTY"  # 本地端点（Ollama/vLLM）惯例：任意非空占位
         eval_cfg: dict[str, Any] = {
             "testset_file": str(req.work_dir / "ragas_testset.json"),
             "critic_llm": {
@@ -226,11 +255,14 @@ class RagevalAdapter(ToolAdapter):
                                 encoding="utf-8")
 
         cfg = self.build_config(req)
+        judge_cfg = req.rag_eval.get("judge") or {}
+        _patch_ragas_langchain_compat()  # 先垫 import 面（ragas 包初始化会撞 community 0.4 缺口）
+        with contextlib.suppress(ModuleNotFoundError):
+            _patch_ragas_instructor_model_args(judge_cfg)  # ragas 未安装：紧随的 evalscope 导入报错给指引
         eval_metrics = cfg["eval_config"]["eval"]["metrics"]
         req.progress_cb and req.progress_cb(
             {"phase": "ragas-scoring", "done": 0, "total": len(records),
              "note": f"{len(eval_metrics)} 指标 × {len(records)} 条"})
-        _patch_ragas_langchain_compat()
         try:
             from evalscope import run_task  # 进程内依赖；装在统一 evalscope 环境
         except ImportError as exc:

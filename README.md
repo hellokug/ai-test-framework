@@ -1,8 +1,23 @@
-# aite — AI 测试评测框架
+# aite — AI 测试框架
 
-统一评测 **LLM / Agent / RAG** 与通用维度（**性能 · 可靠性 · 安全**）的一体化框架。
+**定位：测试框架，不造任何评估指标。** 评测能力一律来自集成开源引擎
+（evalscope / lm-evaluation-harness / SWE-bench harness / locust / pytest…），
+平台只做三件事：
+
+1. **入口统一收口**——所有引擎一个入口：suite YAML `engine:` 字段路由，
+   一套 CLI / REST / Web 贯穿全部引擎
+2. **输出统一格式化**——各引擎原始产出统一归一为平台结果模型（`run_metric_summary`），
+   报告与跨 run 趋势同轴可比
+3. **数据集与任务治理**——数据集管理、四域任务管理、执行机纳管、Web 平台
+
+评测对象覆盖 **LLM / Agent / RAG** 与通用维度（**功能 · 精度 · 性能 · 可靠性 · 安全**），
 支持公开基准（MMLU / GSM8K / C-Eval / HotpotQA 内置采样版，HF Hub 全量版）与私有数据集，
 与 evalscope / lm-evaluation-harness 三层兼容（不 fork）。
+
+> **存量说明**：v1 早期（平台化决策前）自研的精度引擎与内置指标（`aite/metrics/`，
+> 含 RAGAS 五件套手工重实现、BLEU/ROUGE 手写、自研 judge）为历史存量，已冻结不再
+> 扩展，逐步迁移为委托开源引擎（见 `docs/roadmap.md`「存量自研指标迁移」）；
+> 未配 `engine:` 的旧 suite 仍走存量引擎保持兼容。
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -41,6 +56,8 @@ aite serve                      # Web 平台 http://127.0.0.1:8300
 | `examples/accuracy/safety.yaml` | 安全：越狱 ASR、提示注入抗性、PII 泄露、毒性 |
 
 ## 评测维度（内置 65 指标 + 3 类 Judge）
+
+> 本节为**存量**自研指标（见顶部「存量说明」），仅保兼容不再扩展；新增评测能力一律走引擎集成。
 
 内置数据集带推荐指标（含默认阈值），可直接 `metrics: auto` 自动填充：
 
@@ -99,6 +116,35 @@ aite dataset show functional:my-scene / aite dataset rm <ref>
 accuracy 型，perf 场景生成（REST）自动登记为 perf 型。契约：功能性=行为规约
 （请求+断言）、精度=题库（含标准答案）、性能=流量特征（分布语义无关，生成产物）。
 
+**模型预制与环境管理（`data/common.yaml`，模板 `examples/common.example.yaml`）**：
+
+模型端点/密钥引用/请求参数录入一次，suite 里 `target: {profile: <名>}` 一行引用；
+工具环境缺省（`tools.extra_args.python_exe` 等）自动并入每个带 `tools:` 段的套件。
+合并语义：预制为底、内联逐键覆盖（`params`/`rate_limit`/`extra_args` 深合并），
+解析后配置快照自包含入库。不建该文件 = 无预制，既有套件零影响。
+
+```yaml
+# data/common.yaml
+models:
+  ollama-local: {base_url: 'http://localhost:11434/v1', model: qwen2.5:7b,
+                 params: {temperature: 0.2}, rate_limit: {rpm: 120, concurrency: 8}}
+tools:
+  extra_args: {python_exe: ./.venv-evalscope/Scripts/python.exe}
+```
+
+```yaml
+# suite：三行评测语义 + 一行预制引用（对照 evalscope CLI --model/--api-url/--datasets）
+engine: evalscope
+target: {profile: ollama-local, params: {temperature: 0}}   # 内联逐键覆盖预制
+tools: {datasets: [aime26]}
+```
+
+`aite common show` 查看已录入的 profile 与环境缺省；judges 的模型引用
+（`judges[].model.profile` / `judges[].models[].profile`）同样生效。
+用户要求的数据集抽样（`sample: {n, seed}`）、并发（`concurrency:` /
+`rate_limit.concurrency`）、请求参数（`target.params`）均保持套件级可覆盖：
+不填走预制与缺省直接跑，要定制改套件即可。
+
 ## SWE-bench 离线打分（resolve rate）
 
 被测对象是「agent harness × 模型」组合：批量 agent（DeepSeek Harness /
@@ -122,6 +168,8 @@ resolve=1、其余缺预测=0。
 ## 外部评测工具（平台化：精度跑分委托专业工具）
 
 suite 带 `engine` 字段即路由到工具适配层（无 engine 走自研引擎，行为不变）。
+**全部参数参考（tools 段/judge 预制/阈值口径/透传键）见
+[docs/config-reference.md](docs/config-reference.md) 工具引擎一节**。
 首个接入 **evalscope**（一个适配器同时获得 Native / OpenCompass / VLMEvalKit /
 RAGEval 四个后端，`tools.extra_args.eval_backend` 切换）：
 

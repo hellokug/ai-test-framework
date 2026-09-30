@@ -1,0 +1,29 @@
+module: accuracy
+run_name: bench-smoke
+description: >
+  常见基准批量冒烟：一个套件多个数据集（evalscope 单进程顺序跑，aite 报告按
+  数据集逐行出分 + overall 汇总行）。选题原则：覆盖「数值抽取（gsm8k）/ 英文
+  MCQ（arc、hellaswag）/ 阅读理解（race）/ 科学常识（sciq）」各判分路径，
+  全部单/双子集数据集——limit_per_subset 按子集数翻倍（ceval 52 科、cmmlu 67
+  科这类多子集基准冒烟成本高，留给真实评测，别进本套件）。
+  首跑会逐个下载数据集（evalscope 缓存，之后离线）；aime26 判官慢，单独见
+  aime26.yaml，不混进来拖尾。
+
+engine: evalscope
+
+target:
+  profile: ollama-local
+
+tools:
+  datasets: [gsm8k, arc, hellaswag, race, sciq]
+  limit_per_subset: 5                    # 每子集抽 5 题：5+10+5+10+5=35 请求，3B 约几十分钟
+  extra_args:
+    timeout_s: 7200
+    generation_config:                   # 原生透传 TaskConfig.generation_config
+      timeout: 900                       # MCQ 短答案用不着 AIME 那种 1800s
+      max_tokens: 2048                   # 选择题/短解答足够；数学长推理请用 aime26.yaml 的 16384
+      temperature: 0
+
+report: [rich, json, html]
+output_dir: ./reports
+storage: {url: sqlite+aiosqlite:///./aite.db}

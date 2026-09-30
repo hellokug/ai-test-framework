@@ -112,6 +112,10 @@ def run(
     concurrency: int | None = typer.Option(None, help="override concurrency"),
     max_cost_usd: float | None = typer.Option(None, help="cost circuit breaker (USD)"),
     report_formats: str | None = typer.Option(None, help="override report formats csv"),
+    resume: str | None = typer.Option(
+        None, "--resume", help="工具域断点续推档位：auto=没跑完就地续推/跑完全新起跑"
+                              "（缺省，yaml 未写 resume 时同样 auto）；true=强制复用"
+                              "最近目录（如改判官只重判）；false=永远全新"),
     agent: str | None = typer.Option(None, "--agent", help="派发到指定执行机（名称）"),
     quiet: bool = typer.Option(False, "--quiet", help="no live progress, log only"),
     log_level: str = typer.Option("INFO"),
@@ -141,7 +145,14 @@ def run(
     bar_state: dict = {}
 
     def _tool_progress(ev: dict) -> None:
-        """工具引擎运行期进度：Rich 单行动态条（逐事件打印会刷屏——一行一案）。"""
+        """工具引擎运行期进度：Rich 单行动态条（逐事件打印会刷屏——一行一案）；
+        evalscope 原始日志行镜像为进度条上方的暗色行（等待时后台在干嘛可见）。"""
+        if ev.get("type") == "log":
+            if not quiet:
+                from rich.text import Text
+
+                console.print(Text(f"  │ {ev.get('line', '')}", style="dim"))
+            return
         if quiet or bar is None:
             return
         phase = str(ev.get("phase") or "progress")
@@ -164,6 +175,7 @@ def run(
                     raw, repo, limit=limit, dataset_ids=dataset_ids,
                     concurrency=concurrency, max_cost_usd=max_cost_usd,
                     report_formats=report_formats, event_cb=_tool_progress,
+                    resume=resume,
                     progress=None if quiet else RichProgressReporter())
             finally:
                 if bar is not None:
@@ -181,7 +193,7 @@ def _print_report_summary(report) -> None:
 
     table = Table(title=f"{report.run_name} [评估 {report.status} · 执行 {execution_status(report)}]",
                   show_lines=False)
-    for col in ("metric", "value", "threshold", "result", "reports"):
+    for col in ("metric", "value", "threshold", "result"):
         table.add_column(col)
     for s in report.summaries:
         if s.dataset is not None or s.group is not None:
@@ -191,7 +203,6 @@ def _print_report_summary(report) -> None:
             "—" if s.value is None else f"{s.value:.4f}",
             "—" if s.threshold is None else f"{s.threshold:g}",
             {True: "[green]PASS[/green]", False: "[red]FAIL[/red]", None: "-"}[s.passed],
-            "",
         )
     console.print(table)
     if any(s.passed is None for s in report.summaries
@@ -241,6 +252,25 @@ tool_app = typer.Typer(help="external tool adapters (eval engines)")
 app.add_typer(tool_app, name="tool")
 
 
+def _benchmarks_via_common_python(adapter) -> list[dict]:
+    """list_tasks 的主环境 ImportError 回退：用 common.yaml 的 python_exe 子进程列举。"""
+    from aite.core.profiles import load_common
+
+    python_exe = (((load_common().get("tools") or {}).get("extra_args")) or {}
+                  ).get("python_exe")
+    via = getattr(adapter, "list_tasks_via", None)
+    if not via or not python_exe:
+        err_console.print(
+            "[red]该引擎无法在主环境导入，且 data/common.yaml 未配置 "
+            "tools.extra_args.python_exe（独立环境解释器）[/red]")
+        raise SystemExit(1)
+    try:
+        return via(str(python_exe))
+    except Exception as exc:  # noqa: BLE001 - CLI 边界统一报错出口
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+
+
 @tool_app.command("benchmarks")
 def tool_benchmarks(
     engine: str = typer.Argument("evalscope", help="tool engine name"),
@@ -248,11 +278,13 @@ def tool_benchmarks(
     """List benchmarks of an external tool: name / metric / tags / few-shot."""
     from aite.tools import get_tool
 
+    adapter = get_tool(engine)
     try:
-        tasks = get_tool(engine).list_tasks()
-    except ImportError as exc:
-        err_console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1) from exc
+        tasks = adapter.list_tasks()
+    except ImportError:
+        # 主环境未装该工具（如 evalscope 仅在 .venv-evalscope/conda env）：
+        # 回退 data/common.yaml 的 python_exe 子进程列举，两者皆无才报错
+        tasks = _benchmarks_via_common_python(adapter)
     table = Table(title=f"{engine} benchmarks ({len(tasks)})")
     for col in ("name", "pretty_name", "metrics", "tags", "few_shot"):
         table.add_column(col)
@@ -602,6 +634,41 @@ def list_components() -> None:
                         ("judges", registry.judges),
                         ("renderers", registry.renderers)):
         console.print(f"[bold]{label}[/bold] ({len(comp)}): " + ", ".join(sorted(comp)))
+
+
+# ------------------------------------------------------- 全局 common 配置（模型预制/环境缺省）
+# data/common.yaml：models 录入一次、suite 里 target: {profile: <名>} 一行引用；
+# tools 段为工具适配器环境缺省（python_exe/timeout_s…），suite 内联同名键覆盖。
+common_app = typer.Typer(help="全局 common 配置（data/common.yaml：模型预制 + 工具环境缺省）")
+app.add_typer(common_app, name="common")
+
+
+@common_app.command("show")
+def common_show() -> None:
+    """查看已录入的模型 profile 与工具环境缺省（suite 引用前先看这里）。"""
+    from aite.core.profiles import common_path, load_common
+
+    path = common_path()
+    common = load_common()
+    models = common.get("models") or {}
+    tools_defaults = common.get("tools") or {}
+    if not models and not tools_defaults:
+        console.print(f"[yellow]无 common 配置[/yellow]（{path} 不存在或为空；"
+                      "录入模板见 examples/common.example.yaml）")
+        return
+    if models:
+        table = Table(title=f"模型预制 models（{path}）")
+        for col in ("profile", "base_url", "model", "api_key_env"):
+            table.add_column(col)
+        for name, entry in sorted(models.items()):
+            entry = entry if isinstance(entry, dict) else {}
+            table.add_row(name, str(entry.get("base_url") or ""),
+                          str(entry.get("model") or ""),
+                          str(entry.get("api_key_env") or ""))
+        console.print(table)
+    if tools_defaults:
+        console.print(f"[bold]工具环境缺省 tools[/bold]: "
+                      f"{json.dumps(tools_defaults, ensure_ascii=False)}")
 
 
 def main() -> None:  # console_scripts entrypoint

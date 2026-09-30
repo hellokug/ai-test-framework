@@ -73,15 +73,31 @@ class TestBuildConfig:
 
 
 class TestModesAndRun:
+    @pytest.fixture
+    def no_evalscope(self, monkeypatch):
+        """显式模拟 evalscope 不可导入（MetaPathFinder 拦截）——契约测试与宿主
+        环境是否安装 evalscope 解耦（conda/.venv 宿主可能真装了）。"""
+        import sys
+
+        class _Blocker:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "evalscope" or fullname.startswith("evalscope."):
+                    raise ImportError("blocked by test")
+                return None
+
+        monkeypatch.setattr(sys, "meta_path", [_Blocker(), *sys.meta_path])
+        for name in [m for m in list(sys.modules)
+                     if m == "evalscope" or m.startswith("evalscope.")]:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
     @pytest.mark.asyncio
     async def test_b_mode_writes_testset_then_requires_evalscope(
-            self, tmp_path, monkeypatch):
+            self, tmp_path, no_evalscope):
         """方案 B：records 自带 response → 转 testset 落盘；evalscope 缺失显式报错。"""
         ds = write_cases(tmp_path, b_cases())
         req = make_req(tmp_path, [ds], rag_eval={
             "judge": {"model": "deepseek-flash"},
             "embeddings": {"model_name_or_path": "BAAI/bge-large-zh-v1.5"}})
-        monkeypatch.delitem(__import__("sys").modules, "evalscope", raising=False)
         with pytest.raises(RuntimeError, match="evalscope\\[rag\\]"):
             await RagevalAdapter().run(req)
         records = json.loads((tmp_path / "ragas_testset.json").read_text(encoding="utf-8"))
@@ -166,3 +182,51 @@ def test_parse_tool_suite_rageval_section():
     assert req.datasets == ["./data/datasets/debug/rgb_openbook.jsonl"]
     assert req.rag_eval["judge"]["model"] == "deepseek-flash"
     assert req.metric_thresholds == {"faithfulness": 0.6}
+
+
+def test_instructor_model_args_patch_injects_max_tokens(monkeypatch):
+    """ragas instructor 适配器硬编码 model_args=InstructorModelArgs()（缺省
+    max_tokens=1024）——llm_factory kwargs 与 evalscope 配置均不生效 → 子类化
+    注入配置（实测 IncompleteOutputException 根因）。"""
+    import sys
+    import types
+
+    from pydantic import BaseModel
+
+    class InstructorModelArgs(BaseModel):
+        temperature: float = 0.01
+        max_tokens: int = 1024
+
+    mod = types.ModuleType("ragas.llms.adapters.instructor")
+    mod.InstructorModelArgs = InstructorModelArgs
+    for name in ("ragas", "ragas.llms", "ragas.llms.adapters", mod.__name__):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, mod.__name__, mod)
+
+    from aite.tools.rageval_adapter import _patch_ragas_instructor_model_args
+
+    _patch_ragas_instructor_model_args({"max_tokens": 4096, "temperature": 0.05})
+    args = mod.InstructorModelArgs()
+    assert args.max_tokens == 4096 and args.temperature == 0.05
+    # 显式传值不被覆盖
+    assert mod.InstructorModelArgs(max_tokens=8192).max_tokens == 8192
+
+
+def test_local_judge_gets_placeholder_key(monkeypatch, tmp_path):
+    """Ollama/vLLM 等本地端点无需 key——OpenAI 客户端仍要求非空 → 注入占位；
+    api_key_env 指向未设置的环境变量则显式报错（不静默）。"""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    req = make_req(tmp_path, ["x.jsonl"], rag_eval={
+        "judge": {"base_url": "http://localhost:11434/v1", "model": "qwen2.5:3b"},
+        "embeddings": {"model_name_or_path": "BAAI/bge"},
+        "metrics": ["faithfulness"]})
+    cfg = RagevalAdapter().build_config(req)
+    assert cfg["eval_config"]["eval"]["critic_llm"]["api_key"] == "EMPTY"
+
+    req2 = make_req(tmp_path, ["x.jsonl"], rag_eval={
+        "judge": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-flash",
+                  "api_key_env": "DEEPSEEK_API_KEY"},
+        "embeddings": {"model_name_or_path": "BAAI/bge"},
+        "metrics": ["faithfulness"]})
+    with pytest.raises(ValueError, match="DEEPSEEK_API_KEY 未设置"):
+        RagevalAdapter().build_config(req2)

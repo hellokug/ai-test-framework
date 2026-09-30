@@ -255,3 +255,7 @@ perf_dashboard_*.html
 demo_preview.html
 real_preview.html
 _schema_check_locust_raw/
+
+# 运行时产物与本地环境（原则：不提交运行时产物）
+outputs/
+.venv-evalscope/
