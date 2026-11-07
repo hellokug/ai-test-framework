@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aite · 公共资源 · V1 静态稿</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=7">
+<link rel="stylesheet" href="assets/v1.css?v=17">
 </head>
 <body data-module="common" data-module-label="公共资源">
 <script type="text/plain" id="page-list">[
-  {"id":"cases","label":"用例库","count":"326"},
   {"id":"datasets","label":"数据集管理","count":"24"},
   {"id":"models","label":"模型管理","count":"9"},
   {"id":"agents","label":"执行机","count":"3"},
@@ -21,29 +20,13 @@
 
 <main class="page-host main">
   <!-- ============ 用例库 ============ -->
-  <section data-page="cases">
-    <header class="topbar">
-      <div><h1>用例库</h1><div class="crumb">文字用例（§15）· 版本化 · 执行结果回填（T2 待接入，空态提示）</div></div>
-      <div class="actions"><button class="btn primary" data-open-drawer="caseDrawer">＋ 新建用例</button></div>
-    </header>
-    <div class="chips" style="margin-bottom:12px">
-      <select class="in" style="width:150px;height:32px;padding:4px 10px"><option>domain 全部</option><option>客服</option><option>RAG 问答</option><option>工具调用</option></select>
-      <select class="in" style="width:130px;height:32px;padding:4px 10px"><option>status 全部</option><option>draft</option><option>active</option><option>deprecated</option></select>
-      <select class="in" style="width:130px;height:32px;padding:4px 10px"><option>优先级 全部</option><option>P0</option><option>P1</option><option>P2</option></select>
-      <span style="flex:1"></span>
-      <input class="in" style="width:220px;height:32px;padding:4px 12px" placeholder="搜索标题 / case_no…">
-    </div>
-    <section class="card"><table id="casesTbl"></table>
-      <div class="foot-note"><span>GET /test-cases · domain/status/priority</span></div></section>
-  </section>
-
   <!-- ============ 数据集管理 ============ -->
   <section data-page="datasets" hidden>
     <header class="topbar">
       <div><h1>数据集管理</h1><div class="crumb">统一 catalog（type/name 唯一 · version=seed 可复现凭证）· GET /datasets</div></div>
       <div class="actions">
         <button class="btn" data-open-drawer="dsImport">导入功能数据集</button>
-        <button class="btn primary" onclick="location.href='perf.html#datasets'">生成性能数据集</button>
+        <button class="btn primary" onclick="location.href='perf2.html#datasets'">生成性能数据集</button>
       </div>
     </header>
     <div class="chips" style="margin-bottom:12px">
@@ -63,6 +46,40 @@
       <div class="actions"><button class="btn primary" data-open-drawer="modelDrawer">＋ 注册模型</button></div>
     </header>
     <section class="card"><table id="modelsTbl"></table></section>
+
+    <section class="card">
+      <div class="card-head"><div><h3>版本管理</h3><div class="sub">被测系统/模型的全局版本登记（跨域共享）· 精度/功能任务发起时「被测版本」从这里选择 · 同一模型逐版本执行的结果才可做版本间对比 · GET/POST /versions</div></div></div>
+      <table id="versionsTbl" class="sumtable"></table>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>登记版本</h3><div class="sub">(模型, 版本) 唯一 · 重复登记 409</div></div></div>
+      <div class="form-grid">
+        <div class="field"><label>模型<span class="qmark">?<span class="tip">模型管理注册的名称或预制 profile 名；被测版本挂在模型下，按模型过滤选择</span></span></label>
+          <select class="in" id="verModelSel"></select></div>
+        <div class="field"><label>版本号<span class="qmark">?<span class="tip">如 v1.3.0；任务发起时引用此字符串写入 spec.version，版本趋势/对比按它聚合</span></span></label>
+          <input class="in" id="verVersionIn" placeholder="如 v1.3.0"></div>
+        <div class="field wide"><label>说明（可选）</label>
+          <input class="in" id="verDescIn" placeholder="如 迭代一：修复召回率回退"></div>
+      </div>
+      <button class="btn primary" id="verSave">登记</button>
+      <span class="hint" id="verHint" style="margin-left:10px"></span>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h3>密钥库</h3><div class="sub">api_key_env 指向的环境变量未在本机设置时，运行时自动从此处解密注入 · 密文落盘（独立密钥文件 + 加密库），界面仅显示掩码 · 环境变量同名时优先</div></div></div>
+      <table id="secretTbl" class="sumtable"></table>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>录入密钥</h3></div></div>
+      <div class="form-grid">
+        <div class="field"><label>环境变量名<span class="qmark">?<span class="tip">模型注册/预制里 api_key_env 引用的名字，如 DEEPSEEK_API_KEY；同名环境变量优先于密钥库</span></span></label>
+          <input class="in" id="secretName" placeholder="如 DEEPSEEK_API_KEY"></div>
+        <div class="field"><label>密钥值</label>
+          <input class="in" id="secretValue" type="password" placeholder="sk-...（保存后仅显示掩码）"></div>
+      </div>
+      <button class="btn primary" id="secretSave">保存（密文落盘）</button>
+      <span class="hint" id="secretHint" style="margin-left:10px"></span>
+    </section>
   </section>
 
   <!-- ============ 执行机 ============ -->
@@ -91,27 +108,6 @@
     <section class="card"><table id="bgTbl" class="sumtable"></table></section>
   </section>
 </main>
-
-<!-- 用例详情抽屉 -->
-<div class="drawer" id="caseDrawer" hidden>
-  <div class="drawer-head"><h3>TC-0102 · 压测报告结论生成</h3><button class="icon-btn" data-close>✕</button></div>
-  <div class="drawer-body">
-    <div class="chips" style="margin-bottom:14px">
-      <span class="tag">domain: 客服</span><span class="tag">P0</span><span class="tag">status: active</span><span class="tag">v3</span>
-    </div>
-    <div class="detail-stack">
-      <div class="kv"><span>前置条件</span><pre>已存在一次 succeeded 的压测 run</pre></div>
-      <div class="kv"><span>步骤</span><pre>1. 读取最近一次压测 run 的 summaries
-2. 按「结论 → 关键指标 → 风险」三段生成报告
-3. 对照 rubric 自评后提交人工抽检</pre></div>
-      <div class="kv"><span>预期</span><pre>包含 TTFT/QPS/错误率三要素；无编造数字；≤300 字</pre></div>
-      <div class="kv"><span>关联运行</span><pre>run #b21c07af（2026-09-23 · passed）
-run #18c7b2e9（2026-09-22 · passed）
-（T2 回填器接入后自动同步执行结果）</pre></div>
-    </div>
-  </div>
-  <div class="drawer-foot"><button class="btn" data-close>关闭</button><button class="btn">编辑</button><button class="btn danger">删除</button></div>
-</div>
 
 <!-- 数据集导入抽屉 -->
 <div class="drawer" id="dsImport" hidden>
@@ -143,24 +139,8 @@ run #18c7b2e9（2026-09-22 · passed）
 
 <div class="ribbon">V1 静态稿 · 公共资源 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=4"></script>
+<script src="assets/v1.js?v=13"></script>
 <script>
-/* ---------- 用例库 ---------- */
-const CASES = [
-  ["TC-0102", "压测报告结论生成", "客服", "P0", "active", "v3", "09-23"],
-  ["TC-0098", "RAG 拒答识别（噪声上下文）", "RAG 问答", "P0", "active", "v1", "09-22"],
-  ["TC-0091", "多轮订餐：补参二次调用", "工具调用", "P1", "active", "v2", "09-21"],
-  ["TC-0087", "长话单摘要（16k 输入）", "摘要", "P1", "draft", "v1", "09-19"],
-  ["TC-0066", "中译英语体一致性", "翻译", "P2", "deprecated", "v4", "09-11"],
-];
-document.getElementById("casesTbl").innerHTML = `
-  <thead><tr><th>case_no</th><th>标题</th><th>domain</th><th>优先级</th><th>status</th><th>版本</th><th>更新</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${CASES.map(c => `<tr class="clickable" onclick="document.getElementById('caseDrawer').hidden=false">
-    <td class="mono">${c[0]}</td><td style="white-space:normal">${c[1]}</td><td><span class="tag">${c[2]}</span></td>
-    <td class="num dim">${c[3]}</td><td>${badge(c[4] === "active" ? "passed" : c[4] === "draft" ? "pending" : "cancelled").replace(/已通过|待评测\/排队|已取消/, m => c[4] === "active" ? "active" : c[4] === "draft" ? "draft" : "deprecated")}</td>
-    <td class="mono dim">${c[5]}</td><td class="dim">${c[6]}</td>
-    <td style="text-align:right"><button class="btn sm" onclick="event.stopPropagation();document.getElementById('caseDrawer').hidden=false">详情</button></td></tr>`).join("")}</tbody>`;
-
 /* ---------- 数据集目录 ---------- */
 const DS = [
   ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl"],
@@ -228,5 +208,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
+<script src="api32.js?v=1"></script>
 </body>
 </html>

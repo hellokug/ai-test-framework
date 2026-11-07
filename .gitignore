@@ -207,6 +207,7 @@ tempCodeRunnerFile.py
 aite.db
 aite.db-shm
 aite.db-wal
+aite.db.bak-*
 reports/
 .e2e/
 

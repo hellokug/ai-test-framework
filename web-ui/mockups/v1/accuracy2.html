@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aite · 精度评测 · V1 静态稿</title>
+<title>aite · 任务管理 · 精度</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=7">
+<link rel="stylesheet" href="assets/v1.css?v=17">
 </head>
-<body data-module="accuracy" data-module-label="精度评测">
+<body data-module="accuracy" data-module-label="任务管理 · 精度">
 <script type="text/plain" id="page-list">[
-  {"id":"runs","label":"评测运行","count":"128"},
-  {"id":"detail","label":"运行详情"},
+  {"id":"runs","label":"任务列表","count":"128"},
+  {"id":"detail","label":"任务详情"},
+  {"id":"scripts","label":"脚本库","count":"21"},
   {"id":"trends","label":"趋势对比"},
   {"id":"manual","label":"人工评测","count":"6"}
 ]</script>
@@ -22,7 +23,7 @@
   <!-- ============ 评测运行 ============ -->
   <section data-page="runs">
     <header class="topbar">
-      <div><h1>评测运行</h1><div class="crumb">最近 7 天新增 12 次运行</div></div>
+      <div><h1>任务列表</h1><div class="crumb">最近 7 天新增 12 次运行</div></div>
       <div class="actions">
         <button class="btn" data-open-drawer="newRunModal">＋ 创建评测任务</button>
       </div>
@@ -30,20 +31,21 @@
     <section class="stats">
       <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">128</div><span class="delta up">▲ 12 本周</span>
         <svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none"><polyline points="0,27 12,25 24,26 36,21 48,22 60,17 72,18 84,12 100,7"/></svg></div>
-      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>用例通过率</div><div class="value">92.4%</div><span class="delta up">▲ 1.8pp</span>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>样本通过率</div><div class="value">92.4%</div><span class="delta up">▲ 1.8pp</span>
         <svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none"><polyline points="0,20 12,22 24,18 36,19 48,14 60,16 72,11 84,12 100,8" style="stroke:var(--ok)"/></svg></div>
       <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>评测数据集</div><div class="value">19</div><span class="delta up">＋2 本月</span></div>
       <div class="stat"><div class="label"><i style="background:var(--warn)"></i>受测模型</div><div class="value">9</div><span class="delta flat">— 持平</span></div>
     </section>
-    <div class="chips" style="margin-bottom:12px">
-      <span class="chip on" data-single>全部 <small>128</small></span>
-      <span class="chip" data-single>已通过</span>
-      <span class="chip" data-single>运行中 <small>1</small></span>
-      <span class="chip" data-single>失败</span>
-      <span class="chip" data-single>已排队</span>
+    <div class="filter-bar" id="runsFilter">
+      <span class="chip on" data-status="all">全部 <small>128</small></span>
+      <span class="chip" data-status="passed">已通过</span>
+      <span class="chip" data-status="running">运行中 <small>1</small></span>
+      <span class="chip" data-status="failed">失败</span>
+      <span class="chip" data-status="pending">已排队</span>
       <span style="flex:1"></span>
-      <select class="in" style="width:180px;height:32px;padding:4px 10px"><option>全部套件</option><option>evalscope-ceval</option><option>ragas-qa</option><option>gsm8k-math</option></select>
-      <input class="in" style="width:200px;height:32px;padding:4px 12px" placeholder="按模型过滤…">
+      <span class="lbl">执行人</span><select class="in" data-owner style="width:136px"><option value="all">全部执行人</option><option value="zhimeng">zhimeng（我）</option><option value="陈曦">陈曦</option><option value="刘畅">刘畅</option><option value="王维">王维</option></select>
+      <select class="in" style="width:170px"><option>全部脚本</option><option>版本精度基线 · 全量</option><option>C-Eval 基准</option><option>GSM8K</option></select>
+      <input class="in" data-kw style="width:190px" placeholder="按名称 / ID / 模型…">
     </div>
     <section class="card">
       <table id="runsTbl"></table>
@@ -93,12 +95,12 @@
     </section>
 
     <div style="display:flex;flex-direction:column;gap:14px">
-      <!-- 全部失败用例 -->
+      <!-- 全部失败样本 -->
       <section class="card">
-        <div class="card-head"><div><h3>失败用例 <span class="dim">(全部 9 条)</span></h3><div class="sub">断言 → 输入 → 输出，完整可追溯</div></div>
+        <div class="card-head"><div><h3>失败样本 <span class="dim">(全部 9 条)</span></h3><div class="sub">断言 → 输入 → 输出，完整可追溯</div></div>
           <button class="btn sm">下载 failures.jsonl</button></div>
         <div class="detail-stack" id="failBox"></div>
-        <div class="foot-note"><span>还有 6 条失败用例</span><a href="javascript:void 0" class="dim" style="font-size:12px">展开全部 ↓</a></div>
+        <div class="foot-note"><span>还有 6 条失败样本</span><a href="javascript:void 0" class="dim" style="font-size:12px">展开全部 ↓</a></div>
       </section>
       <!-- 抽样复核 -->
       <section class="card">
@@ -123,26 +125,49 @@
         </div>
       </div>
       <div class="logbox">
-        <div><span class="ln">14:32:01</span>INFO&nbsp; run start · engine=evalscope · dataset=swe_bench_lite_agentic · total=120 · parallel=8</div>
-        <div><span class="ln">14:32:05</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 0/120</div>
-        <div><span class="ln">14:33:12</span>完成&nbsp; swe-0001 · resolved · 1.8s</div>
-        <div><span class="ln">14:33:40</span>完成&nbsp; swe-0002 · unresolved · 2.1s</div>
-        <div><span class="ln">14:35:02</span><span class="lerr">错误</span>&nbsp; swe-0009 · ReadTimeout（自动重试 1 次仍失败，计入 error）</div>
-        <div><span class="ln">14:41:27</span><span class="lwarn">警告</span>&nbsp; swe-0017 · patch 应用失败：hunk 失配（failures.jsonl 已记录）</div>
-        <div><span class="ln">14:52:10</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 60/120</div>
-        <div><span class="ln">14:55:38</span>完成&nbsp; swe-0068 · resolved · 3.4s</div>
-        <div><span class="ln">14:55:39</span>进度&nbsp; 68/120 · 56.7% · 预计剩余 ~17 分钟 <span class="lcursor"></span></div>
+        <div><span class="ln">2026-09-30 14:32:01</span>INFO&nbsp; run start · engine=evalscope · dataset=swe_bench_lite_agentic · total=120 · parallel=8</div>
+        <div><span class="ln">2026-09-30 14:32:05</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 0/120</div>
+        <div><span class="ln">2026-09-30 14:33:12</span>完成&nbsp; swe-0001 · resolved · 1.8s</div>
+        <div><span class="ln">2026-09-30 14:33:40</span>完成&nbsp; swe-0002 · unresolved · 2.1s</div>
+        <div><span class="ln">2026-09-30 14:35:02</span><span class="lerr">错误</span>&nbsp; swe-0009 · ReadTimeout（自动重试 1 次仍失败，计入 error）</div>
+        <div><span class="ln">2026-09-30 14:41:27</span><span class="lwarn">警告</span>&nbsp; swe-0017 · patch 应用失败：hunk 失配（failures.jsonl 已记录）</div>
+        <div><span class="ln">2026-09-30 14:52:10</span>阶段&nbsp; Evaluating[swe_bench_lite_agentic] 60/120</div>
+        <div><span class="ln">2026-09-30 14:55:38</span>完成&nbsp; swe-0068 · resolved · 3.4s</div>
+        <div><span class="ln">2026-09-30 14:55:39</span>进度&nbsp; 68/120 · 56.7% · 预计剩余 ~17 分钟 <span class="lcursor"></span></div>
       </div>
     </section>
 
-    <!-- 用例结果（完整列表） -->
+    <!-- 样本结果（完整列表） -->
     <section class="card">
-      <div class="card-head"><div><h3>用例结果 <span class="dim">(已完成 68)</span></h3><div class="sub">点击行首展开输出与评分依据 · 随进度增量出现</div></div>
+      <div class="card-head"><div><h3>样本结果 <span class="dim">(已完成 68)</span></h3><div class="sub">点击行首展开输出与评分依据 · 随进度增量出现</div></div>
         <div class="chips" style="margin:0">
           <select class="in" style="width:150px;height:32px;padding:4px 10px"><option>全部</option><option>仅失败</option><option>仅通过</option></select>
-          <input class="in" style="width:200px;height:32px;padding:4px 12px" placeholder="按 case id / 文本过滤…"></div></div>
+          <input class="in" style="width:200px;height:32px;padding:4px 12px" placeholder="按样本 id / 文本过滤…"></div></div>
       <table id="casesTbl"></table>
     </section>
+  </section>
+
+  <!-- ============ 脚本库（一个脚本 = 一个版本基线用例） ============ -->
+  <section data-page="scripts" hidden>
+    <header class="topbar">
+      <div><h1>脚本库</h1><div class="crumb">一个脚本 = 一个版本基线用例 · 测什么/怎么判在脚本内固化，运行时只换 模型与被测版本 · GET /accuracy/scripts</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="newRunModal">＋ 新建脚本（自定义编排）</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.9">
+        <b style="color:var(--tx)">为什么沉淀脚本：</b>每个版本固定要测哪些基线数据集、怎么抽样、怎么判分——固化为命名脚本后一键复用：
+        新版本发布 = 逐个脚本「发起任务」，同脚本跨版本跑出的分数才能进「趋势对比」与基线比对（口径一致才有可比性）。<br>
+        <b style="color:var(--tx)">脚本两条来源：</b>① 研发预置（<span class="tag mono">examples/accuracy/*.yaml</span> 随框架版本发布，只读可复制）；
+        ② 前台沉淀（创建任务时「保存为脚本」）。脚本编辑即生效；历史任务持创建时的配置快照，不受编辑影响。
+      </div>
+    </div>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="chip on" data-single>全部 <small>21</small></span>
+      <span class="chip" data-single>研发预置 <small>17</small></span>
+      <span class="chip" data-single>自定义沉淀 <small>4</small></span>
+    </div>
+    <section class="card"><table id="scriptsTbl" class="sumtable"></table>
+      <div class="foot-note"><span>共 21 个脚本（上表展示 8 个）· 预置 = 随框架发布的基准套件模板 · 自定义 = 团队沉淀的基线用例</span></div></section>
   </section>
 
   <!-- ============ 版本质量对比（趋势页重构） ============ -->
@@ -202,107 +227,199 @@
 </main>
 
 <!-- 创建评测任务（结构化表单：后台自动回填套件配置，前台无 YAML） -->
-<div class="mask" id="newRunModal" hidden>
-  <div class="modal" style="width:860px;max-height:90vh;overflow:auto">
-    <h3>创建评测任务 <span class="dim" style="font-size:12.5px;font-weight:400">— 逐项选择，后台自动生成配置并启动</span></h3>
+<div class="drawer drawer-lg" id="newRunModal" hidden>
+  <div class="drawer-head"><div><h3>创建评测任务</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">从脚本发起（复用基线，推荐）或自定义新配置 · 后台自动生成配置并固化</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-body" data-src-toggle>
 
+    <div class="chips" style="margin:0 0 14px">
+      <span class="ds-flabel" style="margin-right:4px">脚本来源</span>
+      <span class="chip on" data-src="script">从脚本发起（复用）</span>
+      <span class="chip" data-src="custom">自定义新配置</span>
+      <span class="hint" style="margin:0 0 0 10px">一个脚本 = 一个版本基线用例：数据集/抽样/阈值固化在脚本里，跨版本跑同一脚本结果才可比；脚本在「脚本库」页维护</span>
+    </div>
+
+    <!-- ===== 复用面板：选脚本 + 本次运行参数 ===== -->
+    <div data-pane="script">
+      <div class="form-sec">
+        <div class="sec-head"><span class="sec-num">1</span><b>选择脚本</b><small>研发预置 + 自定义沉淀 · 内容快照只读</small></div>
+        <div class="p-row">
+          <span class="p-label">评测脚本<span class="qmark">?<span class="tip">脚本 = 固化的评测配置（数据集/抽样/seed/Judge/阈值/并发…）；「研发预置」随框架发布（examples/accuracy/*.yaml），「自定义」来自创建任务时的「保存为脚本」。内容维护与新建沉淀请到「脚本库」页</span></span></span>
+          <select class="in" id="accScriptSel" style="max-width:460px"></select></div>
+        <div class="seg-title">脚本内容快照（只读 · 运行时不改动）</div>
+        <div class="detail-stack" id="accScriptSnap" style="margin-top:0"></div>
+      </div>
+      <div class="form-sec">
+        <div class="sec-head"><span class="sec-num">2</span><b>本次运行参数</b><small>只指定 对谁测 / 测哪个版本 · 脚本内容不改动</small></div>
+        <div class="p-row">
+          <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（脚本名-版本-日期），便于列表检索</span></span></span>
+          <input class="in" id="accRunName2" placeholder="留空自动生成，如 baseline-full-v1.3.0-0925"></div>
+        <div class="p-row">
+          <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
+          <select class="in" id="accScriptModelSel" style="max-width:380px">
+            <option>qwen2.5-72b · gpu-box-01 vLLM（内网）</option>
+            <option>DeepSeek-V3 · api.deepseek.com</option>
+            <option>claude-3.5-sonnet · api.anthropic.com</option>
+            <option>gpt-4o-mini · api.openai.com</option>
+            <option>qwen2.5:3b · 本地 Ollama（调试用）</option>
+            <option value="__custom__">自定义（手填端点）</option>
+          </select></div>
+        <div id="accScriptModelCustom" hidden>
+          <div class="p-row">
+            <span class="p-label">模型访问 url</span><input class="in" placeholder="如 http://10.1.2.3:8000/v1" style="max-width:380px"></div>
+          <div class="p-row">
+            <span class="p-label">模型名称</span><input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
+          <div class="p-row" style="margin-bottom:0">
+            <span class="p-label">鉴权 api_key_env</span><input class="in" placeholder="环境变量名，如 OPENAI_API_KEY" style="max-width:300px"></div>
+        </div>
+        <div class="p-row">
+          <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一脚本逐版本执行 = 「版本质量对比」的数据来源（同配置跨版本才可比，劣化检测依赖此口径）</span></span></span>
+          <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+            <input class="in" id="accVerIn2" list="accVerDl" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
+            <datalist id="accVerDl"></datalist>
+            <button class="btn sm" type="button" id="accVerNewBtn2" title="登记到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
+          </div></div>
+        <div class="p-row">
+          <span class="p-label">执行方式<span class="qmark">?<span class="tip">创建 ≠ 执行：立即/定时到点自动 run；仅创建 = 配置固化排队，稍后在任务列表手动运行</span></span></span>
+          <div class="radio-cards" id="accExec2Cards" style="margin:0">
+            <div class="radio-card on" data-exec="now"><b>立即执行</b><small>创建后自动 run</small></div>
+            <div class="radio-card" data-exec="scheduled"><b>定时执行</b><small>到点自动 run，可改/可取消</small></div>
+            <div class="radio-card" data-exec="manual"><b>仅创建</b><small>排队，稍后手动运行</small></div>
+          </div></div>
+        <div class="p-row" id="accSched2Field" hidden style="margin-bottom:0">
+          <span class="p-label">定时时间</span>
+          <input class="in" type="datetime-local" value="2026-09-25T10:00" style="max-width:300px"></div>
+      </div>
+      <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
+        <div class="dim" style="font-size:12.5px;line-height:1.7">
+          ✓ <b style="color:var(--tx)">脚本发起 = spec 整体复用</b>：POST /accuracy/tasks 带 script_id + 本次运行参数（模型/版本/执行方式），
+          后端加载脚本固化 spec 并叠加运行参数——与「版本质量对比」基线口径一致；同脚本想改数据集/阈值，请到脚本库编辑或复制出新脚本。
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 自定义面板：原六段结构化表单 ===== -->
+    <div data-pane="custom" hidden>
     <div class="form-sec">
       <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>任务标识与被测对象</small></div>
       <div class="p-row">
         <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（模型-数据集-日期）；建议包含模型与数据集名，便于列表检索</span></span></span>
-        <input class="in" placeholder="如 evalscope-ceval-qwen72b-20260924"></div>
-      <div class="p-row" style="align-items:start">
-        <span class="p-label" style="margin-top:8px">目标模型<span class="qmark">?<span class="tip">被测模型，来自「公共 · 模型管理」；单选。评测对象只认端点，不区分部署方式</span></span></span>
-        <div class="radio-cards three" style="margin:0">
-          <div class="radio-card on"><b>qwen2.5-72b</b><small>gpu-box-01 vLLM · 内网</small></div>
-          <div class="radio-card"><b>DeepSeek-V3</b><small>api.deepseek.com</small></div>
-          <div class="radio-card"><b>claude-3.5-sonnet</b><small>api.anthropic.com</small></div>
-          <div class="radio-card"><b>gpt-4o-mini</b><small>api.openai.com</small></div>
-          <div class="radio-card"><b>qwen2.5:3b</b><small>本地 Ollama（调试用）</small></div>
-        </div></div>
+        <input class="in" id="accNameIn" placeholder="如 evalscope-ceval-qwen72b-20260924"></div>
       <div class="p-row">
-        <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">开放式 / 生成类答案由裁判模型对照参考答案打分；纯规则指标（精确匹配、contains 等）无需裁判。auto = 按数据集特征自动推荐</span></span></span>
-        <select class="in" style="max-width:300px">
-          <option>auto（按数据集自动推荐）</option>
-          <option>不使用（仅规则指标）</option>
-          <option>qwen2.5-72b</option>
-          <option>DeepSeek-V3</option>
-          <option>claude-3.5-sonnet</option>
+        <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
+        <select class="in" id="accModelSel" style="max-width:380px">
+          <option>qwen2.5-72b · gpu-box-01 vLLM（内网）</option>
+          <option>DeepSeek-V3 · api.deepseek.com</option>
+          <option>claude-3.5-sonnet · api.anthropic.com</option>
+          <option>gpt-4o-mini · api.openai.com</option>
+          <option>qwen2.5:3b · 本地 Ollama（调试用）</option>
+          <option value="__custom__">自定义（手填端点）</option>
+        </select></div>
+      <div id="accModelCustom" hidden>
+        <div class="p-row">
+          <span class="p-label">模型访问 url<span class="qmark">?<span class="tip">OpenAI 兼容端点地址，含版本路径</span></span></span>
+          <input class="in" placeholder="如 http://10.1.2.3:8000/v1" style="max-width:380px"></div>
+        <div class="p-row">
+          <span class="p-label">模型名称<span class="qmark">?<span class="tip">端点侧模型名（请求体 model 字段）</span></span></span>
+          <input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
+        <div class="p-row" style="margin-bottom:0">
+          <span class="p-label">鉴权 api_key_env<span class="qmark">?<span class="tip">密钥不落库：仅存环境变量名，运行时解析</span></span></span>
+          <input class="in" placeholder="环境变量名，如 OPENAI_API_KEY" style="max-width:300px"></div>
+      </div>
+      <div class="p-row">
+        <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">契约无 auto 档：默认不配置 = 纯规则判分（mmlu / ceval / gsm8k / humaneval 等经典基准全规则，配了也不调用）；LLM 判官类基准（如 aime26）必须显式选判官，否则起跑即拒，按报错补配即可</span></span></span>
+        <select class="in" id="accJudgeSel" style="max-width:300px">
+          <option value="">不配置（默认 · 仅规则判分）</option>
         </select></div>
       <div class="p-row">
-        <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">必填，写入 run 记录。同一模型的不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
-        <input class="in" style="max-width:300px" placeholder="如 v1.2.0 / 20260924-snapshot"></div>
+        <span class="p-label">被测版本<span class="qmark">?<span class="tip">自由输入版本号；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
+        <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+          <input class="in" id="accVerIn" list="accVerDl2" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
+          <datalist id="accVerDl2"></datalist>
+          <button class="btn sm" type="button" id="accVerNewBtn" title="登记到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
+        </div></div>
     </div>
 
     <div class="form-sec">
       <div class="sec-head"><span class="sec-num">2</span><b>数据集配置</b><small>选择数据 · 控制规模 · 保证可复现</small></div>
-      <div class="p-row" style="align-items:start">
-        <span class="p-label" style="margin-top:8px">评测数据集<span class="qmark">?<span class="tip">可多选。搜索框内支持按归属 / 存储位置 / 能力维度 / 类型筛选，直接输入 = 模糊搜索</span></span></span>
-        <div class="ds-picker" id="dsPicker">
-          <div class="ds-search" id="dsSearchBox">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-            <span class="ds-tokens" id="dsTokens"></span>
-            <input id="dsSearch" placeholder="模糊搜索：数据集名称 / 领域 / 标签…">
-            <span class="ds-filter-btn">筛选 <b>▾</b></span>
-            <div class="ds-menu" id="dsMenu" hidden></div>
-          </div>
-          <div class="ds-list" id="dsList"></div>
-          <div class="ds-foot"><span id="dsFoot"></span><span>开源 = 内置/公开基准 · 个人 = 自建导入 · 客户 = 客户业务数据</span></div>
-        </div></div>
-      <div class="p-row">
-        <span class="p-label">每子集抽样条数<span class="qmark">?<span class="tip">每个数据集最多跑多少条；超过则按 seed 随机抽样，免去跑全集</span></span></span>
+      <div class="ds-picker" id="dsPicker" style="margin-bottom:12px">
+        <div class="ds-search" id="dsSearchBox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <span class="ds-tokens" id="dsTokens"></span>
+          <input id="dsSearch" placeholder="模糊搜索：数据集名称 / 领域 / 标签…">
+          <span class="ds-filter-btn">筛选 <b>▾</b></span>
+          <div class="ds-menu" id="dsMenu" hidden></div>
+        </div>
+        <div class="ds-list" id="dsList"></div>
+        <div class="ds-foot"><span id="dsFoot"></span><span>开源 = 内置/公开基准 · 个人 = 自建导入 · 客户 = 客户业务数据</span></div>
+      </div>
+      <div class="p-row" id="accLimitRow">
+        <span class="p-label">每子集抽样条数<span class="qmark">?<span class="tip">每个子集各 N 条：如 ceval 52 科 × 5 = 260 条；多选数据集时每个数据集各自生效。留空 = 全量</span></span></span>
         <div class="chips" style="margin:0">
           <span class="chip" data-single>全量</span>
           <span class="chip on" data-single>100</span>
           <span class="chip" data-single>300</span>
           <span class="chip" data-single>500</span>
-          <input class="in" style="width:90px;height:30px;padding:4px 10px" placeholder="自定义">
+          <input class="in" id="accLimitCustom" style="width:90px;height:30px;padding:4px 10px" placeholder="自定义">
         </div></div>
-      <div class="p-row">
-        <span class="p-label">总抽样条数<span class="qmark">?<span class="tip">所有数据集合计的抽样上限；多数据集同跑时控制整体规模。留空 = 不限制</span></span></span>
-        <input class="in" style="max-width:300px" placeholder="如 5000；留空 = 不限制"></div>
+      <div class="p-row" style="opacity:.55">
+        <span class="p-label">总抽样条数<span class="tag" style="font-size:10.5px">预留</span><span class="qmark">?<span class="tip">后端暂未支持：evalscope 原生无总条数采样口径（aite 侧换算方案已暂缓，见 roadmap Backlog）；控件先占位，实装后开放</span></span></span>
+        <input class="in" style="max-width:300px" placeholder="如 5000；后端实装后开放" disabled></div>
       <div class="p-row">
         <span class="p-label">随机种子 seed<span class="qmark">?<span class="tip">同 seed 抽到的样本一致：结果可复现、跨 run 可比。改 seed 会换一批抽样样本</span></span></span>
-        <input class="in" style="max-width:300px" value="42"></div>
+        <input class="in" id="accSeedIn" style="max-width:300px" placeholder="如 42；留空 = 不传（引擎默认）"></div>
     </div>
 
     <div class="form-sec">
-      <div class="sec-head"><span class="sec-num">3</span><b>压力配置</b><small>并发与时长控制</small></div>
+      <div class="sec-head"><span class="sec-num">3</span><b>压力配置</b><small>并发 · 时长 · 续推</small></div>
       <div class="p-row">
-        <span class="p-label">并发数<span class="qmark">?<span class="tip">同时发起的请求 worker 数：越大越快、对端点压力越大；限流端点建议 2~4。留空 = 引擎默认</span></span></span>
-        <input class="in" type="number" min="1" placeholder="如 8；留空 = 用引擎默认" style="max-width:300px"></div>
+        <span class="p-label">并发数 eval_batch_size<span class="qmark">?<span class="tip">评测并发（生成 + 判官共用）；用户标准 10。留空 = 引擎缺省</span></span></span>
+        <input class="in" id="accBatchIn" type="number" min="1" placeholder="如 10；留空 = 引擎缺省" style="max-width:300px"></div>
       <div class="p-row">
-        <span class="p-label">最大运行时间<span class="qmark">?<span class="tip">单次 run 的超时上限，到时强制终止并保留已完成部分的结果。留空 = 不限制</span></span></span>
-        <input class="in" placeholder="如 3600（秒）；留空 = 不限制" style="max-width:300px"></div>
+        <span class="p-label">最大运行时间 timeout_s<span class="qmark">?<span class="tip">整场子进程墙钟上限（aite 看门狗到时强制终止，保留已完成部分结果），单位秒；缺省 14400 = 4 小时</span></span></span>
+        <input class="in" id="accTimeoutIn" type="number" min="1" placeholder="如 14400（秒）· 缺省 4 小时" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">断点续推 resume<span class="qmark">?<span class="tip">auto（默认）= 状态感知续推：没跑完就地续、跑完全新起跑；预测缓存按 sample_id 复用，改判官只重判不重生成</span></span></span>
+        <select class="in" id="accResumeSel" style="max-width:300px">
+          <option value="auto">auto（默认 · 状态感知续推）</option>
+          <option value="true">true（强制续推）</option>
+          <option value="false">false（全新起跑）</option>
+        </select></div>
     </div>
 
     <div class="form-sec">
-      <div class="sec-head"><span class="sec-num">4</span><b>扩展参数</b><small>常见模型参数 · 留空 = 不传，使用端点默认值</small></div>
+      <div class="sec-head"><span class="sec-num">4</span><b>扩展参数</b><small>写入 generation_config · 留空 = 不传，使用端点默认值</small></div>
       <div class="p-row">
         <span class="p-label">max_tokens<span class="qmark">?<span class="tip">单条样本输出 token 上限；过小会截断作答、影响判分</span></span></span>
-        <input class="in" type="number" min="1" placeholder="如 1024" style="max-width:300px"></div>
+        <input class="in" id="accMaxTokIn" type="number" min="1" placeholder="如 1024" style="max-width:300px"></div>
       <div class="p-row">
         <span class="p-label">temperature<span class="qmark">?<span class="tip">采样温度 0–2.0：0 = 贪心解码，越高越随机。评测一般 0 或端点默认</span></span></span>
-        <input class="in" type="number" step="0.1" min="0" max="2" placeholder="如 0.0 = 贪心解码" style="max-width:300px"></div>
+        <input class="in" id="accTempIn" type="number" step="0.1" min="0" max="2" placeholder="如 0.0 = 贪心解码" style="max-width:300px"></div>
       <div class="p-row">
         <span class="p-label">top_p<span class="qmark">?<span class="tip">核采样：只从累计概率前 p 的候选词中采样（0–1）</span></span></span>
-        <input class="in" type="number" step="0.05" min="0" max="1" placeholder="如 0.8" style="max-width:300px"></div>
+        <input class="in" id="accTopPIn" type="number" step="0.05" min="0" max="1" placeholder="如 0.8" style="max-width:300px"></div>
       <div class="p-row">
         <span class="p-label">top_k<span class="qmark">?<span class="tip">每步只保留概率最高的 k 个候选；部分端点不支持</span></span></span>
-        <input class="in" type="number" min="1" placeholder="如 40" style="max-width:300px"></div>
+        <input class="in" id="accTopKIn" type="number" min="1" placeholder="如 40" style="max-width:300px"></div>
       <div class="p-row">
-        <span class="p-label">thinking 推理开关<span class="qmark">?<span class="tip">后台按引擎翻译：Qwen → enable_thinking · OpenAI o 系 → reasoning_effort · Claude → thinking budget</span></span></span>
-        <select class="in" style="max-width:300px"><option>端点默认</option><option>关闭（非思考模式）</option><option>开启（思考模式）</option></select></div>
+        <span class="p-label">seed（生成侧）<span class="qmark">?<span class="tip">generation_config.seed：控制生成采样随机性；与②的随机种子（TaskConfig.seed，管抽样/乱序）相互独立。留空 = 不传</span></span></span>
+        <input class="in" id="accGenSeedIn" placeholder="如 42；留空 = 不传" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">thinking 推理开关<span class="qmark">?<span class="tip">前端控件映射到 evalscope 原生 reasoning_effort 键（键名不同由前端翻译）；留空 = 不传，用端点默认</span></span></span>
+        <select class="in" id="accThinkSel" style="max-width:300px"><option value="">端点默认（不传）</option><option value="off">关闭（off）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
       <div class="adv-json" id="advJson">
         <button type="button" class="adv-head" id="advJsonToggle">
           <span class="adv-badge">高级</span>
           <b>JSON 扩展参数</b>
-          <small>长尾参数兜底 · 与上方字段同名时以 JSON 为准</small>
+          <small>generation_config 长尾 + dataset_args 按基准覆盖</small>
           <span class="adv-caret">▾</span>
         </button>
         <div class="adv-body" id="advJsonBody" hidden>
-          <textarea class="in" rows="3" placeholder='{"presence_penalty": 0.1, "stop": ["\n\n"], "enable_thinking": false}'></textarea>
-          <span class="hint">必须为合法 JSON 对象，否则 422 拦截；按字段合并进请求体</span>
+          <textarea class="in" id="accAdvJson" rows="4" placeholder='{
+  "generation_config": {"timeout": 900, "do_sample": false, "stop_seqs": ["\n\n"]},
+  "dataset_args": {"ceval": {"subset_list": ["computer_network"]}, "humaneval": {"review_timeout": 60}}
+}'></textarea>
+          <span class="hint">generation_config：生成侧长尾（timeout 单请求秒 / do_sample / frequency_penalty / presence_penalty / stop_seqs…）；dataset_args：按基准覆盖元数据（subset_list 钉科目 · review_timeout 判分秒 · few_shot_num）；与表单字段同名时以 JSON 为准；保护键 evaluation_version / few_shot_mode / allowed_few_shot_nums 会被拒</span>
+          <span class="hint" style="color:var(--warn)">⚠ humaneval 等本地判分基准：review_timeout 默认 4s 在 Windows 需重新 import evalscope（实测约 9s）必超时出<b>假 0 分</b> —— 请配 ≥ 60（见 examples/accuracy/humaneval.yaml）</span>
         </div>
       </div>
     </div>
@@ -339,45 +456,49 @@
       <div class="dim" style="font-size:12.5px;line-height:1.7">
         ✓ <b style="color:var(--tx)">创建任务 = 配置固化</b>（POST /accuracy/tasks，生成 task_id，相当于后台写好 YAML；
         此时不执行）——实际执行绑定 task_id：立即/定时由调度触发，同一份配置再次执行会生成<b style="color:var(--tx)">新 task_id</b>
-        （retry 链，原配置不变）。模型参数按字段合并进请求体（留空不传），阈值写入 metric_thresholds，
-        多数据集自动填充推荐指标（metrics: auto），抽样与种子写入配置保证可复现。
+        （retry 链，原配置不变）。表单字段 → tools / tools.extra_args 键位映射见 web-ui/TOOL-SUITE-PARAMS.md；
+        模型参数写入 generation_config（留空不传），阈值写入 metric_thresholds，抽样与种子写入配置保证可复现。
       </div>
     </div>
-    <div class="row"><button class="btn" data-close>取消</button><button class="btn primary">创建任务</button></div>
+    </div>
+    </div>
+    <div class="drawer-foot"><span class="hint" id="accSaveHint" hidden style="margin-right:auto">✓ 已保存为脚本「版本精度基线 · 全量」（运行参数不沉淀），到「脚本库」查看</span>
+      <button class="btn" id="accSaveScript">保存为脚本</button><button class="btn" data-close>取消</button><button class="btn primary">创建任务</button></div>
   </div>
-</div>
 
-<div class="ribbon">V1 静态稿 · 精度评测 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+<div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=4"></script>
+<script src="assets/v1.js?v=13"></script>
 <script>
-/* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选） ---------- */
+/* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选）
+   数据源 = GET /api/v1/tools/benchmarks（name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id）
+   能力维度筛选即 tags；own / loc / type 为 catalog 标注列（后端待补，见 HANDOVER §6.3） ---------- */
 const DS_ITEMS = [
-  { n: "ceval", m: "1606 题 · 52 学科", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版", on: true },
-  { n: "gsm8k", m: "1319 题 · 数学推理", own: "开源", loc: "离线", dims: ["数学推理"], type: "LLM", src: "内置抽样版" },
-  { n: "mmlu", m: "14042 题 · 英文学科", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
-  { n: "agieval", m: "综合推理评测", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
-  { n: "race", m: "阅读理解", own: "开源", loc: "离线", dims: ["知识问答"], type: "LLM", src: "内置抽样版" },
-  { n: "hellaswag", m: "常识推理 · hf 在线引用未落地", own: "开源", loc: "在线", dims: ["知识问答"], type: "LLM", src: "hf:Rowan/hellaswag" },
-  { n: "financebench", m: "金融问答 150 题", own: "开源", loc: "离线", dims: ["RAG"], type: "RAG", src: "内置抽样版" },
-  { n: "multihoprag", m: "多跳检索问答", own: "开源", loc: "离线", dims: ["RAG"], type: "RAG", src: "内置抽样版" },
-  { n: "rgb", m: "噪声/拒答/反事实", own: "开源", loc: "离线", dims: ["RAG", "鲁棒性"], type: "RAG", src: "内置抽样版" },
-  { n: "swe-bench-lite", m: "SWE-bench Lite 实例集", own: "开源", loc: "离线", dims: ["代码", "Agent"], type: "Agent", src: "内置抽样版" },
-  { n: "gaia", m: "GAIA 通用助手任务", own: "开源", loc: "在线", dims: ["Agent"], type: "Agent", src: "hf:gaia-benchmark/GAIA" },
-  { n: "xlam_fc", m: "函数调用 60k 抽样", own: "开源", loc: "离线", dims: ["Agent"], type: "Agent", src: "内置抽样版" },
-  { n: "finance_private", m: "12 题 · gold+干扰文档", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
-  { n: "gov_private", m: "12 题 · 政务语料", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
-  { n: "legal_private", m: "12 题 · 法律语料", own: "个人", loc: "离线", dims: ["RAG"], type: "RAG", src: "gen-domain seed42" },
-  { n: "long-ctx-haystack", m: "16k 大海捞针 · 自建", own: "个人", loc: "离线", dims: ["长上下文"], type: "LLM", src: "自建 cases" },
-  { n: "my-qa-100", m: "自建问答 100 条 · hf 仓库引用", own: "个人", loc: "在线", dims: ["知识问答"], type: "LLM", src: "hf:zhimeng/qa-100" },
-  { n: "acme-support-qa", m: "客服问答 5000 条（ACME 项目）", own: "客户", loc: "离线", dims: ["知识问答"], type: "LLM", src: "客户提供 jsonl" },
-  { n: "bos-rag-corpus", m: "客户知识库检索语料 · 对象存储引用", own: "客户", loc: "在线", dims: ["RAG"], type: "RAG", src: "s3://bos/prod" },
+  { n: "ceval", m: "1606 题 · 52 学科", own: "开源", loc: "离线", tags: ["知识问答"], type: "LLM", dataset_id: "内置抽样版", on: true },
+  { n: "gsm8k", m: "1319 题 · 数学推理", own: "开源", loc: "离线", tags: ["数学推理"], type: "LLM", dataset_id: "内置抽样版" },
+  { n: "mmlu", m: "14042 题 · 英文学科", own: "开源", loc: "离线", tags: ["知识问答"], type: "LLM", dataset_id: "内置抽样版" },
+  { n: "agieval", m: "综合推理评测", own: "开源", loc: "离线", tags: ["知识问答"], type: "LLM", dataset_id: "内置抽样版" },
+  { n: "race", m: "阅读理解", own: "开源", loc: "离线", tags: ["知识问答"], type: "LLM", dataset_id: "内置抽样版" },
+  { n: "hellaswag", m: "常识推理 · hf 在线引用未落地", own: "开源", loc: "在线", tags: ["知识问答"], type: "LLM", dataset_id: "hf:Rowan/hellaswag" },
+  { n: "financebench", m: "金融问答 150 题", own: "开源", loc: "离线", tags: ["RAG"], type: "RAG", dataset_id: "内置抽样版" },
+  { n: "multihoprag", m: "多跳检索问答", own: "开源", loc: "离线", tags: ["RAG"], type: "RAG", dataset_id: "内置抽样版" },
+  { n: "rgb", m: "噪声/拒答/反事实", own: "开源", loc: "离线", tags: ["RAG", "鲁棒性"], type: "RAG", dataset_id: "内置抽样版" },
+  { n: "swe-bench-lite", m: "SWE-bench Lite 实例集", own: "开源", loc: "离线", tags: ["代码", "Agent"], type: "Agent", dataset_id: "内置抽样版" },
+  { n: "gaia", m: "GAIA 通用助手任务", own: "开源", loc: "在线", tags: ["Agent"], type: "Agent", dataset_id: "hf:gaia-benchmark/GAIA" },
+  { n: "xlam_fc", m: "函数调用 60k 抽样", own: "开源", loc: "离线", tags: ["Agent"], type: "Agent", dataset_id: "内置抽样版" },
+  { n: "finance_private", m: "12 题 · gold+干扰文档", own: "个人", loc: "离线", tags: ["RAG"], type: "RAG", dataset_id: "gen-domain seed42" },
+  { n: "gov_private", m: "12 题 · 政务语料", own: "个人", loc: "离线", tags: ["RAG"], type: "RAG", dataset_id: "gen-domain seed42" },
+  { n: "legal_private", m: "12 题 · 法律语料", own: "个人", loc: "离线", tags: ["RAG"], type: "RAG", dataset_id: "gen-domain seed42" },
+  { n: "long-ctx-haystack", m: "16k 大海捞针 · 自建", own: "个人", loc: "离线", tags: ["长上下文"], type: "LLM", dataset_id: "自建 cases" },
+  { n: "my-qa-100", m: "自建问答 100 条 · hf 仓库引用", own: "个人", loc: "在线", tags: ["知识问答"], type: "LLM", dataset_id: "hf:zhimeng/qa-100" },
+  { n: "acme-support-qa", m: "客服问答 5000 条（ACME 项目）", own: "客户", loc: "离线", tags: ["知识问答"], type: "LLM", dataset_id: "客户提供 jsonl" },
+  { n: "bos-rag-corpus", m: "客户知识库检索语料 · 对象存储引用", own: "客户", loc: "在线", tags: ["RAG"], type: "RAG", dataset_id: "s3://bos/prod" },
 ];
 /* ---------- 搜索框内筛选：token + 两级下拉（类型 → 值）；直接输入 = 模糊搜索 ---------- */
 const DS_FILTER_TYPES = [
   { key: "own", label: "归属", hint: "数据来源", values: ["开源", "个人", "客户"], multi: false },
   { key: "loc", label: "存储位置", hint: "在线 = 远端引用按需拉取", values: ["在线", "离线"], multi: false },
-  { key: "dim", label: "能力维度", hint: "可叠加多个", values: ["知识问答", "数学推理", "代码", "RAG", "Agent", "鲁棒性", "长上下文"], multi: true },
+  { key: "dim", label: "能力维度", hint: "来自 benchmarks.tags · 可叠加多个", values: ["知识问答", "数学推理", "代码", "RAG", "Agent", "鲁棒性", "长上下文"], multi: true },
   { key: "type", label: "数据集类型", hint: "", values: ["LLM", "Agent", "RAG"], multi: false },
 ];
 let dsTokens = [];                       // [{type, value}]
@@ -391,15 +512,15 @@ function renderDs(filter = "") {
   const hits = DS_ITEMS.map((d, i) => ({ ...d, i }))
     .filter(d => (!sel.own || d.own === sel.own)
               && (!sel.loc || d.loc === sel.loc)
-              && (!dims.length || d.dims.some(x => dims.includes(x)))
+              && (!dims.length || d.tags.some(x => dims.includes(x)))
               && (!sel.type || d.type === sel.type)
-              && (!f || (d.n + d.m + d.dims.join() + d.type + d.src).toLowerCase().includes(f)));
+              && (!f || (d.n + d.m + d.tags.join() + d.type + d.dataset_id).toLowerCase().includes(f)));
   const cls = { 开源: "t-open", 个人: "t-personal", 客户: "t-cust" };
   document.getElementById("dsList").innerHTML = hits.length
     ? hits.map(d => `<div class="ds-row ${d.on ? "on" : ""}" data-i="${d.i}">
         <span class="cb">✓</span><span class="ds-name">${d.n}</span>
         <span class="ds-meta">${d.m}</span>
-        <span class="ds-tags"><span class="tag ${cls[d.own]}">${d.own}</span><span class="tag ${d.loc === "在线" ? "t-online" : ""}">${d.loc}</span><span class="tag">${d.type}</span>${d.dims.map(t => `<span class="tag">${t}</span>`).join("")}</span></div>`).join("")
+        <span class="ds-tags"><span class="tag ${cls[d.own]}">${d.own}</span><span class="tag ${d.loc === "在线" ? "t-online" : ""}">${d.loc}</span><span class="tag">${d.type}</span>${d.tags.map(t => `<span class="tag">${t}</span>`).join("")}</span></div>`).join("")
     : `<div class="ds-empty">当前筛选无匹配 —— 点 × 移除筛选条件，或先在「公共 · 数据集管理」导入</div>`;
   document.querySelectorAll("#dsList .ds-row").forEach(r => r.addEventListener("click", () => {
     DS_ITEMS[r.dataset.i].on = !DS_ITEMS[r.dataset.i].on;
@@ -505,26 +626,114 @@ document.querySelectorAll("#execCards .radio-card").forEach(c => c.addEventListe
   schedField.hidden = c.dataset.exec !== "scheduled";
 }));
 
+/* ---------- 脚本库：一个脚本 = 一个版本基线用例 ----------
+   预置 = examples/accuracy/*.yaml 随框架发布（GET /{D}/scripts 合并展示，只读可复制）
+   自定义 = 创建任务「保存为脚本」沉淀（spec = 固化的任务配置，运行参数不沉淀） ---------- */
+const ACC_SCRIPTS = [
+  { id: "baseline-full", name: "版本精度基线 · 全量", desc: "版本发布必跑：知识 / 数学 / 代码四集基线回归", src: "custom",
+    sum: "4 数据集 · 每子集 100 · seed 42 · 阈值 auto",
+    snap: [
+      ["数据集", "ceval（知识问答 · 52 科）· mmlu（英文学科）· gsm8k（数学推理）· humaneval（代码生成）"],
+      ["抽样", "每子集 100 条 · 随机种子 seed=42（跨 run 抽样一致，结果可比）"],
+      ["Judge", "不配置（四集均为规则判分，零判官成本）"],
+      ["阈值判定", "auto（内置基准推荐阈值，选择题类按随机基线）"],
+      ["压力", "并发 eval_batch_size=10 · timeout_s 14400 · resume auto"],
+      ["扩展参数", "generation_config：temperature 0 · max_tokens 4096"],
+      ["最近执行", "v1.2.0 · 09-22 · mean_acc 0.846 达标（见趋势对比）"],
+    ], last: "v1.2.0 · 84.6 达标", upd: "09-22" },
+  { id: "baseline-smoke", name: "版本精度基线 · 冒烟", desc: "发布前快速过闸：每子集 10 条，几分钟出结果", src: "custom",
+    sum: "4 数据集 · 每子集 10 · seed 42 · 阈值 auto",
+    snap: [["数据集", "ceval · mmlu · gsm8k · humaneval（同全量基线）"],
+      ["抽样", "每子集 10 条 · seed=42"], ["阈值判定", "auto"],
+      ["最近执行", "v1.2.0 · 09-22 · mean_acc 0.861 达标"]], last: "v1.2.0 · 86.1 达标", upd: "09-22" },
+  { id: "rag-reg", name: "RAG 回归 · 金融私域", desc: "自建 RAG 集回归，token_f1 阈值门槛", src: "custom",
+    sum: "2 数据集 · 全量 76 题 · Judge deepseek · token_f1 ≥ 0.70",
+    snap: [["数据集", "finance_private（12 题）· multihoprag（64 题）"],
+      ["Judge", "deepseek（LLM 判官）"], ["阈值判定", "token_f1 ≥ 0.70"],
+      ["最近执行", "v1.2.0 · 09-18 · token_f1 0.78 达标"]], last: "v1.2.0 · 0.78 达标", upd: "09-18" },
+  { id: "preset-ceval", name: "C-Eval 中文知识基准", desc: "52 科 MCQ · 5-shot · 规则判分（examples/accuracy/ceval.yaml）", src: "preset",
+    sum: "ceval · 阈值 mean_acc ≥ 0.25（随机基线）", last: "冒烟 · 1 科", upd: "框架发布" },
+  { id: "preset-gsm8k", name: "GSM8K 数学推理", desc: "应用题 CoT · 严格匹配判分", src: "preset",
+    sum: "gsm8k · 阈值 exact_match ≥ 0.60", last: "—", upd: "框架发布" },
+  { id: "preset-humaneval", name: "HumanEval 代码生成", desc: "pass@1 · Windows 判分需 review_timeout ≥ 60", src: "preset",
+    sum: "humaneval · dataset_args: review_timeout 60", last: "—", upd: "框架发布" },
+  { id: "preset-swe", name: "SWE-bench Lite · Agent", desc: "真实 issue 修 bug · evalscope agentic 沙箱判分", src: "preset",
+    sum: "swe_bench_lite_agentic · 阈值 resolve_rate ≥ 0.30", last: "v1.2.0 · 0.824 达标", upd: "框架发布" },
+  { id: "preset-aime26", name: "AIME26 竞赛数学", desc: "LLM 判官类基准 · 必须显式配 Judge", src: "preset",
+    sum: "aime26 · Judge deepseek · 阈值 accuracy ≥ 0.20", last: "—", upd: "框架发布" },
+];
+function renderAccScriptsTbl() {
+  document.getElementById("scriptsTbl").innerHTML = `
+  <thead><tr><th>脚本</th><th>内容摘要</th><th>来源</th><th>最近执行</th><th>更新</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${ACC_SCRIPTS.map(s => `<tr>
+    <td class="rname"><b>${s.name}</b><div class="rid">${s.id} · ${s.desc}</div></td>
+    <td class="dim" style="white-space:normal">${s.sum}</td>
+    <td>${s.src === "preset" ? '<span class="tag">预置</span>' : '<span class="tag" style="color:var(--ac)">自定义</span>'}</td>
+    <td class="dim" style="white-space:normal">${s.last}</td><td class="dim">${s.upd}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm primary" data-open-drawer="newRunModal" data-run-script="${s.id}">发起任务</button>
+      ${s.src === "custom" ? '<button class="btn sm">编辑</button><button class="btn sm danger">删除</button>' : '<button class="btn sm">复制</button>'}</td></tr>`).join("")}</tbody>`;
+}
+renderAccScriptsTbl();
+
+/* 复用面板：脚本下拉（分组）+ 内容快照联动 */
+const accScriptSel = document.getElementById("accScriptSel");
+accScriptSel.innerHTML = `<optgroup label="自定义沉淀">${ACC_SCRIPTS.filter(s => s.src === "custom").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>` +
+  `<optgroup label="研发预置">${ACC_SCRIPTS.filter(s => s.src === "preset").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>`;
+function renderAccSnap() {
+  const s = ACC_SCRIPTS.find(x => x.id === accScriptSel.value) || ACC_SCRIPTS[0];
+  document.getElementById("accScriptSnap").innerHTML = s.snap.map(kv =>
+    `<div class="kv"><span>${kv[0]}</span><div style="font-size:12.5px;white-space:normal">${kv[1]}</div></div>`).join("");
+}
+accScriptSel.addEventListener("change", renderAccSnap);
+renderAccSnap();
+
+/* 复用面板：执行方式（独立于自定义面板的一套控件） */
+const accSched2 = document.getElementById("accSched2Field");
+document.querySelectorAll("#accExec2Cards .radio-card").forEach(c => c.addEventListener("click", () => {
+  accSched2.hidden = c.dataset.exec !== "scheduled";
+}));
+
+/* 脚本库行「发起任务」：开抽屉 + 切到复用面板 + 选中该脚本 */
+document.querySelectorAll("[data-run-script]").forEach(btn => btn.addEventListener("click", () => {
+  accScriptSel.value = btn.dataset.runScript;
+  renderAccSnap();
+  document.querySelector('#newRunModal .chip[data-src="script"]').click();
+}));
+
+/* 保存为脚本（自定义面板沉淀；真实交互 = 弹名称输入，缺省自动生成） */
+document.getElementById("accSaveScript").addEventListener("click", () => {
+  document.getElementById("accSaveHint").hidden = false;
+});
+
 /* ---------- 评测运行列表 ---------- */
 const RUNS = [
-  ["nightly-ceval-regression", "#a1b2c3d4", "qwen2.5-72b", "pending", null, "—", "→ 09-25 10:00 定时"],
-  ["evalscope-ceval-qwen72b", "#e04d5512", "qwen2.5-72b", "passed", 84.6, "1606", "09-22 21:47"],
-  ["swe-evalscope-deepseek", "#b21c07af", "DeepSeek-V3", "running", 78.5, "120 / 9 err", "09-23 13:05"],
-  ["rag-ragas-qa", "#3c91d7f0", "Qwen2.5-72B", "passed", 91.0, "64 / 3 err", "09-22 18:12"],
-  ["gsm8k-math-qwen", "#7f3a92c1", "qwen2.5-3b", "passed", 92.0, "200 / 6 err", "09-21 10:02"],
-  ["mmlu-claude-sonnet", "#9aa31f70", "claude-3.5-sonnet", "failed", 62.5, "400 / 150 err", "09-20 16:20"],
-  ["quickstart-openai", "#c7d80e33", "gpt-4o-mini", "passed", 96.2, "42 / 1 err", "09-19 14:32"],
-  ["manual-eval-round2", "#5f19c2ab", "人工评审", "pending", null, "30", "09-18 18:03"],
+  ["nightly-ceval-regression", "#a1b2c3d4 · 脚本「版本精度基线 · 全量」", "qwen2.5-72b", "pending", null, "—", "→ 09-25 10:00 定时", "陈曦"],
+  ["evalscope-ceval-qwen72b", "#e04d5512 · 脚本「版本精度基线 · 全量」", "qwen2.5-72b", "passed", 84.6, "1606", "09-22 21:47", "zhimeng"],
+  ["swe-evalscope-deepseek", "#b21c07af · 脚本「SWE-bench Lite · Agent」", "DeepSeek-V3", "running", 78.5, "120 / 9 err", "09-23 13:05", "zhimeng"],
+  ["rag-ragas-qa", "#3c91d7f0", "Qwen2.5-72B", "passed", 91.0, "64 / 3 err", "09-22 18:12", "刘畅"],
+  ["gsm8k-math-qwen", "#7f3a92c1", "qwen2.5-3b", "passed", 92.0, "200 / 6 err", "09-21 10:02", "陈曦"],
+  ["mmlu-claude-sonnet", "#9aa31f70", "claude-3.5-sonnet", "failed", 62.5, "400 / 150 err", "09-20 16:20", "王维"],
+  ["quickstart-openai", "#c7d80e33", "gpt-4o-mini", "passed", 96.2, "42 / 1 err", "09-19 14:32", "zhimeng"],
+  ["manual-eval-round2", "#5f19c2ab", "人工评审", "pending", null, "30", "09-18 18:03", "刘畅"],
 ];
-document.getElementById("runsTbl").innerHTML = `
-  <thead><tr><th>运行</th><th>目标模型</th><th>状态</th><th>通过率</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${RUNS.map(r => `<tr class="clickable" onclick="showPage('detail')">
+function renderRuns(status, owner, kw) {
+  const hits = RUNS.filter(r => (status === "all" || r[3] === status)
+    && (owner === "all" || r[7] === owner)
+    && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
+  document.getElementById("runsTbl").innerHTML = `
+  <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>状态</th><th>通过率</th><th>样本</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${hits.length ? hits.map(r => `<tr class="clickable" onclick="showPage('detail')">
     <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
-    <td class="dim">${r[2]}</td><td>${badge(r[3])}</td><td>${passCell(r[4])}</td>
+    <td class="dim">${r[2]}</td><td class="dim">${r[7]}</td><td>${badge(r[3])}</td><td>${passCell(r[4])}</td>
     <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
-    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")}</tbody>`;
+    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")
+    : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+}
+bindTaskFilter("runsFilter", renderRuns);
+bindModelCustom("accModelSel", "accModelCustom");
+bindModelCustom("accScriptModelSel", "accScriptModelCustom");
 
-/* ---------- 运行详情：阶段性指标 + 失败用例 + 抽样复核 + 完整列表 ---------- */
+/* ---------- 运行详情：阶段性指标 + 失败样本 + 抽样复核 + 完整列表 ---------- */
 const SUMS = [
   ["resolve_rate", "overall", "0.824", "≥ 0.30", 68, true],
   ["resolve_rate", "难度 hard", "0.750", "—", 24, null],
@@ -540,7 +749,7 @@ document.getElementById("sumTbl").innerHTML = `
 const FAILS = [
   { c: "swe-0009", a: "patch 非空（必须产出补丁）", inp: "issue: fancyimpose 依赖安装后 import 报错…", out: "ReadTimeout ×2 —— 模型未在 30s 内产出任何内容" },
   { c: "swe-0017", a: "FAIL_TO_PASS 全部通过", inp: "issue: sympy latex 打印矩阵括号错误…", out: "patch 应用失败：hunk 失配（上下文行漂移）" },
-  { c: "swe-0042", a: "PASS_TO_PASS 不回归", inp: "issue: astropy 坐标变换精度…", out: "新增测试通过，但 3 个既有用例回归" },
+  { c: "swe-0042", a: "PASS_TO_PASS 不回归", inp: "issue: astropy 坐标变换精度…", out: "新增测试通过，但 3 个既有测试回归" },
 ];
 document.getElementById("failBox").innerHTML = FAILS.map(f => `
   <div class="fail-block">
@@ -559,7 +768,7 @@ const SAMPLE = [
   ["swe-0066", "issue: 边界条件除零…", "patch: 加守卫 +1 测试", "resolved", "待复核"],
 ];
 document.getElementById("sampleTbl").innerHTML = `
-  <thead><tr><th>Case</th><th>输入摘要</th><th>输出摘要</th><th>自动判定</th><th>人工复核</th></tr></thead>
+  <thead><tr><th>样本</th><th>输入摘要</th><th>输出摘要</th><th>自动判定</th><th>人工复核</th></tr></thead>
   <tbody>${SAMPLE.map(s => `<tr>
     <td class="mono" style="font-size:12px">${s[0]}</td>
     <td class="dim" style="white-space:normal;font-size:12px">${s[1]}</td>
@@ -575,7 +784,7 @@ const CASES = [
   ["swe-0068", "requests-991", 1.0, true, "全部测试通过"],
 ];
 document.getElementById("casesTbl").innerHTML = `
-  <thead><tr><th style="width:30px"></th><th>Case</th><th>指标</th><th>值</th><th>结果</th></tr></thead>
+  <thead><tr><th style="width:30px"></th><th>样本</th><th>指标</th><th>值</th><th>结果</th></tr></thead>
   <tbody>${CASES.map((c, i) => `
     <tr class="clickable" onclick="toggleCase(${i})">
       <td><span class="expander" id="exp-${i}">▸</span></td>
@@ -740,5 +949,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
+<script src="api-acc2.js?v=1"></script>
 </body>
 </html>

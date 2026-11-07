@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 任务管理 · 功能</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=17">
+</head>
+<body data-module="functional" data-module-label="任务管理 · 功能">
+<script type="text/plain" id="page-list">[
+  {"id":"runs","label":"任务列表","count":"23"},
+  {"id":"detail","label":"任务详情"},
+  {"id":"scenarios","label":"评估场景","count":"13"},
+  {"id":"scripts","label":"脚本库","count":"26"},
+  {"id":"vresults","label":"版本结果库","count":"6"},
+  {"id":"board","label":"质量大屏"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 运行总览 ============ -->
+  <section data-page="runs">
+    <header class="topbar">
+      <div><h1>任务列表</h1><div class="crumb">engine=pytest · 场景级 pass_rate · 阈值 auto=1.0 零容忍</div></div>
+      <div class="actions"><button class="btn" data-open-drawer="newRunModal">＋ 新建运行</button></div>
+    </header>
+    <section class="stats">
+      <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">23</div><span class="delta up">▲ 5 本周</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>场景通过率</div><div class="value">91.7%</div><span class="delta up">▲ 2.4pp</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>内置场景</div><div class="value">13</div><span class="delta flat">+2 本月</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>失败场景</div><div class="value">3</div><span class="delta down">▼ 1</span></div>
+    </section>
+    <div class="filter-bar" id="runsFilter">
+      <span class="chip on" data-status="all">全部 <small>23</small></span>
+      <span class="chip" data-status="succeeded">已完成</span>
+      <span class="chip" data-status="failed">执行异常 <small>2</small></span>
+      <span class="chip" data-status="running">进行中</span>
+      <span style="flex:1"></span>
+      <span class="lbl">执行人</span><select class="in" data-owner style="width:136px"><option value="all">全部执行人</option><option value="zhimeng">zhimeng（我）</option><option value="陈曦">陈曦</option><option value="刘畅">刘畅</option><option value="王维">王维</option></select>
+      <select class="in" style="width:150px"><option>全部目标模型</option><option>qwen2.5:3b</option><option>DeepSeek-V3</option></select>
+      <input class="in" data-kw style="width:190px" placeholder="按名称 / ID / 模型…">
+    </div>
+    <section class="card"><table id="runsTbl"></table>
+      <div class="foot-note"><span>共 23 条记录（domain=functional）</span></div></section>
+  </section>
+
+  <!-- ============ 运行详情 ============ -->
+  <section data-page="detail" hidden>
+    <header class="topbar">
+      <div>
+        <h1>ft-full-qwen3b <span class="badge failed" style="vertical-align:3px"><i></i>失败</span></h1>
+        <div class="crumb">run #7a21c9e4 · engine=pytest · qwen2.5:3b (Ollama) · 被测版本 v1.2.0 · 13 场景 84 例 · 阈值 auto（pass_rate=1.0）· 09-23 20:12 · 已归档版本结果库</div>
+      </div>
+      <div class="actions"><button class="btn">HTML 报告 ↗</button><button class="btn" onclick="showPage('runs')">← 返回</button></div>
+    </header>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>场景汇总</h3><div class="sub">每场景一行 pass_rate · junit-xml 留档 work_dir</div></div></div>
+      <table id="sumTbl" class="sumtable"></table>
+    </section>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>失败详情</h3><div class="sub">断言 → 输入 → 输出（repr_failure，单例 &lt;1KB）</div></div></div>
+      <div class="detail-stack" id="failList"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>用例结果 <span class="dim">(84)</span></h3></div>
+        <input class="in" style="width:240px;height:32px;padding:4px 12px" placeholder="按 case id 过滤（tools.cases 精确定向）…"></div>
+      <table id="casesTbl"></table>
+    </section>
+  </section>
+
+  <!-- ============ 质量大屏（测试负责人视图） ============ -->
+  <section data-page="board" hidden>
+    <header class="topbar">
+      <div><h1>质量大屏</h1><div class="crumb">版本 × 模型 × 评估维度 · 回答「新版本是优化还是劣化、差多少」· 数据源 = 版本结果库</div></div>
+      <div class="actions"><button class="btn">导出汇报图</button><button class="btn" onclick="showPage('vresults')">版本结果库 →</button></div>
+    </header>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="ds-flabel">模型</span>
+      <span class="chip on" data-single>DeepSeek-V3</span>
+      <span class="chip" data-single>qwen2.5-72b</span>
+      <span class="ds-flabel gap">对比</span>
+      <select class="in" style="width:170px;height:32px;padding:4px 10px"><option>v1.3.0-rc（当前）</option><option>v1.2.0</option><option>v1.1.0</option></select>
+      <span class="dim" style="font-size:12px">vs</span>
+      <select class="in" style="width:150px;height:32px;padding:4px 10px"><option>v1.2.0（基线）</option><option>v1.1.0</option><option>v1.0.0</option></select>
+      <span class="hint" style="margin:0 0 0 10px">同脚本同场景跨版本对比 · Δpp 自动计算</span>
+    </div>
+    <section class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+      <div class="stat"><div class="label"><i></i>总体通过率</div><div class="value">95.3%</div><span class="delta up">▲ +1.6pp vs v1.2.0</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>劣化维度</div><div class="value">2</div><span class="delta down">▼ 响应体 · Agent 任务</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>优化维度</div><div class="value">3</div><span class="delta up">▲ FC +20.0pp 最大</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>评估维度 / 子用例</div><div class="value">9 / 64</div><span class="delta flat">另 4 个自定义维度未纳入</span></div>
+    </section>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>评估维度 × 版本矩阵</h3><div class="sub">每格 = 该维度 pass_rate · 末两列 = 较基线 Δ 与判定 · 绿 = 优化 / 红 = 劣化</div></div>
+        <span class="tag mono">DeepSeek-V3 · 3 个版本</span></div>
+      <table class="sumtable" id="boardTbl"></table>
+      <div class="foot-note"><span>维度 = 评估场景（脚本组成）· 判定：Δ ≥ 0 达标 / Δ &lt; 0 劣化（与精度劣化同口径，建议阻断项）</span></div>
+    </section>
+    <div class="grid2" style="margin-bottom:14px">
+      <section class="card"><div class="card-head"><div><h3>维度趋势（跨版本）</h3><div class="sub">横轴 = 版本 · 关注维度曲线</div></div></div><div class="chart" data-chart="chartFtTrend" style="height:260px"></div></section>
+      <section class="card"><div class="card-head"><div><h3>多版本对比雷达</h3><div class="sub">9 维 pass_rate 叠加 · 看各版本均衡度与短板维度</div></div></div><div class="chart" data-chart="chartFtRadar" style="height:260px"></div></section>
+    </div>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>模型横向对比（当前版本）</h3><div class="sub">v1.3.0-rc · 各维度 pass_rate · 多模型并列</div></div></div>
+      <div class="chart" data-chart="chartFtModel" style="height:240px"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>劣化检测 · 汇报结论</h3><div class="sub">自动生成 · 可直接进版本报告</div></div></div>
+      <div class="detail-stack" id="boardVerdict"></div>
+    </section>
+  </section>
+
+  <!-- ============ 版本结果库 ============ -->
+  <section data-page="vresults" hidden>
+    <header class="topbar">
+      <div><h1>版本结果库</h1><div class="crumb">任务终态自动按（被测版本 × 模型）归档 · 质量大屏与结果分析的数据源 · GET /functional/version-results</div></div>
+      <div class="actions"><button class="btn" onclick="showPage('board')">质量大屏 →</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.9">
+        <b style="color:var(--tx)">归档规则：</b>功能任务创建时必选<b style="color:var(--tx)">被测版本</b>（来自公共 · 版本管理）；
+        任务终态后按评估维度聚合 pass_rate 自动写入本库（无需人工搬运）。同一（版本 × 模型 × 脚本）重复执行 = 覆盖更新取最新，
+        历史执行在来源任务里可回溯。
+      </div>
+    </div>
+    <div class="chips" style="margin-bottom:12px">
+      <span class="chip on" data-single>全部 <small>6</small></span>
+      <span class="chip" data-single>v1.3.0-rc <small>2</small></span>
+      <span class="chip" data-single>v1.2.0 <small>2</small></span>
+      <span class="chip" data-single>v1.1.0 <small>2</small></span>
+    </div>
+    <section class="card"><table id="vrTbl" class="sumtable"></table>
+      <div class="foot-note"><span>分析口径：结果分析与大屏只读本库，不直接扫原始 run —— 聚合一次、处处复用</span></div></section>
+  </section>
+
+  <!-- ============ 脚本库（功能域脚本 = 用例原子） ============ -->
+  <section data-page="scripts" hidden>
+    <header class="topbar">
+      <div><h1>脚本库</h1><div class="crumb">一个脚本 = 一个用例（测试意图）· 1 脚本 = 1 jsonl（1..N 行数据变体）· 先场景后用例 · GET /functional/scripts</div></div>
+      <div class="actions">
+        <button class="btn" data-open-drawer="importScriptDrawer">从数据集导入</button>
+        <button class="btn primary" data-open-drawer="newScriptDrawer">＋ 新建脚本（从 0 创建）</button>
+      </div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.9">
+        <b style="color:var(--tx)">层级口径：</b><b style="color:var(--tx)">评估场景</b> = 功能大类（API 兼容性 / 参数校验 / FC …）→ 场景内以
+        <b style="color:var(--tx)">脚本 = 用例</b>（一个测试意图，类型标签 基础/边界/异常）组织 → 一脚本关联
+        <b style="color:var(--tx)">1..N 行数据</b>（每行 = content 内容 + params 参数 + 断言，行 = 变体，行级执行与判定，脚本结果 = 行级聚合）。<br>
+        <b style="color:var(--tx)">两条来源，同一落点：</b>① 从 0 创建（前端结构化编辑三要素，harness 真实校验）；
+        ② 从数据集导入（外部构造 jsonl，同一校验按行导入）——最终都物化为场景目录 <span class="tag mono">1 脚本 = 1 jsonl 文件</span>；
+        可挂外部平台用例编号（用例平台 ↔ 平台脚本的对应关系）。<br>
+        <b style="color:var(--tx)">执行口径：</b>创建任务 = 选场景（全选/多选/散选子用例）；单脚本验证 = 行内「定向执行」（tools.cases 精确定向）。
+      </div>
+    </div>
+    <div class="filter-bar" style="margin-bottom:12px">
+      <span class="ds-flabel">常用</span>
+      <select class="in" id="sfScen" style="width:160px">
+        <option value="">全部场景</option>
+        <option>api_params</option><option>basic_chat</option><option>structured_output</option><option>tool_calling</option><option>long_context</option><option>api_stream</option><option>api_limits</option><option>api_shape</option><option>agent_tasks</option>
+      </select>
+      <select class="in" id="sfType" style="width:104px"><option value="">全部类型</option><option>基础</option><option>边界</option><option>异常</option><option>兼容</option></select>
+      <select class="in" id="sfSrc" style="width:116px"><option value="">全部来源</option><option>手工创建</option><option>数据集导入</option></select>
+      <select class="in" id="sfLast" style="width:112px"><option value="">全部结果</option><option value="passed">最近通过</option><option value="failed">最近失败</option><option value="none">未执行</option></select>
+      <span style="flex:1"></span>
+      <div class="ds-picker" id="kvPicker" style="flex:1;min-width:280px;max-width:430px">
+        <div class="ds-search" id="kvBox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <span class="ds-tokens" id="kvTokens"></span>
+          <input id="kvInput" placeholder="通用筛选：key:value 回车生成 token，或直接输关键词…">
+          <span class="ds-filter-btn">筛选 <b>▾</b></span>
+          <div class="ds-menu" id="kvMenu" hidden></div>
+        </div>
+      </div>
+    </div>
+    <section class="card"><table id="scriptsTbl" class="sumtable"></table>
+      <div class="foot-note"><span id="scriptCount"></span><span>编辑/删除对所有平台脚本开放 · 场景内复杂脚本 test_*.py 只读展示于「评估场景」页</span></div></section>
+  </section>
+
+  <!-- ============ 评估场景（低代码用例管理） ============ -->
+  <section data-page="scenarios" hidden>
+    <header class="topbar">
+      <div><h1>评估场景</h1><div class="crumb">场景 = 功能大类（维度）· 场景内以「脚本 = 用例」组织 · GET /functional/scenarios</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="scnDrawer">＋ 新建评估场景</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:12px 18px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;font-weight:600">场景 = 功能大类（维度）· 场景内以「脚本 = 用例」组织 · 先场景后用例</span>
+      <span class="qmark">?<span class="tip">层级口径：评估场景 = 功能大类（维度）→ 场景内以「脚本 = 用例」（一个测试意图，类型标签 基础/边界/异常——标签非层级）组织 → 一脚本挂 1..N 行数据（content 内容 + params 参数 + 断言；行 = 变体，行级执行与判定，脚本结果 = 行级聚合）；物理形态 1 脚本 = 1 个 jsonl 文件（场景目录下）。创建硬约束：先场景后用例——场景是归档与质量大屏聚合的维度键，无场景不建脚本。脚本两形态：低代码数据行（大部分，免代码维护）；复杂脚本 test_*.py（少量，提交场景目录随版本发布，前端内嵌脚本编辑窗口列入 V2）。批量路径：公共 · 数据集管理导入功能数据集（cases.jsonl）→「从数据集导入」按行生成脚本（同一 harness 校验）</span></span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn sm" data-open-drawer="importScriptDrawer">从数据集导入</button>
+        <button class="btn sm" data-open-drawer="newScriptDrawer">＋ 新建脚本</button>
+      </span>
+    </div>
+    <div class="scene-grid" id="sceneGrid"></div>
+  </section>
+</main>
+
+<!-- 新建运行抽屉 -->
+<div class="drawer drawer-lg" id="newRunModal" hidden>
+  <div class="drawer-head"><div><h3>新建功能运行</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">选评估场景（全选 / 多选 / 散选子用例），后台生成 pytest 执行配置；结果按被测版本自动归档进「版本结果库」</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-body">
+
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>任务标识与被测对象</small></div>
+      <div class="p-row">
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（场景范围-模型-日期）；建议体现运行目的，便于列表检索</span></span></span>
+        <input class="in" placeholder="如 ft-regression-0930（留空自动生成）"></div>
+      <div class="p-row">
+        <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
+        <select class="in" id="ftModelSel" style="max-width:380px">
+          <option>qwen2.5:3b（本地 Ollama）</option>
+          <option>DeepSeek-V3</option>
+          <option>claude-3.5-sonnet</option>
+          <option value="__custom__">自定义（手填端点）</option>
+        </select></div>
+      <div id="ftModelCustom" hidden>
+        <div class="p-row">
+          <span class="p-label">模型访问 url<span class="qmark">?<span class="tip">OpenAI 兼容端点地址，含版本路径</span></span></span>
+          <input class="in" placeholder="如 http://10.1.2.3:8000/v1" style="max-width:380px"></div>
+        <div class="p-row">
+          <span class="p-label">模型名称<span class="qmark">?<span class="tip">请求体 model 字段</span></span></span>
+          <input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
+        <div class="p-row" style="margin-bottom:0">
+          <span class="p-label">鉴权 api_key_env<span class="qmark">?<span class="tip">密钥不落库：仅存环境变量名，运行时解析</span></span></span>
+          <input class="in" placeholder="如 OPENAI_API_KEY" style="max-width:300px"></div>
+      </div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；任务终态后结果自动归档进「版本结果库」，供质量大屏做 版本 × 模型 × 维度 对比</span></span></span>
+        <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+          <select class="in" id="ftVerSel" style="flex:1">
+            <option>v1.3.0-rc（当前最新）</option>
+            <option>v1.2.0</option>
+            <option>v1.1.0</option>
+          </select>
+          <button class="btn sm" type="button" title="该模型没有对应版本？去「公共 · 版本管理」登记">＋ 新版本</button>
+        </div></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>评估场景选择</b><small>全选 / 多选评估场景 · 勾场景 = 选中其全部子用例 · 展开可散选单条</small></div>
+      <div class="chips" id="ftPresets" style="margin-bottom:8px">
+        <span class="chip on" data-p="full">ft-full 全量</span>
+        <span class="chip" data-p="smoke">冒烟</span>
+        <span class="chip" data-p="api">API 契约</span>
+        <span class="chip" data-p="agent">工具调用</span>
+        <span class="chip" data-p="none">清空</span>
+      </div>
+      <div class="chips" style="margin-bottom:8px">
+        <input class="in" id="ftSearch" style="flex:1;min-width:220px;height:32px;padding:4px 10px" placeholder="搜索场景 / 用例 id、说明…（可批量勾选命中项）">
+        <button class="btn sm" id="ftSelFiltered">勾选命中</button>
+        <button class="btn sm" id="ftClrFiltered">移除命中</button>
+        <span class="hint" id="ftSearchN" style="margin:0"></span>
+      </div>
+      <div class="ds-list" id="ftPick" style="border:1px solid var(--line);border-radius:10px;max-height:300px"></div>
+      <div class="hint" style="margin-top:8px">全选场景 <b id="ftScenN">0</b> · 散选用例 <b id="ftPartN">0</b> 条 · 合计 <b id="ftCaseN">0</b> 例<span class="qmark">?<span class="tip">勾场景 = 选中其全部用例；点箭头展开场景可散选单条。散选用例自动作为 tools.cases 精确过滤参数（id = 场景名.用例名，精确匹配，打错显式报错；仅数据驱动场景支持），无需手动填写</span></span></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">3</span><b>压力配置</b><small>超时控制 · 并行预留</small></div>
+      <div class="p-row">
+        <span class="p-label">单场景超时 timeout<span class="qmark">?<span class="tip">单个场景的总执行超时（秒），到时记失败并继续后续场景；写入 spec.extra.timeout。缺省 1800 秒</span></span></span>
+        <input class="in" type="number" min="1" placeholder="如 3600；缺省 1800 秒" style="max-width:300px"></div>
+      <div class="p-row" style="margin-bottom:0;opacity:.55">
+        <span class="p-label">场景并行<span class="tag" style="font-size:10.5px">预留</span><span class="qmark">?<span class="tip">后端暂未支持：当前场景间串行执行（场景内亦串行，防嵌套 xdist 放大开销）；并行能力实装后开放</span></span></span>
+        <input class="in" type="number" min="1" placeholder="如 4；后端实装后开放" disabled style="max-width:300px"></div>
+    </div>
+    </div>
+    <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">启动（后台执行）</button></div>
+  </div>
+
+<!-- 新建评估场景抽屉 -->
+<div class="drawer" id="scnDrawer" hidden>
+  <div class="drawer-head"><h3>新建评估场景</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="field"><label>显示名<span class="qmark">?<span class="tip">场景的业务名称，人看的：场景卡标题、创建任务时的场景树、质量大屏矩阵的维度行名、报告与汇报结论里都用它</span></span></label>
+      <input class="in" value="参数校验"></div>
+    <div class="field"><label>场景 id<span class="qmark">?<span class="tip">英文目录名，机器看的：场景卡副行（mono 小字）、脚本库「所属场景」副行、jsonl 物理路径 scenarios/&lt;id&gt;/、任务 spec 与 tools.cases 的 id 前缀（场景名.用例名）；创建后不可修改</span></span></label>
+      <input class="in" value="param_validation"></div>
+    <div class="field"><label>维度标签<span class="qmark">?<span class="tip">跨场景的业务归类（汇报分组与场景筛选用）。标签来自共享「维度标签库」：新增一次即入库，之后所有场景的创建/编辑都直接选用，无需重复输入；库由后端统一存储（§10.5 标签注册表），静态稿用 localStorage 演示复用</span></span></label>
+      <div class="chips" id="scnDims" style="margin:0"></div>
+      <div class="chips" id="scnDimNew" hidden style="margin:8px 0 0">
+        <input class="in" id="scnDimName" style="width:200px;height:30px;padding:4px 10px" placeholder="新标签名称，如 安全合规">
+        <button class="btn sm" id="scnDimOk">添加入库</button>
+        <span class="hint" style="margin:0">回车或点「添加入库」：标签写入标签库并选中，之后所有场景可直接复用</span>
+      </div></div>
+    <div class="field" style="margin-bottom:0"><label>说明<span class="qmark">?<span class="tip">一句话描述该场景测什么能力，展示于场景卡正文与场景树</span></span></label>
+      <input class="in" value="请求参数边界与非法值校验（缺省 / 类型 / 越界 / 注入）"></div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">创建场景</button></div>
+</div>
+
+<!-- 场景内脚本管理抽屉 -->
+<div class="drawer drawer-lg" id="scriptMgrDrawer" hidden>
+  <div class="drawer-head"><div><h3>脚本管理 · api_params（API 兼容·请求侧）</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">脚本 = 用例（类型标签 + 1..N 行数据）· 1 脚本 = 1 jsonl 文件</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="chips" style="margin-bottom:10px">
+      <button class="btn sm primary" data-open-drawer="newScriptDrawer">＋ 从 0 新建脚本</button>
+      <button class="btn sm" data-open-drawer="importScriptDrawer">从数据集导入</button>
+      <span class="hint" style="margin:0 0 0 10px">本场景共 22 个脚本 · 基础 9 · 边界 8 · 异常 5（下表展示 4 个）</span>
+    </div>
+    <table class="sumtable" id="scScriptTbl"></table>
+    <div class="seg-title">脚本内容示例 · boundary_oversize_input（边界 · 超长输入 · 3 行）</div>
+    <div class="detail-stack">
+      <div class="kv"><span>行 1 · 512 tok</span><pre>messages: [512 tok 长文本] · params: {"max_tokens": 4096} · expect: {"http_status": 200}</pre></div>
+      <div class="kv"><span>行 2 · 4k tok</span><pre>messages: [4k tok 长文本] · expect: {"http_status": 200, "resp": [{"path": "usage.total_tokens", "type": "int"}]}</pre></div>
+      <div class="kv"><span>行 3 · 64k tok</span><pre>messages: [64k tok 长文本] · expect: {"http_status": 413}（超限拒绝）</pre></div>
+    </div>
+    <span class="hint">物理形态：scenarios/api_params/boundary_oversize_input.jsonl（1 脚本 = 1 文件，3 行）；引擎「目录即注册表」零改动</span>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>关闭</button></div>
+</div>
+
+<!-- 从 0 创建脚本抽屉（低代码） -->
+<div class="drawer drawer-lg" id="newScriptDrawer" hidden>
+  <div class="drawer-head"><div><h3>新建脚本（从 0 创建）</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">归属场景 → 用例类型 → 数据行（content + params + 断言）· 三要素固定即脚本完成</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>归属</b><small>先场景后用例 · 无场景不建脚本（硬约束）</small></div>
+      <div class="form-grid">
+        <div class="field"><label>评估场景（必选）<span class="qmark">?<span class="tip">场景 = 质量大屏的维度聚合键，用例必须归属场景；没有目标场景？先回列表「＋ 新建评估场景」</span></span></label>
+          <select class="in" id="nsScen"><option value="">请选择评估场景…</option><option>basic_chat · 基础对话</option><option>tool_calling · 工具调用 FC</option></select></div>
+        <div class="field"><label>脚本 id（= jsonl 文件名）</label><input class="in" value="boundary_oversize_input"></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>脚本名称（测试意图）</label><input class="in" value="边界 · 超长输入"></div>
+        <div class="field"><label>外部平台用例编号（可选）</label><input class="in" placeholder="如 TC-3120"></div>
+      </div>
+      <div class="field" style="margin-bottom:0"><label>用例类型<span class="qmark">?<span class="tip">类型 = 标签不是层级：场景内靠 基础/边界/异常 标签覆盖完整能力；大屏后续可按类型过滤劣化</span></span></label>
+        <div class="chips" id="nsCaseType" style="margin:0">
+          <span class="chip" data-single>基础</span>
+          <span class="chip on" data-single>边界</span>
+          <span class="chip" data-single>异常</span>
+          <span class="chip" data-single>兼容</span>
+        </div></div>
+    </div>
+    <div class="form-sec" style="margin-bottom:0">
+      <div class="sec-head"><span class="sec-num">2</span><b>数据行（1..N）</b><small>行 = 变体 · 行级执行与判定 · 脚本结果 = 行级聚合</small></div>
+      <div id="nsRows"><!-- 行卡由 nsRowHtml(n) 生成：初始 1 空行，可增删（数据行 1..N，至少保留 1 行）--></div>
+      <button class="btn sm" id="nsRowAdd">＋ 添加数据行</button>
+      <button type="button" class="btn sm" id="nsJsonlBtn">从 jsonl 导入行</button>
+      <span class="hint" style="margin-left:8px">同意图多变体挂同一脚本；批量变体还可用 vars 占位符生成器（引擎已有能力）</span>
+      <div id="nsJsonlArea" hidden style="margin-top:8px">
+        <textarea class="in" id="nsJsonlText" rows="5" placeholder='每行一个用例（JSONL），例如：&#10;{"desc":"变体 1","messages":[...],"params":{...},"expect":{...}}'></textarea>
+        <div style="margin-top:6px"><button type="button" class="btn sm primary" id="nsJsonlParse">解析并替换全部行</button>
+        <span class="hint" style="margin-left:8px">替换现有全部数据行（可审阅后再保存）；归属场景/脚本 id/名称保持不变</span></div>
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:8px">
+      <span class="hint" style="margin:0;font-size:12.5px">✓ <b style="color:var(--tx)">保存 = 脚本完成</b>：三要素真实校验后物化为场景目录 jsonl</span>
+      <span class="qmark">?<span class="tip">保存时三要素过 harness.Case 真实校验，物化为 scenarios/&lt;场景&gt;/&lt;脚本id&gt;.jsonl（1 脚本 = 1 文件，N 行 = 变体）——引擎「目录即注册表」零改动。执行 = 创建任务时选场景（全选/多选/散选子用例），或脚本库行「定向执行」（tools.cases 精确定向该脚本）</span></span>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">保存脚本（真实校验）</button></div>
+</div>
+
+<!-- 从数据集导入生成脚本抽屉 -->
+<div class="drawer drawer-lg" id="importScriptDrawer" hidden>
+  <div class="drawer-head"><div><h3>从数据集导入生成脚本</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">外部构造 jsonl → 同一 harness 校验 → 整体导入为 1 个脚本（N 行），不拆散</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>归属</b><small>导入同样先场景后用例</small></div>
+      <div class="form-grid">
+        <div class="field"><label>目标评估场景（必选）</label>
+          <select class="in"><option>api_params · API 兼容·请求侧</option><option>basic_chat · 基础对话</option><option>api_stream · API 兼容·流式</option></select></div>
+        <div class="field"><label>用例类型</label><select class="in"><option>基础</option><option selected>边界</option><option>异常</option></select></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>脚本名称</label><input class="in" value="边界 · 乱码与非法输入"></div>
+        <div class="field"><label>脚本 id（= jsonl 文件名）</label><input class="in" value="boundary_garbled_input"></div>
+      </div>
+    </div>
+    <div class="form-sec" style="margin-bottom:0">
+      <div class="sec-head"><span class="sec-num">2</span><b>数据来源</b><small>平台数据集或直接粘贴 jsonl（二选一）</small></div>
+      <div class="field"><label>来源</label>
+        <div class="radio-cards three">
+          <div class="radio-card on"><b>平台数据集</b><small>公共 · 数据集管理 functional 型</small></div>
+          <div class="radio-card"><b>粘贴 jsonl</b><small>外部工具构造直接导入</small></div>
+        </div></div>
+      <div class="field"><label>数据集（functional 型）</label>
+        <select class="in"><option>garbled-fuzz（30 cases · 乱码/非法输入/超限）</option><option>api-regression-mini（12 cases）</option></select>
+        <span class="hint">数据集目录里没有？先到 <a href="common2.html#datasets" style="color:var(--ac)">公共 · 数据集管理</a> 导入（同一校验口径）</span></div>
+      <div class="field" style="margin-bottom:0"><label>或粘贴 jsonl（一行 = id + desc + messages + params? + expect）</label>
+        <textarea class="in" rows="4" placeholder='{"id": "g-01", "desc": "乱码输入 400", "messages": […], "params": {…}, "expect": {"http_status": 400}}'></textarea>
+        <span class="hint">harness.Case 真实校验（必填 id/desc/messages/expect · 断言键白名单）；1 次导入 = 1 个脚本（N 行）</span></div>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">导入生成脚本</button></div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 功能测试 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=13"></script>
+<script>
+const RUNS = [
+  ["ft-full-qwen3b", "#7a21c9e4 · v1.2.0 · 全量 9 场景", "qwen2.5:3b", "failed", 91.7, "84 / 3 fail", "09-23 20:12", "zhimeng"],
+  ["ft-api-contract-deepseek", "#b09d41aa · v1.2.0 · API 契约 4 场景", "DeepSeek-V3", "failed", 86.8, "38 / 5 fail", "09-23 15:31", "陈曦"],
+  ["ft-agent-tasks-qwen", "#5ce208b1 · v1.2.0 · 工具调用 2 场景", "qwen2.5:3b", "passed", 100.0, "12 / 0", "09-23 11:20", "刘畅"],
+  ["ft-smoke-ollama", "#d3417f0a · v1.2.0 · 冒烟 4 场景", "qwen2.5:3b", "passed", 100.0, "14 / 0", "09-22 09:15", "zhimeng"],
+  ["ft-full-nightly", "#18c7b2e9 · v1.2.0 · 全量 9 场景 · timeout 3600", "DeepSeek-V3", "passed", 98.8, "84 / 1 fail", "09-22 02:00", "王维"],
+];
+/* 任务层状态徽章与评估结果单元格（api19 同名定义已移除，此处为唯一来源） */
+const TASK_BADGE = {
+  succeeded: ["passed", "已完成"],
+  failed: ["failed", "执行异常"],
+  running: ["running", "进行中"],
+  pending: ["pending", "排队中"],
+  cancelled: ["cancelled", "已取消"],
+};
+function taskBadge(status) {
+  const [cls, label] = TASK_BADGE[status] || [status || "pending", status || "—"];
+  return `<span class="badge ${cls}"><i></i>${label}</span>`;
+}
+function evalCell(ev) {
+  if (!ev || ev.rate === null || ev.rate === undefined) return '<span class="faint">—</span>';
+  const pct = Math.round(ev.rate * 1000) / 10;
+  const color = ev.rate >= 1 ? "var(--ok)" : ev.rate <= 0 ? "var(--bad)" : "var(--warn)";
+  return `<span class="num mono" style="color:${color};font-weight:650">${pct}%</span>` +
+    (ev.total ? ` <span class="dim" style="font-size:11px">${ev.total} 例</span>` : "");
+}
+function renderRuns(status, owner, kw) {
+  const hits = RUNS.filter(r => (status === "all" || r[3] === status)
+    && (owner === "all" || r[7] === owner)
+    && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
+  document.getElementById("runsTbl").innerHTML = `
+  <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>任务状态</th><th>评估结果</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${hits.length ? hits.map(r => `<tr class="clickable" onclick="openRunDetail(${RUNS.indexOf(r)})">
+    <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
+    <td class="dim">${r[2]}</td><td class="dim">${r[7]}</td><td>${taskBadge(r[3])}</td><td>${evalCell(r[4])}</td>
+    <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
+    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")
+    : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+}
+bindTaskFilter("runsFilter", renderRuns);
+bindModelCustom("ftModelSel", "ftModelCustom");
+
+const SUMS = [
+  ["basic_chat", "基础对话", 1.0, true, 4], ["structured_output", "结构化输出", 1.0, true, 3],
+  ["tool_calling", "工具调用", 0.95, true, 5], ["long_context", "长上下文", 1.0, true, 2],
+  ["api_params", "API 契约·请求侧", 0.77, false, 22], ["api_stream", "API 契约·流式", 0.75, false, 4],
+  ["api_limits", "API 契约·输出侧", 0.86, false, 7], ["api_shape", "API 契约·响应体", 1.0, true, 5],
+  ["agent_tasks", "Agent 工具任务", 0.92, true, 12],
+];
+document.getElementById("sumTbl").innerHTML = `
+  <thead><tr><th>场景</th><th>说明</th><th>pass_rate</th><th>阈值判定（auto=1.0）</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${SUMS.map((s, i) => `<tr class="${i === 0 ? "" : ""}">
+    <td class="mono">${s[0]}</td><td class="dim">${s[1]}</td><td>${passCell(s[2] * 100)}</td>
+    <td class="num dim">pass_rate ≥ 1.0</td><td class="num">${s[4]}</td>
+    <td>${badge(s[3] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+const FAILS = [
+  { case: "api_params.extra_param_ignored", assert: "http_status = 400（未知参数必须拒绝）",
+    input: `POST /v1/chat/completions {"model":"qwen2.5:3b","messages":[…],"temperature":0.7,"top_k":40}`,
+    output: `HTTP 200 — n/extra 参数被静默忽略（Ollama 已知规范差异，标准端点应转绿）` },
+  { case: "api_stream.sse_done_marker", assert: "流式以 data: [DONE] 结束",
+    input: `POST /v1/chat/completions {"stream":true, …}`,
+    output: `流正常返回 12 个 chunk，但缺少 [DONE] 终止帧（ finish_reason=stop 后连接直接关闭）` },
+  { case: "tool_calling.weather_args", assert: "tool_args_contains {city: 北京}",
+    input: `messages: ["北京明天穿什么？"] + tools:[get_weather]`,
+    output: `模型调用 get_weather，但参数为 {"city": "Beijing"}（中文名未按用例约束保留）` },
+];
+document.getElementById("failList").innerHTML = FAILS.map(f => `
+  <div style="border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);border-radius:10px;padding:12px 16px">
+    <div class="mono" style="font-size:13px;color:var(--bad)">✕ ${f.case}</div>
+    <div class="detail-stack" style="margin-top:10px">
+      <div class="kv"><span>断言</span><div style="font-size:12.5px">${f.assert}</div></div>
+      <div class="kv"><span>输入</span><pre>${f.input}</pre></div>
+      <div class="kv"><span>输出</span><pre>${f.output}</pre></div>
+    </div></div>`).join("");
+
+const CASES = [
+  ["basic_chat.intro", "开放对话", 1.0, "passed"], ["basic_chat.greeting", "问候", 1.0, "passed"],
+  ["api_params.extra_param_ignored", "未知参数拒绝", 0.0, "failed"], ["api_stream.sse_done_marker", "[DONE] 帧", 0.0, "failed"],
+  ["agent_tasks.weather_args", "参数抽取", 1.0, "passed"],
+];
+document.getElementById("casesTbl").innerHTML = `
+  <thead><tr><th>Case（nodeid）</th><th>说明</th><th>结果</th></tr></thead>
+  <tbody>${CASES.map(c => `<tr><td class="mono">${c[0]}</td><td class="dim">${c[1]}</td>
+    <td>${passCell(c[2] * 100)} ${badge(c[3])}</td></tr>`).join("")}</tbody>`;
+
+const SCENES = [
+  ["basic_chat", "基础对话", "开放对话基础能力：非空、无乱码、无内部标签泄露", 4, "模型能力", "数据驱动", "基础 3 · 边界 1"],
+  ["structured_output", "结构化输出", "JSON 结构化输出：解析正确、字段齐全", 3, "模型能力", "数据驱动", "基础 2 · 边界 1"],
+  ["tool_calling", "工具调用 FC", "工具选择与参数抽取（含中文与订单号精确抽取）", 5, "模型能力", "数据驱动", "基础 3 · 边界 2"],
+  ["long_context", "长上下文", "长上下文大海捞针（16k 确定性 haystack）", 2, "模型能力", "脚本", "基础 1 · 边界 1"],
+  ["api_params", "API 兼容·请求侧", "API 契约·请求侧 22 例：参数校验/可选参数/json_mode/tool_choice/输入鲁棒性", 22, "API 契约", "数据驱动", "基础 9 · 边界 8 · 异常 5"],
+  ["api_stream", "API 兼容·流式", "API 契约·流式 4 例：SSE 拼接/finish_reason/[DONE]/分块", 4, "API 契约", "数据驱动", "基础 3 · 边界 1"],
+  ["api_limits", "API 兼容·输出侧", "API 契约·输出侧 7 例：max_tokens/stop 序列/tool_calls 信号", 7, "API 契约", "数据驱动", "基础 4 · 边界 2 · 异常 1"],
+  ["api_shape", "API 兼容·响应体", "API 契约·响应体 5 例：OpenAI 规范响应结构", 5, "API 契约", "数据驱动", "基础 4 · 边界 1"],
+  ["agent_tasks", "Agent 任务", "Agent 任务：工具选择/参数抽取/多轮续作/能力边界拒答", 12, "Agent", "脚本", "基础 7 · 边界 3 · 异常 2"],
+];
+document.getElementById("sceneGrid").innerHTML = SCENES.map(s => `
+  <div class="scene-card"><b>${s[1]}</b><div class="rid mono" style="margin:2px 0 6px">${s[0]}</div><p>${s[2]}</p>
+    <div class="meta"><span class="tag">${s[4]}</span><span class="tag">${s[3]} 例</span>
+    <span class="tag">${s[6]}</span>
+    <span class="tag" style="color:var(--ac)">${s[5] === "脚本" ? "复杂脚本 test_*.py" : "低代码数据行"}</span></div>
+    <div class="meta" style="margin-top:10px;display:flex;gap:6px">
+      <button class="btn sm primary" data-open-drawer="scriptMgrDrawer">管理脚本</button>
+      <button class="btn sm" data-open-drawer="newScriptDrawer">＋ 脚本</button>
+      <button class="btn sm" data-open-drawer="newRunModal">过滤跑 →</button></div></div>`).join("");
+
+/* ---------- 新建运行：三层选择（预设标签 → 场景 → 用例）+ 搜索批量 ---------- */
+const FT_CASES = {
+  basic_chat: [["intro", "开放对话非空"], ["greeting", "问候语得体"], ["no_garbled", "无乱码"], ["no_internal_tags", "无内部标签泄露"]],
+  structured_output: [["json_parse", "JSON 可解析"], ["required_fields", "必填字段齐全"], ["field_types", "字段类型正确"]],
+  tool_calling: [["tool_select", "工具选择正确"], ["args_extract_cn", "中文参数抽取"], ["args_orderid_exact", "订单号精确抽取"], ["multi_tool_choice", "多工具抉择"], ["no_tool_reply", "无工具时拒答"]],
+  long_context: [["needle_16k", "16k 大海捞针"], ["multi_needle", "多针检索"]],
+  api_params: [["extra_param_ignored", "未知参数忽略"], ["optional_param_default", "可选参数缺省"], ["json_mode_valid", "json_mode 合法"], ["json_mode_invalid_400", "json_mode 非法 400"], ["tool_choice_auto", "tool_choice=auto"], ["tool_choice_forced", "tool_choice 强制"], ["garbled_input_400", "乱码输入 400"], ["empty_messages_400", "空 messages 400"], ["oversize_input_413", "超长输入 413"], ["unicode_params_ok", "Unicode 参数"], ["negative_temp_400", "负温度 400"], ["wrong_role_400", "role 非法 400"], ["missing_content_400", "缺 content 400"], ["multimodal_reject", "多模态拒绝"], ["long_param_trim", "超长参数截断"], ["dup_messages_ok", "重复 messages"], ["null_field_400", "null 字段 400"], ["bool_coerce", "布尔强转"], ["nested_params_ok", "嵌套参数"], ["stream_false_ok", "stream=false"], ["idempotent_repeat", "幂等重发"], ["case_sensitive_headers", "header 大小写"]],
+  api_stream: [["sse_concat", "SSE 拼接"], ["finish_reason", "finish_reason"], ["done_marker", "[DONE] 帧"], ["chunk_split", "分块切分"]],
+  api_limits: [["max_tokens_trunc", "max_tokens 截断"], ["max_tokens_upper", "max_tokens 上限"], ["stop_seq_hit", "stop 命中"], ["tool_calls_signal", "tool_calls 信号"], ["min_tokens_ok", "min_tokens"], ["token_count_accurate", "token 计数准确"], ["stop_multi", "多 stop 序列"]],
+  api_shape: [["openai_schema", "OpenAI 规范结构"], ["object_nested", "嵌套对象"], ["error_shape", "错误结构"], ["usage_field", "usage 字段"], ["model_echo", "model 回显"]],
+  agent_tasks: [["weather_args", "天气参数抽取"], ["order_cancel_args", "订单取消参数"], ["multi_turn_reask", "多轮补问"], ["capability_refuse", "能力边界拒答"], ["unknown_tool_refuse", "未知工具拒答"], ["args_type_coerce", "参数类型强转"], ["tool_loop_max", "工具循环上限"], ["partial_fill_ok", "部分填充"], ["context_switch_stable", "上下文切换稳定"], ["date_reasoning", "日期推算"], ["id_extract_exact", "单号精确抽取"], ["fallback_msg", "兜底话术"]],
+};
+const ftAllCases = sc => FT_CASES[sc].map(x => sc + "." + x[0]);
+let ftSel = new Set(SCENES.flatMap(s => ftAllCases(s[0])));   // 选中的用例 id（scene.suffix）
+const ftExpanded = new Set();                                  // 手动展开的场景
+let ftKw = "";
+const FT_PRESETS = {
+  full: SCENES.map(s => s[0]),
+  smoke: ["basic_chat", "structured_output", "api_stream", "long_context"],
+  api: ["api_params", "api_stream", "api_limits", "api_shape"],
+  agent: ["tool_calling", "agent_tasks"],
+  none: [],
+};
+const sceneById = id => SCENES.find(x => x[0] === id);
+
+const ftSceneState = sc => {
+  const ids = ftAllCases(sc);
+  const n = ids.filter(id => ftSel.has(id)).length;
+  return n === 0 ? "none" : n === ids.length ? "all" : "part";
+};
+const ftSceneHit = sc => {
+  const sm = sceneById(sc);
+  return !ftKw || (sc + " " + sm[1] + " " + sm[2] + " " + sm[4]).toLowerCase().includes(ftKw);
+};
+const ftCaseHit = (sc, x) => !ftKw || (sc + "." + x[0] + " " + x[1]).toLowerCase().includes(ftKw);
+const ftVisibleScenes = () => SCENES.map(s => s[0]).filter(sc => ftSceneHit(sc) || FT_CASES[sc].some(x => ftCaseHit(sc, x)));
+
+function renderFtPick() {
+  const vis = ftVisibleScenes();
+  let caseHits = 0;
+  const rows = vis.map(sc => {
+    const sm = sceneById(sc);
+    const st = ftSceneState(sc);
+    const searching = !!ftKw;
+    const open = searching || ftExpanded.has(sc);
+    const cases = FT_CASES[sc].filter(x => ftCaseHit(sc, x));
+    caseHits += searching ? cases.length : FT_CASES[sc].length;
+    const selN = ftAllCases(sc).filter(id => ftSel.has(id)).length;
+    const cb = st === "all" ? '<span class="cb on">✓</span>'
+      : st === "part" ? '<span class="cb part">–</span>' : '<span class="cb"></span>';
+    const sceneRow = `<div class="ds-row ${st !== "none" ? "on" : ""} ${st === "part" ? "part" : ""}" data-sc="${sc}">
+      <span class="caret ${open ? "open" : ""}" data-caret="${sc}">▶</span>${cb}
+      <span class="ds-name">${sm[1]} <span class="mono faint" style="font-size:11px">${sc}</span></span>
+      <span class="ds-meta" style="white-space:normal">${sm[2]}</span>
+      <span class="ds-tags"><span class="tag">${sm[4]}</span><span class="tag">${sm[3]} 例</span>${st === "part" ? `<span class="tag">已选 ${selN}/${sm[3]}</span>` : ""}</span></div>`;
+    const caseRows = !open ? "" : cases.map(x => {
+      const cid = sc + "." + x[0];
+      return `<div class="ds-row ft-case ${ftSel.has(cid) ? "on" : ""}" data-cid="${cid}">
+      <span class="cb ${ftSel.has(cid) ? "on" : ""}">✓</span>
+      <span class="ds-name">${cid}</span>
+      <span class="ds-meta" style="white-space:normal">${x[1]}</span></div>`;
+    }).join("");
+    return sceneRow + caseRows;
+  }).join("");
+  document.getElementById("ftPick").innerHTML = rows.length ? rows
+    : '<div class="ds-empty">无匹配场景 / 用例</div>';
+  document.getElementById("ftSearchN").textContent = ftKw ? `命中 ${vis.length} 场景 · ${caseHits} 用例` : "";
+  // 统计
+  const fullScenes = SCENES.map(x => x[0]).filter(sc => ftSceneState(sc) === "all").length;
+  const partIds = [...ftSel].filter(id => ftSceneState(id.split(".")[0]) !== "all");
+  document.getElementById("ftScenN").textContent = fullScenes;
+  document.getElementById("ftPartN").textContent = partIds.length;
+  document.getElementById("ftCaseN").textContent = ftSel.size;
+
+}
+
+/* 事件（委托，行会重渲染） */
+document.getElementById("ftPick").addEventListener("click", e => {
+  const caret = e.target.closest(".caret");
+  if (caret) {
+    const sc = caret.dataset.caret;
+    ftExpanded.has(sc) ? ftExpanded.delete(sc) : ftExpanded.add(sc);
+    return renderFtPick();
+  }
+  const caseRow = e.target.closest(".ft-case");
+  if (caseRow) {
+    const cid = caseRow.dataset.cid;
+    ftSel.has(cid) ? ftSel.delete(cid) : ftSel.add(cid);
+    return renderFtPick();
+  }
+  const sceneRow = e.target.closest(".ds-row[data-sc]");
+  if (sceneRow) {
+    const sc = sceneRow.dataset.sc;
+    const st = ftSceneState(sc);
+    if (st === "all") ftAllCases(sc).forEach(id => ftSel.delete(id));
+    else ftAllCases(sc).forEach(id => ftSel.add(id));
+    renderFtPick();
+  }
+});
+document.getElementById("ftPresets").addEventListener("click", e => {
+  const ch = e.target.closest(".chip"); if (!ch) return;
+  const ids = FT_PRESETS[ch.dataset.p].flatMap(sc => ftAllCases(sc));
+  ftSel = new Set(ids);
+  renderFtPick(); syncFtChips();
+});
+document.getElementById("ftSearch").addEventListener("input", e => {
+  ftKw = e.target.value.trim().toLowerCase();
+  renderFtPick();
+});
+document.getElementById("ftSelFiltered").addEventListener("click", () => {
+  ftVisibleScenes().forEach(sc => {
+    FT_CASES[sc].forEach(x => { const cid = sc + "." + x[0]; if (ftCaseHit(sc, x)) ftSel.add(cid); });
+  });
+  renderFtPick();
+});
+document.getElementById("ftClrFiltered").addEventListener("click", () => {
+  ftVisibleScenes().forEach(sc => {
+    FT_CASES[sc].forEach(x => { const cid = sc + "." + x[0]; if (ftCaseHit(sc, x)) ftSel.delete(cid); });
+  });
+  renderFtPick();
+});
+function syncFtChips() {
+  document.querySelectorAll("#ftPresets .chip").forEach(ch => {
+    const ids = FT_PRESETS[ch.dataset.p].flatMap(sc => ftAllCases(sc));
+    ch.classList.toggle("on", ids.length === ftSel.size && ids.every(id => ftSel.has(id)));
+  });
+}
+renderFtPick();
+
+/* ---------- 脚本库：一个脚本 = 一个用例（测试意图 · 类型标签 + 1..N 行数据） ----------
+   两来源：手工从0创建 / 数据集导入（同一 harness 校验）；1 脚本 = 1 jsonl 文件 */
+const CASE_SCRIPTS = [
+  { id: "boundary_oversize_input", name: "边界 · 超长输入", sc: "api_params", scLabel: "API 兼容·请求侧", type: "边界",
+    rows: 3, rowDesc: "512 / 4k / 64k 三档变体 · 断言 http_status 200/200/413", src: "手工创建", ext: "TC-3120", result: "passed", last: "v1.2.0 · 通过", upd: "09-20" },
+  { id: "optional_param_default", name: "基础 · 可选参数缺省", sc: "api_params", scLabel: "API 兼容·请求侧", type: "基础",
+    rows: 4, rowDesc: "temperature / top_p / max_tokens / stream 缺省透传", src: "手工创建", result: "failed", last: "v1.2.0 · 1 例失败", upd: "09-20" },
+  { id: "empty_messages_400", name: "异常 · 空 messages 400", sc: "api_params", scLabel: "API 兼容·请求侧", type: "异常",
+    rows: 1, rowDesc: "messages=[] · 断言 http_status=400（Case 允许空数组）", src: "手工创建", result: "passed", last: "v1.2.0 · 通过", upd: "09-20" },
+  { id: "args_extract_cn", name: "基础 · 中文参数抽取", sc: "tool_calling", scLabel: "工具调用 FC", type: "基础",
+    rows: 2, rowDesc: "中文城市 / 订单号精确抽取 · 断言 tool_args_contains", src: "手工创建", ext: "TC-2861", result: "passed", last: "v1.2.0 · 通过", upd: "09-19" },
+  { id: "unknown_tool_refuse", name: "异常 · 未知工具拒答", sc: "agent_tasks", scLabel: "Agent 任务", type: "异常",
+    rows: 2, rowDesc: "不存在的工具名 · 断言 no_tool + 非空拒答", src: "数据集导入", srcNote: "api-regression-mini", result: "passed", last: "v1.2.0 · 通过", upd: "09-18" },
+  { id: "sse_done_marker", name: "基础 · SSE 终止帧", sc: "api_stream", scLabel: "API 兼容·流式", type: "基础",
+    rows: 1, rowDesc: "stream=true · 断言 sse_done + finish_reason=stop", src: "数据集导入", srcNote: "api-regression-mini", result: "none", last: "未执行", upd: "09-18" },
+];
+
+/* ---------- 脚本库筛选：常用参数下拉 + 通用 key-value token ----------
+   常用下拉（场景/类型/来源/结果）与 kv token 全部 AND 组合；
+   kv 支持 key:value 语法（key = 筛选字段 label 或 key）或纯关键词（名称/id/数据行/外部用例模糊） ---------- */
+const SCRIPT_FILTER_KEYS = [
+  { key: "sc", label: "所属场景", values: [...new Set(CASE_SCRIPTS.map(s => s.sc))] },
+  { key: "type", label: "类型", values: ["基础", "边界", "异常", "兼容"] },
+  { key: "src", label: "来源", values: ["手工创建", "数据集导入"] },
+  { key: "ext", label: "外部用例", hint: "编号模糊匹配，如 TC-3120" },
+  { key: "assert", label: "断言", hint: "数据行断言关键词，如 http_status / sse_done" },
+];
+let kvTokens = [];   // {type, value}；type = null 表示自由关键词
+let kvMenuKey = null;
+
+function kvMatch(s) {
+  if (sfScen.value && s.sc !== sfScen.value) return false;
+  if (sfType.value && s.type !== sfType.value) return false;
+  if (sfSrc.value && s.src !== sfSrc.value) return false;
+  if (sfLast.value && (s.result || "none") !== sfLast.value) return false;
+  return kvTokens.every(t => {
+    const v = t.value.toLowerCase();
+    if (!t.type) return (s.name + " " + s.id + " " + s.rowDesc + " " + (s.ext || "")).toLowerCase().includes(v);
+    if (t.type === "sc") return s.sc === t.value;
+    if (t.type === "type") return s.type === t.value;
+    if (t.type === "src") return s.src === t.value;
+    if (t.type === "ext") return (s.ext || "").toLowerCase().includes(v);
+    if (t.type === "assert") return s.rowDesc.toLowerCase().includes(v);
+    return true;
+  });
+}
+function renderKvTokens() {
+  document.getElementById("kvTokens").innerHTML = kvTokens.map((t, i) => {
+    const ft = SCRIPT_FILTER_KEYS.find(k => k.key === t.type);
+    const lb = t.type ? (ft ? ft.label : t.type) : "关键词";
+    return `<span class="ds-token"><b>${lb}</b>:${t.value}<i data-rm="${i}">✕</i></span>`;
+  }).join("");
+  document.querySelectorAll("#kvTokens [data-rm]").forEach(x => x.addEventListener("click", e => {
+    e.stopPropagation();
+    kvTokens.splice(+x.dataset.rm, 1);
+    renderKvTokens(); renderFtScriptsTbl();
+  }));
+}
+function kvOpenMenu(typeKey = null) {
+  kvMenuKey = typeKey;
+  const menu = document.getElementById("kvMenu");
+  if (typeKey === null) {
+    menu.innerHTML = `<div class="ds-mhead"><span>选择筛选字段</span><span class="ds-mback" id="kvClose">收起</span></div>` +
+      SCRIPT_FILTER_KEYS.map(ft => `<div class="ds-mitem" data-t="${ft.key}"><span>${ft.label}</span><small>${ft.hint || "从下一级选值"}</small></div>`).join("");
+    menu.querySelectorAll("[data-t]").forEach(el => el.addEventListener("click", () => kvOpenMenu(el.dataset.t)));
+  } else {
+    const ft = SCRIPT_FILTER_KEYS.find(x => x.key === typeKey);
+    const picked = kvTokens.filter(t => t.type === typeKey).map(t => t.value);
+    menu.innerHTML = `<div class="ds-mhead"><span class="ds-mback" id="kvBack">← 筛选字段</span><span>${ft.label}</span></div>` +
+      (ft.values || []).map(v => `<div class="ds-mitem" data-v="${v}"><span>${v}</span><span>${picked.includes(v) ? "✓" : ""}</span></div>`).join("") +
+      (ft.values ? "" : `<div class="ds-mitem"><span class="dim">无固定可选值：关闭后在输入框键入 ${ft.key}:关键词 回车</span></div>`);
+    menu.querySelectorAll("[data-v]").forEach(el => el.addEventListener("click", () => {
+      kvTokens = kvTokens.filter(t => t.type !== typeKey);
+      kvTokens.push({ type: typeKey, value: el.dataset.v });
+      renderKvTokens(); renderFtScriptsTbl();
+      menu.hidden = true;
+    }));
+  }
+  document.getElementById("kvClose")?.addEventListener("click", () => menu.hidden = true);
+  document.getElementById("kvBack")?.addEventListener("click", () => kvOpenMenu(null));
+  menu.hidden = false;
+}
+function renderFtScriptsTbl() {
+  const hits = CASE_SCRIPTS.filter(kvMatch);
+  document.getElementById("scriptsTbl").innerHTML = `
+  <thead><tr><th>脚本（用例）</th><th>所属场景</th><th>类型</th><th>行数</th><th>数据行摘要</th><th>来源</th><th>最近执行</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${hits.length ? hits.map(s => `<tr>
+    <td class="rname"><b>${s.name}</b><div class="rid">${s.id}${s.ext ? ` · 外部用例 ${s.ext}` : ""}</div></td>
+    <td><span class="tag">${s.scLabel}</span><div class="rid mono">${s.sc}</div></td>
+    <td><span class="tag">${s.type}</span></td>
+    <td class="num">${s.rows}</td>
+    <td class="dim" style="white-space:normal;font-size:12px">${s.rowDesc}</td>
+    <td class="dim" style="white-space:normal">${s.src}${s.srcNote ? `<div class="rid">${s.srcNote}</div>` : ""}</td>
+    <td class="dim">${s.last}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm primary" data-open-drawer="newRunModal" title="创建任务并按 tools.cases 精确定向该脚本">定向执行</button>
+      <button class="btn sm">编辑</button><button class="btn sm danger">删除</button></td></tr>`).join("")
+    : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配脚本 —— 调整常用下拉，或点 token 上的 ✕ 移除条件</td></tr>'}</tbody>`;
+  document.getElementById("scriptCount").innerHTML = `共 26 个脚本 · 当前筛选命中 <b>${hits.length}</b> 个`;
+}
+[["sfScen"], ["sfType"], ["sfSrc"], ["sfLast"]].forEach(([id]) =>
+  document.getElementById(id).addEventListener("change", renderFtScriptsTbl));
+const kvInput = document.getElementById("kvInput");
+kvInput.addEventListener("focus", () => kvOpenMenu());
+kvInput.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const raw = kvInput.value.trim();
+  if (!raw) return;
+  let type = null, value = raw;
+  const i = raw.indexOf(":");
+  if (i > 0) {
+    const key = raw.slice(0, i).trim();
+    const ft = SCRIPT_FILTER_KEYS.find(k => k.key === key || k.label === key);
+    if (ft) { type = ft.key; value = raw.slice(i + 1).trim(); }
+  }
+  if (value) { kvTokens = kvTokens.filter(t => t.type !== type); kvTokens.push({ type, value }); }
+  kvInput.value = "";
+  renderKvTokens(); renderFtScriptsTbl();
+});
+document.getElementById("kvBox").addEventListener("click", e => {
+  if (!e.target.isConnected) return;      // 菜单换级重渲染后点击源已脱离 DOM
+  if (!!e.target.closest("#kvMenu")) return;
+  kvOpenMenu();
+});
+document.addEventListener("click", e => {
+  if (!e.target.isConnected) return;
+  if (!e.target.closest("#kvPicker")) document.getElementById("kvMenu").hidden = true;
+});
+renderKvTokens();
+renderFtScriptsTbl();
+
+/* ---------- 场景内脚本管理（抽屉静态列表） ---------- */
+document.getElementById("scScriptTbl").innerHTML = `
+  <thead><tr><th>脚本</th><th>类型</th><th>行数</th><th>来源</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${CASE_SCRIPTS.filter(s => s.sc === "api_params").map(s => `<tr>
+    <td class="rname"><b>${s.name}</b><div class="rid">${s.id}</div></td>
+    <td><span class="tag">${s.type}</span></td><td class="num">${s.rows}</td><td class="dim">${s.src}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm">编辑</button><button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
+
+/* 从0创建抽屉：数据行 = nsRowHtml(n) 单一模板；初始 1 空行，可增删（1..N，至少留 1 行）；
+   断言 = 选类型即展开参数行（目标 / 关系 / 期望值），键族 = harness 白名单 */
+let nsRowN = 1;
+function nsRowHtml(n) {
+  return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div class="seg-title" style="margin-top:0">行 ${n}</div>
+      <button class="btn sm ns-row-copy" title="以此行为模板复制一行（改参数即可成新变体）">复制此行</button>
+      <button class="btn sm ns-row-del" title="删除此行（至少保留 1 行）">删除此行</button>
+    </div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">对话承载
+      <select class="in ns-carrier" style="width:auto"><option value="messages">messages</option><option value="input">input</option><option value="none">不发对话</option></select>
+      <span class="qmark">?<span class="tip">messages=标准 chat 字段；input=DeepSeek 等新版接口把对话放 input（引擎自动省略 messages）；不发对话=纯参数校验用例（如只测 model 有效性）。下方 JSON 数组写入所选字段</span></span></label>
+      <textarea class="in" rows="2" placeholder='[{"role":"user","content":"…"}]'></textarea></div>
+    <div class="field"><label>tools 工具定义（可选 · JSON 数组）<span class="qmark">?<span class="tip">OpenAI tools 数组原样进请求体顶层；FC 断言用 expect.tool / tool_args_contains / no_tool</span></span></label><textarea class="in ns-tools" rows="2" placeholder='[{"type":"function","function":{"name":"get_weather",…}}]；留空 = 请求体不带 tools'></textarea></div>
+    <div class="field"><label>生成值占位符（vars）<span class="qmark">?<span class="tip">点生成器按钮即插入 {占位符} 到 content（空 content 自动生成骨架）；占位符也可直接写进 params（如 {"input": "{g1}"}）；参数可改；seed 留空 = 每次执行取新随机值，填了可复现。生成器 = 引擎内置白名单，前端只做低代码封装</span></span></label>
+      <div class="ns-vars" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button type="button" class="btn sm ns-add-var" data-kind="garbled">＋ 乱码</button>
+        <button type="button" class="btn sm ns-add-var" data-kind="random_string">＋ 定长字符串</button>
+        <button type="button" class="btn sm ns-add-var" data-kind="random_number">＋ 随机数字</button>
+        <button type="button" class="btn sm ns-add-var" data-kind="random_choice">＋ 随机选项</button>
+        <button type="button" class="btn sm ns-add-var" data-kind="haystack">＋ 长文埋码</button>
+      </div></div>
+    <div class="field"><label>常用参数<span class="qmark">?<span class="tip">留空 = 用官方缺省。值不做前端拦截——非法值（如 temperature=3）原样透传，配合 http_status 断言即参数校验用例；key 拼错同理透传</span></span></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">temperature</span><input type="number" step="any" class="in ns-temp" placeholder="1.0（0–2）"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">top_p</span><input type="number" step="any" class="in ns-topp" placeholder="1.0（0–1）"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">max_tokens</span><input type="number" step="1" class="in ns-maxt" placeholder="缺省 8K/64K"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stream</span><select class="in ns-stream" style="width:100%"><option value="">缺省</option><option value="false">false</option><option value="true">true</option></select></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stop</span><input class="in ns-stop" placeholder="多个逗号分隔"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">resp_format</span><select class="in ns-respf" style="width:100%"><option value="">缺省</option><option>text</option><option>json_object</option></select></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">thinking</span><select class="in ns-think" style="width:100%"><option value="">缺省(high)</option><option value="disabled">关</option><option value="low">开·low</option><option value="high">开·high</option><option value="max">开·max</option><option value="none">开·none</option></select></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stream_opt</span><select class="in ns-sopt" style="width:100%"><option value="">缺省</option><option value="include_usage">include_usage</option></select></div>
+        <div style="display:grid;grid-template-columns:80px auto 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">tool_choice</span><select class="in ns-tchoice" style="width:auto"><option value="">缺省</option><option>none</option><option>auto</option><option>required</option><option value="named">具名…</option></select><input class="in ns-tcname" placeholder="函数名" style="display:none"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">logprobs</span><select class="in ns-logprobs" style="width:100%"><option value="">缺省</option><option value="false">false</option><option value="true">true</option></select></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">top_logprobs</span><input type="number" step="1" class="in ns-tlp" placeholder="0–20"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">user_id</span><input class="in ns-uid" placeholder="字母/数字/-_，≤512"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">freq_penalty</span><input type="number" step="any" class="in ns-fp" placeholder="已废弃·透传"></div>
+        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">pres_penalty</span><input type="number" step="any" class="in ns-pp" placeholder="已废弃·透传"></div>
+      </div></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">params JSON（高级 · 其余字段 / 键与结构破坏场景）
+      <label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" class="ns-rawbody">原始报文发送</label>
+      <span class="qmark">?<span class="tip">合法 JSON：与常用参数合并（此处同名键覆盖常用值），乱写 key 会原样透传测端点行为。勾选「原始报文发送」：框内文本经 _raw_body 原样作为请求体——构造非法 JSON/结构破坏的 400 场景，内容无需合法</span></span></label>
+      <textarea class="in ns-params" rows="2" placeholder='{"unknown_key": 1, "logprobs": true}；结构破坏场景勾「原始报文发送」后随意写'></textarea></div>
+    <div class="field" style="margin-bottom:0"><label>断言（评估方法 · 可多选）<span class="qmark">?<span class="tip">选类型即展开参数行：填目标/关系/期望值（如 http_status == 200）；每行至少 1 个断言（harness 必填）。键族 = 引擎白名单，前端只做结构化编辑，不造指标</span></span></label>
+      <div class="chips" style="margin:0">
+        <span class="chip" data-multi>http_status</span><span class="chip" data-multi>JSON 字段</span>
+        <span class="chip" data-multi>包含关键词</span><span class="chip" data-multi>不含关键词</span>
+        <span class="chip" data-multi>非空</span><span class="chip" data-multi>no_leak 无泄漏</span>
+        <span class="chip" data-multi>finish_reason</span><span class="chip" data-multi>sse_done</span><span class="chip" data-multi>最少块数</span>
+        <span class="chip" data-multi>指定工具被调用</span><span class="chip" data-multi>工具参数包含</span><span class="chip" data-multi>不发起工具调用</span>
+        <span class="chip" data-multi>无乱码</span><span class="chip" data-multi>无复读</span><span class="chip" data-multi>错误体字段</span>
+      </div>
+      <div class="ns-asserts" style="margin-top:8px;display:flex;flex-direction:column;gap:6px"></div></div>
+    <div style="margin-top:8px"><button type="button" class="btn sm ns-preview-btn">预览完整请求体 ▾</button>
+    <div class="ns-preview" hidden style="margin:8px 0 0;padding:10px;border:1px solid var(--line);border-radius:8px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+        <span class="hint" style="margin:0">目标模型</span>
+        <select class="in ns-pv-model" style="width:auto;max-width:240px"></select>
+        <button type="button" class="btn sm ns-pv-copy" data-what="json">复制 JSON</button>
+        <button type="button" class="btn sm ns-pv-copy" data-what="curl">复制 curl</button>
+        <span class="hint" style="margin:0">占位符执行时替换 · curl 密钥为环境变量占位</span>
+      </div>
+      <pre class="ns-pv-body" style="margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
+      <pre class="ns-pv-curl" style="margin:0;padding:10px;border:1px dashed var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:160px;overflow:auto;color:var(--tx2)"></pre>
+    </div></div>
+  </div>`;
+}
+let nsPvPresets = null;   // 模型预制缓存（/common/models，跨行共享）
+async function nsPresets() {
+  if (nsPvPresets && nsPvPresets.length) return nsPvPresets;   // 空结果不缓存：后端重启窗口期失败可重试
+  try {
+    const r = await fetch("/api/v1/common/models");
+    const items = ((await r.json()).items) || [];
+    if (items.length) nsPvPresets = items;
+    return items;
+  } catch (e) { return []; }
+}
+function nsCollectParams(card, label) {
+  // 常用参数控件 → base；JSON 框合法则覆盖合并（JSON 键优先）；原始模式返回 {raw}
+  const base = {};
+  const numOf = (cls, name) => {
+    const v = card.querySelector(cls)?.value.trim() ?? "";
+    if (v === "") return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new Error(`${label}：${name} 须为数字`);
+    return n;
+  };
+  const temp = numOf(".ns-temp", "temperature");
+  if (temp !== undefined) base.temperature = temp;
+  const topp = numOf(".ns-topp", "top_p");
+  if (topp !== undefined) base.top_p = topp;
+  const maxt = numOf(".ns-maxt", "max_tokens");
+  if (maxt !== undefined) {
+    if (!Number.isInteger(maxt)) throw new Error(`${label}：max_tokens 须为整数`);
+    base.max_tokens = maxt;
+  }
+  const stopRaw = card.querySelector(".ns-stop")?.value.trim() ?? "";
+  if (stopRaw) {
+    const parts = stopRaw.split("，").join(",").split(",").map(s => s.trim()).filter(Boolean);
+    base.stop = parts.length === 1 ? parts[0] : parts;
+  }
+  const streamV = card.querySelector(".ns-stream")?.value ?? "";
+  if (streamV !== "") base.stream = streamV === "true";
+  const respf = card.querySelector(".ns-respf")?.value ?? "";
+  if (respf) base.response_format = { type: respf };
+  const think = card.querySelector(".ns-think")?.value ?? "";
+  if (think === "disabled") base.thinking = { type: "disabled" };
+  else if (think) base.thinking = { type: "enabled", reasoning_effort: think };
+  const sopt = card.querySelector(".ns-sopt")?.value ?? "";
+  if (sopt) base.stream_options = { include_usage: true };
+  const tc = card.querySelector(".ns-tchoice")?.value ?? "";
+  if (tc === "named") {
+    const n = card.querySelector(".ns-tcname")?.value.trim() ?? "";
+    if (!n) throw new Error(`${label}：具名 tool_choice 须填函数名`);
+    base.tool_choice = { type: "function", function: { name: n } };
+  } else if (tc) base.tool_choice = tc;
+  const lp = card.querySelector(".ns-logprobs")?.value ?? "";
+  if (lp !== "") base.logprobs = lp === "true";
+  const tlp = numOf(".ns-tlp", "top_logprobs");
+  if (tlp !== undefined) {
+    if (!Number.isInteger(tlp)) throw new Error(`${label}：top_logprobs 须为整数`);
+    base.top_logprobs = tlp;
+  }
+  const uid = card.querySelector(".ns-uid")?.value.trim() ?? "";
+  if (uid) base.user_id = uid;
+  const fp = numOf(".ns-fp", "frequency_penalty");
+  if (fp !== undefined) base.frequency_penalty = fp;
+  const pp = numOf(".ns-pp", "presence_penalty");
+  if (pp !== undefined) base.presence_penalty = pp;
+  if (card.querySelector(".ns-rawbody")?.checked) {
+    const raw = card.querySelector(".ns-params").value;
+    if (!raw.trim()) throw new Error(`${label}：原始报文模式须填写报文文本`);
+    return { raw };
+  }
+  const rawText = card.querySelector(".ns-params").value.trim();
+  if (rawText) {
+    let extra;
+    try { extra = JSON.parse(rawText); }
+    catch (e) { throw new Error(`${label}：params JSON 解析失败（结构破坏场景请勾「原始报文发送」）：${e.message}`); }
+    if (!extra || Array.isArray(extra) || typeof extra !== "object") {
+      throw new Error(`${label}：params JSON 须为对象`);
+    }
+    Object.assign(base, extra);   // JSON 键覆盖常用值
+  }
+  return { base };
+}
+function nsBuildBody(card, model) {
+  const parse = (sel, fb) => {
+    try { const v = card.querySelector(sel)?.value.trim(); return v ? JSON.parse(v) : fb; }
+    catch (e) { return { __error: "JSON 解析失败：" + e.message }; }
+  };
+  const carrier = card.querySelector(".ns-carrier")?.value || "messages";
+  const conv = carrier === "none" ? [] : parse("textarea.in", []);
+  if (conv && conv.__error) return conv;
+  const body = { model };
+  if (carrier !== "none") body[carrier] = conv;
+  let collected;
+  try { collected = nsCollectParams(card, "预览"); }
+  catch (e) { return { __error: e.message }; }
+  if (collected.raw !== undefined) {
+    body.__raw_body = collected.raw;   // 原始报文模式：原样展示（执行时经 _raw_body 直发）
+    return body;
+  }
+  Object.assign(body, collected.base);
+  const tools = parse(".ns-tools", null);
+  if (tools) { if (tools.__error) return tools; body.tools = tools; }
+  return body;
+}
+async function nsRenderPreview(card) {
+  const box = card.querySelector(".ns-preview");
+  if (!box.hidden) { box.hidden = true; return; }
+  const presets = await nsPresets();
+  box.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+      <span class="hint" style="margin:0">目标模型</span>
+      <select class="in ns-pv-model" style="width:auto;max-width:240px">${
+        presets.length ? presets.map(p => `<option value="${p.name}">${p.name} · ${p.model}</option>`).join("")
+        : '<option value="">（无预制模型）</option>'}</select>
+      <button type="button" class="btn sm ns-pv-copy" data-what="json">复制 JSON</button>
+      <button type="button" class="btn sm ns-pv-copy" data-what="curl">复制 curl</button>
+      <span class="hint" style="margin:0">占位符执行时替换 · curl 密钥为环境变量占位</span>
+    </div>
+    <pre class="ns-pv-body" style="margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
+    <pre class="ns-pv-curl" style="margin:0;padding:10px;border:1px dashed var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:160px;overflow:auto;color:var(--tx2)"></pre>`;
+  box.hidden = false;
+  const render = () => {
+    const BQ = String.fromCharCode(92), NL = String.fromCharCode(10);   // 避免多层转义
+    const name = box.querySelector(".ns-pv-model").value;
+    const preset = presets.find(p => p.name === name);
+    const body = nsBuildBody(card, preset ? preset.model : "target-model");
+    const json = JSON.stringify(body, null, 2);
+    box.querySelector(".ns-pv-body").textContent = json;
+    const base = (preset?.base_url || "https://target.example/v1").replace(/[/]+$/, "");
+    const url = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
+    const auth = preset?.api_key_env
+      ? "Authorization: Bearer ${" + preset.api_key_env + "}"   // shell 双引号内展开，粘贴即用
+      : "Authorization: Bearer your-api-key";
+    const curl = [
+      `curl -X POST "${url}"`,
+      `  -H "Content-Type: application/json"`,
+      `  -H "${auth}"`,
+      `  -d '${json.split("'").join(BQ + "'")}'`,
+    ].join(" " + BQ + NL);
+    box.querySelector(".ns-pv-curl").textContent = curl;
+    box.dataset.json = json;
+    box.dataset.curl = curl;
+  };
+  render();
+  box.querySelector(".ns-pv-model").addEventListener("change", render);
+  box.querySelectorAll(".ns-pv-copy").forEach(b => b.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(b.dataset.what === "curl" ? box.dataset.curl : box.dataset.json);
+      const orig = b.textContent;
+      b.textContent = "已复制 ✓";
+      setTimeout(() => { b.textContent = orig; }, 1200);
+    } catch (e) { b.textContent = "复制失败"; }
+  }));
+}
+const NS_VAR_KINDS = {
+  garbled: { label: "乱码", fields: ["length"], dflt: { length: 64 } },
+  random_string: { label: "定长字符串", fields: ["length", "charset"], dflt: { length: 32, charset: "alnum" } },
+  random_number: { label: "随机数字", fields: ["min", "max"], dflt: { min: 0, max: 100 } },
+  random_choice: { label: "随机选项", fields: ["options"], dflt: { options: "" } },
+  haystack: { label: "长文埋码", fields: ["chars", "key_at", "key"], dflt: { chars: 16000, key_at: 0.5, key: "" } },
+};
+function nsVarRowHtml(name, kind) {
+  const meta = NS_VAR_KINDS[kind];
+  const inp = (f, w) => `<input class="in vp-${f}" style="width:${w}px" placeholder="${f}" value="${meta.dflt[f] ?? ""}">`;
+  let fields = "";
+  for (const f of meta.fields) {
+    if (f === "charset") fields += `字符集 <select class="in vp-charset" style="width:auto"><option>alnum</option><option>letters</option><option>digits</option><option>hex</option></select> `;
+    else if (f === "length") fields += `长度 ${inp("length", 70)} `;
+    else if (f === "min") fields += `min ${inp("min", 60)} `;
+    else if (f === "max") fields += `max ${inp("max", 60)} `;
+    else if (f === "options") fields += `候选（逗号分隔）${inp("options", 170)} `;
+    else if (f === "chars") fields += `字符量 ${inp("chars", 80)} `;
+    else if (f === "key_at") fields += `埋码位置 ${inp("key_at", 60)} `;
+    else if (f === "key") fields += `埋码句 <input class="in vp-key" style="width:130px" placeholder="取回关键词"> `;
+  }
+  const seed = kind === "haystack" ? "" : ` seed<input class="in vp-seed" style="width:60px" placeholder="随机">`;
+  return `<div class="ns-var" data-name="${name}" data-kind="${kind}" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;border:1px solid var(--line);border-radius:8px">
+    <span class="tag mono">{${name}}</span><span class="tag">${meta.label}</span>${fields}${seed}
+    <button type="button" class="btn sm ns-var-del" style="margin-left:auto">移除</button></div>`;
+}
+function nsInsertAtCursor(ta, text) {
+  const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s;
+  ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + text.length;
+}
+function nsAddVar(card, kind) {
+  const box = card.querySelector(".ns-vars");
+  const used = new Set([...box.querySelectorAll(".ns-var")].map(v => v.dataset.name));
+  let n = 1;
+  while (used.has("g" + n)) n += 1;
+  const name = "g" + n;
+  box.insertAdjacentHTML("beforeend", nsVarRowHtml(name, kind));
+  const ta = card.querySelector("textarea");
+  if (!ta.value.trim()) {
+    const ph = "{" + name + "}";
+    ta.value = `[{"role":"user","content":"${ph}"}]`;
+    const at = ta.value.indexOf(ph) + ph.length;   // 光标落位 content 内占位符之后，后续插入不破坏 JSON
+    ta.selectionStart = ta.selectionEnd = at;
+  } else {
+    nsInsertAtCursor(ta, "{" + name + "}");   // 占位符进光标处
+  }
+}
+function nsAssertHtml(t) {
+  if (t === "http_status") return `<select class="in as-rel" style="width:auto"><option value="eq">==</option><option value="neq">!=</option><option value="gte">≥</option><option value="lte">≤</option><option value="in">∈</option></select><input class="in as-val" style="width:120px" placeholder="200（∈ 逗号分隔）">`;
+  if (t === "JSON 字段") return `路径<input class="in as-path" style="width:170px" placeholder="usage.total_tokens">
+    <select class="in as-rel" style="width:auto"><option value="eq">==</option><option value="neq">!=</option><option value="in">∈</option><option value="contains">包含(like)</option><option value="len">长度</option><option value="type">类型</option></select>
+    <input class="in as-val" style="width:150px" placeholder="期望值（∈ 逗号分隔）">`;
+  if (t === "包含关键词") return `<input class="in as-val" style="width:190px" placeholder="关键词"><label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" class="as-icb">忽略大小写</label>`;
+  if (t === "不含关键词") return `<input class="in as-val" style="width:190px" placeholder="不得出现的关键词">`;
+  if (t === "finish_reason") return `<span class="mono dim">=</span><select class="in as-val" style="width:auto"><option>stop</option><option>length</option><option>tool_calls</option><option>content_filter</option></select>`;
+  if (t === "最少块数") return `<span class="mono dim">≥</span><input class="in as-val" style="width:90px" placeholder="2">`;
+  if (t === "指定工具被调用") return `<span class="mono dim">=</span><input class="in as-val" style="width:140px" placeholder="函数名">`;
+  if (t === "工具参数包含") return `<input class="in as-val" style="width:190px" placeholder="参数中须包含的文本">`;
+  if (t === "错误体字段") return `路径<input class="in as-path" style="width:140px" placeholder="error.message">
+    <select class="in as-rel" style="width:auto"><option value="eq">==</option><option value="contains">包含</option><option value="len">长度</option><option value="type">类型</option><option value="nonempty">非空</option></select>
+    <input class="in as-val" style="width:120px" placeholder="期望值（非空可留空）">`;
+  return `<span class="hint">无需参数（命中即过）</span>`;
+}
+function renderNsAsserts(card) {
+  const box = card.querySelector(".ns-asserts");
+  if (!box) return;
+  const keep = {};   // 重绘前收割已填值（勾选新断言不能抹掉已填参数）
+  box.querySelectorAll(":scope > div").forEach(div => {
+    const tag = div.querySelector(".tag")?.textContent.trim();
+    if (!tag) return;
+    keep[tag] = {
+      val: div.querySelector(".as-val")?.value ?? null,
+      path: div.querySelector(".as-path")?.value ?? null,
+      rel: div.querySelector(".as-rel")?.value ?? null,
+      ic: div.querySelector(".as-icb")?.checked ?? null,
+    };
+  });
+  const on = [...card.querySelectorAll(".chips .chip.on")];
+  box.innerHTML = on.length
+    ? on.map(ch => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="tag mono">${ch.textContent.trim()}</span>${nsAssertHtml(ch.textContent.trim())}</div>`).join("")
+    : `<div class="hint">勾选断言类型后在此填参数（目标 / 关系 / 期望值）——每行至少 1 个断言才能保存</div>`;
+  [...box.querySelectorAll(":scope > div")].forEach(div => {
+    const k = keep[div.querySelector(".tag")?.textContent.trim()];
+    if (!k) return;
+    const v = div.querySelector(".as-val"); if (v && k.val !== null) v.value = k.val;
+    const p = div.querySelector(".as-path"); if (p && k.path !== null) p.value = k.path;
+    const r = div.querySelector(".as-rel"); if (r && k.rel !== null) r.value = k.rel;
+    const icb = div.querySelector(".as-icb"); if (icb && k.ic !== null) icb.checked = k.ic;
+  });
+}
+function nsRenumber() {
+  document.querySelectorAll("#nsRows .card .seg-title").forEach((t, i) => {
+    t.textContent = t.textContent.replace(/^行\s*\d+/, `行 ${i + 1}`);
+  });
+  nsRowN = document.querySelectorAll("#nsRows .card").length;
+}
+function nsReset() {   // 每次打开都是干净态：1 空行，不残留静态稿演示样例
+  const ns = document.getElementById("newScriptDrawer");
+  ns.querySelectorAll(".drawer-body input.in").forEach(i => { i.value = ""; });
+  ns.querySelectorAll(".drawer-body textarea.in").forEach(t => { t.value = ""; });
+  ns.querySelectorAll(".drawer-body input[type=checkbox]").forEach(cb => { cb.checked = false; });
+  ns.querySelectorAll(".drawer-body .chip.on").forEach(c => c.classList.remove("on"));
+  const sel = ns.querySelector(".drawer-body select.in");
+  if (sel) sel.selectedIndex = 0;
+  const rows = document.getElementById("nsRows");
+  rows.innerHTML = nsRowHtml(1);
+  bindChips(rows);
+  renderNsAsserts(rows.firstElementChild);
+}
+document.getElementById("nsRows").innerHTML = nsRowHtml(1);   // 初始态；DOMContentLoaded 的全局 bindChips 覆盖绑定
+renderNsAsserts(document.querySelector("#nsRows .card"));
+document.getElementById("nsRows").addEventListener("change", e => {
+  const carrierSel = e.target.closest(".ns-carrier");
+  if (carrierSel) {
+    const ta = carrierSel.closest(".card").querySelector("textarea");
+    ta.style.display = carrierSel.value === "none" ? "none" : "";
+    if (carrierSel.value === "none") ta.value = "";
+    return;
+  }
+  const tc = e.target.closest(".ns-tchoice");
+  if (tc) {
+    const nameIn = tc.closest(".card").querySelector(".ns-tcname");
+    nameIn.style.display = tc.value === "named" ? "" : "none";
+    if (tc.value !== "named") nameIn.value = "";
+  }
+});
+renderNsAsserts(document.querySelector("#nsRows .card"));
+document.getElementById("nsRowAdd").addEventListener("click", () => {
+  const rows = document.getElementById("nsRows");
+  rows.insertAdjacentHTML("beforeend", nsRowHtml(++nsRowN));
+  bindChips(rows.lastElementChild);
+  renderNsAsserts(rows.lastElementChild);
+});
+document.getElementById("nsRows").addEventListener("click", e => {
+  const addBtn = e.target.closest(".ns-add-var");
+  if (addBtn) { nsAddVar(addBtn.closest(".card"), addBtn.dataset.kind); return; }
+  const delVar = e.target.closest(".ns-var-del");
+  if (delVar) {
+    const v = delVar.closest(".ns-var"), card = delVar.closest(".card");
+    card.querySelector("textarea").value = card.querySelector("textarea").value.replaceAll("{" + v.dataset.name + "}", "");
+    v.remove();
+    return;
+  }
+  const pv = e.target.closest(".ns-preview-btn");
+  if (pv) { nsRenderPreview(pv.closest(".card")); return; }
+  const copyBtn = e.target.closest(".ns-row-copy");
+  if (copyBtn) {
+    const src = copyBtn.closest(".card");
+    const clone = src.cloneNode(true);
+    // cloneNode 只拷属性——用户输入的当前值（dirty value）必须逐控件显式拷贝
+    const srcCtl = [...src.querySelectorAll("input, select, textarea")];
+    const dstCtl = [...clone.querySelectorAll("input, select, textarea")];
+    srcCtl.forEach((el, i) => {
+      const d = dstCtl[i];
+      if (!d) return;
+      if (el.type === "checkbox") d.checked = el.checked;
+      else d.value = el.value;
+    });
+    src.insertAdjacentElement("afterend", clone);
+    bindChips(clone);
+    nsRenumber();
+    if (typeof fapiToast === "function") fapiToast("已复制一行——改参数即可成新变体");
+    return;
+  }
+
+  const chip = e.target.closest(".chip[data-multi]");
+  if (chip) { renderNsAsserts(chip.closest(".card")); return; }   // 勾选变化 → 重绘参数行
+  if (!e.target.closest(".ns-row-del")) return;
+  if (document.querySelectorAll("#nsRows .card").length <= 1) {
+    if (typeof fapiToast === "function") fapiToast("至少保留 1 行数据（数据行 1..N）", true);
+    return;
+  }
+  e.target.closest(".card").remove();
+  nsRenumber();
+});
+/* 从 jsonl 导入行：解析（带行号报错）→ 全部行卡重建回填（可审阅后再保存） */
+document.getElementById("nsJsonlBtn").addEventListener("click", () => {
+  const area = document.getElementById("nsJsonlArea");
+  area.hidden = !area.hidden;
+});
+document.getElementById("nsJsonlParse").addEventListener("click", () => {
+  const text = document.getElementById("nsJsonlText").value;
+  const rows = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const s = lines[i].trim();
+    if (!s) continue;
+    try { rows.push(JSON.parse(s)); }
+    catch (e) {
+      if (typeof fapiToast === "function") fapiToast(`第 ${i + 1} 行解析失败：${e.message}`, true);
+      return;
+    }
+    if (!rows[rows.length - 1] || typeof rows[rows.length - 1] !== "object" || Array.isArray(rows[rows.length - 1])) {
+      if (typeof fapiToast === "function") fapiToast(`第 ${i + 1} 行须为 JSON 对象`, true);
+      return;
+    }
+  }
+  if (!rows.length) {
+    if (typeof fapiToast === "function") fapiToast("没有可导入的行（每行一个 JSON 对象）", true);
+    return;
+  }
+  const rowsBox = document.getElementById("nsRows");
+  rowsBox.innerHTML = "";
+  nsRowN = 0;
+  for (const row of rows) {
+    nsRowN += 1;
+    rowsBox.insertAdjacentHTML("beforeend", nsRowHtml(nsRowN));
+    const card = rowsBox.lastElementChild;
+    bindChips(card);
+    nsFillRowFromData(card, row);
+  }
+  document.getElementById("nsJsonlArea").hidden = true;
+  document.getElementById("nsJsonlText").value = "";
+  if (typeof fapiToast === "function") fapiToast(`已解析 ${rows.length} 行——审阅无误后点「保存」`);
+});
+
+/* 通用「＋ 新建脚本」入口（v1.js 只负责 unhide）随后重置为干净态 */
+document.querySelectorAll('[data-open-drawer="newScriptDrawer"]').forEach(b =>
+  b.addEventListener("click", () => setTimeout(() => { if (typeof nsReset === "function") nsReset(); }, 0)));
+
+/* ---------- 版本结果库（任务终态自动归档 · 大屏数据源） ---------- */
+const VRESULTS = [
+  ["v1.3.0-rc", "DeepSeek-V3", "ft-full · 全量回归", "9 维度 · 64 例", 95.3, "+1.6pp vs v1.2.0", "#e8831a2c", "09-25 10:12"],
+  ["v1.3.0-rc", "qwen2.5-72b", "ft-full · 全量回归", "9 维度 · 64 例", 92.2, "+0.5pp vs v1.2.0", "#f19c22ab", "09-25 10:40"],
+  ["v1.2.0", "DeepSeek-V3", "ft-full · 全量回归", "9 维度 · 64 例", 93.8, "基线", "#18c7b2e9", "09-22 02:00"],
+  ["v1.2.0", "qwen2.5-72b", "ft-full · 全量回归", "9 维度 · 64 例", 91.7, "基线", "#77aa12c4", "09-22 02:10"],
+  ["v1.1.0", "DeepSeek-V3", "ft-full · 全量回归", "9 维度 · 64 例", 89.1, "+2.9pp vs v1.0", "#2299ee10", "09-08 02:00"],
+  ["v1.1.0", "qwen2.5-72b", "ft-smoke · 冒烟", "4 维度 · 14 例", 100.0, "—", "#31cc77ab", "09-08 09:00"],
+];
+document.getElementById("vrTbl").innerHTML = `
+  <thead><tr><th>版本</th><th>模型</th><th>来源脚本</th><th>规模</th><th>总体通过率</th><th>较上一版本</th><th>来源任务</th><th>归档时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${VRESULTS.map(v => `<tr>
+    <td class="mono">${v[0]}</td><td class="dim">${v[1]}</td>
+    <td class="dim" style="white-space:normal">${v[2]}</td><td class="dim">${v[3]}</td>
+    <td>${passCell(v[4])}</td>
+    <td class="num mono" style="color:${v[5].startsWith("+") ? "var(--ok)" : v[5].startsWith("▼") || v[5].startsWith("-") ? "var(--bad)" : "var(--tx3)"}">${v[5]}</td>
+    <td class="mono dim">${v[6]}</td><td class="dim">${v[7]}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm" onclick="showPage('board')">大屏</button><button class="btn sm">明细</button></td></tr>`).join("")}</tbody>`;
+
+/* ---------- 质量大屏：维度 × 版本矩阵 + 劣化结论 ---------- */
+const FT_VER = ["v1.1.0", "v1.2.0", "v1.3.0-rc"];
+const BOARD = [
+  ["basic_chat 基础对话", 4, [100, 100, 100]],
+  ["structured_output 结构化输出", 3, [100, 100, 100]],
+  ["tool_calling 工具调用 FC", 5, [80, 80, 100]],
+  ["long_context 长上下文", 2, [100, 100, 100]],
+  ["api_params API 兼容·请求侧", 22, [86.4, 90.9, 95.5]],
+  ["api_stream API 兼容·流式", 4, [75, 100, 100]],
+  ["api_limits API 兼容·输出侧", 7, [85.7, 85.7, 100]],
+  ["api_shape API 兼容·响应体", 5, [100, 100, 80]],
+  ["agent_tasks Agent 任务", 12, [91.7, 100, 91.7]],
+];
+document.getElementById("boardTbl").innerHTML = `
+  <thead><tr><th>评估维度（场景）</th><th>N</th><th>${FT_VER[0]}</th><th>${FT_VER[1]}（基线）</th><th>${FT_VER[2]}</th><th>较基线 Δ</th><th>判定</th></tr></thead>
+  <tbody>${BOARD.map(b => {
+    const d = b[2][2] - b[2][1], ok = d >= 0;
+    return `<tr><td class="mono" style="font-size:12px">${b[0]}</td><td class="num dim">${b[1]}</td>
+    <td>${passCell(b[2][0])}</td><td>${passCell(b[2][1])}</td><td>${passCell(b[2][2])}</td>
+    <td class="num mono" style="color:${ok ? "var(--ok)" : "var(--bad)"}">${d > 0 ? "▲ +" : d < 0 ? "▼ " : "± "}${d.toFixed(1)}pp</td>
+    <td><span class="badge ${ok ? "passed" : "failed"}"><i></i>${ok ? "达标" : "劣化"}</span></td></tr>`;
+  }).join("")}</tbody>`;
+document.getElementById("boardVerdict").innerHTML = `
+  <div style="border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);border-radius:10px;padding:10px 14px">
+    <div class="mono" style="font-size:12.5px;color:var(--bad)">✕ API 兼容·响应体 80.0%（▼ 20.0pp · 4/5）</div>
+    <div class="dim" style="font-size:12.5px;margin-top:4px">openai_schema 结构用例回归 —— 建议阻断发布，回溯 v1.3.0-rc 变更</div></div>
+  <div style="border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);border-radius:10px;padding:10px 14px">
+    <div class="mono" style="font-size:12.5px;color:var(--bad)">✕ Agent 任务 91.7%（▼ 8.3pp · 11/12）</div>
+    <div class="dim" style="font-size:12.5px;margin-top:4px">multi_turn_reask 多轮补问回归</div></div>
+  <div style="border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;padding:10px 14px">
+    <div class="mono" style="font-size:12.5px;color:var(--ok)">✓ 总体 95.3%（▲ +1.6pp vs v1.2.0）</div>
+    <div class="dim" style="font-size:12.5px;margin-top:4px">工具调用 FC +20.0pp / API 兼容·输出侧 +14.3pp / 请求侧 +4.6pp —— 参数校验专项修复生效</div></div>
+  <div class="dim" style="font-size:12.5px">建议：响应体与 Agent 回归修复后，重跑「ft-api · API 契约回归」与「ft-agent · 工具调用专项」脚本复验。</div>`;
+
+window.chartFtTrend = t => { const c = t.charts; return {
+  grid: { left: 6, right: 14, top: 28, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 }, valueFormatter: v => v + "%" },
+  legend: { top: 0, textStyle: { color: c.axis, fontSize: 11 } },
+  xAxis: { type: "category", data: FT_VER, ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis, fontWeight: 600 } },
+  yAxis: { type: "value", min: 60, max: 100, ...baseAxis(c), axisLabel: { color: c.axis, formatter: "{value}%" } },
+  series: [
+    { name: "工具调用 FC", type: "line", symbol: "circle", symbolSize: 7, lineStyle: { width: 2.4 }, data: [80, 80, 100], itemStyle: { color: c.radar[0] } },
+    { name: "API·请求侧", type: "line", symbol: "circle", symbolSize: 7, lineStyle: { width: 2 }, data: [86.4, 90.9, 95.5], itemStyle: { color: c.radar[1] } },
+    { name: "API·输出侧", type: "line", symbol: "circle", symbolSize: 7, lineStyle: { width: 2 }, data: [85.7, 85.7, 100], itemStyle: { color: c.radar[2] } },
+    { name: "API·响应体", type: "line", symbol: "circle", symbolSize: 7, lineStyle: { width: 2, type: [5, 4] }, data: [100, 100, 80], itemStyle: { color: c.err } },
+  ] }; };
+const FT_DIM_SHORT = ["基础对话", "结构化", "FC", "长上下文", "请求侧", "流式", "输出侧", "响应体", "Agent"];
+/* 多版本对比雷达：轴 = 评估维度，一线一版本（数据直接取自矩阵 BOARD，口径不漂移） */
+window.chartFtRadar = t => radarOption(t, FT_DIM_SHORT,
+  FT_VER.map((v, k) => ({ name: v, value: BOARD.map(b => b[2][k]) })));
+window.chartFtModel = t => { const c = t.charts; return {
+  grid: { left: 6, right: 14, top: 28, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 }, valueFormatter: v => v + "%" },
+  legend: { top: 0, textStyle: { color: c.axis, fontSize: 11 } },
+  xAxis: { type: "category", data: FT_DIM_SHORT, ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis, fontSize: 10.5, interval: 0, rotate: 28 } },
+  yAxis: { type: "value", min: 60, max: 100, ...baseAxis(c), axisLabel: { color: c.axis, formatter: "{value}%" } },
+  series: [
+    { name: "DeepSeek-V3", type: "bar", barWidth: 9, itemStyle: { color: c.radar[0], borderRadius: [3, 3, 0, 0] }, data: [100, 100, 100, 100, 95.5, 100, 100, 80, 91.7] },
+    { name: "qwen2.5-72b", type: "bar", barWidth: 9, itemStyle: { color: c.radar[1], borderRadius: [3, 3, 0, 0] }, data: [100, 100, 80, 100, 90.9, 100, 85.7, 80, 83.3] },
+  ] }; };
+
+/* 子用例编辑器已升级为「从 0 创建脚本」抽屉（newScriptDrawer）：行卡内断言 chips + 断言参数，
+   评估方法为引擎白名单键族的结构化编辑，前端零评估逻辑 */
+
+/* ---------- 新建评估场景：维度标签库（共享资产） ----------
+   标签库 = 后端标签注册表（§10.5，GET/POST /functional/dim-tags）：新增一次全平台复用；
+   静态稿用 localStorage 持久演示——新增的标签刷新页面后仍在库中可选 */
+const DIM_TAGS_BUILTIN = ["API 契约", "模型能力", "Agent"];
+const dimTags = () => {
+  try { return JSON.parse(localStorage.getItem("aite-dim-tags") || "null") || [...DIM_TAGS_BUILTIN]; }
+  catch (e) { return [...DIM_TAGS_BUILTIN]; }
+};
+const dimTagsSave = list => { try { localStorage.setItem("aite-dim-tags", JSON.stringify(list)); } catch (e) { /* 隐私模式等：仅会话内生效 */ } };
+let scnDimSel = dimTags()[0] || "";
+const scnDims = document.getElementById("scnDims");
+const scnDimNew = document.getElementById("scnDimNew");
+function renderScnDims() {
+  const tags = dimTags();
+  if (!tags.includes(scnDimSel)) scnDimSel = tags[0] || "";
+  scnDims.innerHTML = tags.map(t => `<span class="chip ${t === scnDimSel ? "on" : ""}" data-single data-tag="${t}">${t}</span>`).join("") +
+    `<span class="chip" id="scnDimAdd" title="新增自定义标签入库">＋ 新增标签</span>`;
+  scnDims.querySelectorAll(".chip[data-tag]").forEach(ch => ch.addEventListener("click", () => {
+    scnDimSel = ch.dataset.tag;
+    scnDims.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
+    ch.classList.add("on");
+  }));
+  document.getElementById("scnDimAdd").addEventListener("click", () => {
+    scnDimNew.hidden = false;
+    document.getElementById("scnDimName").focus();
+  });
+}
+function scnDimConfirm() {
+  const input = document.getElementById("scnDimName");
+  const name = input.value.trim();
+  if (!name) return;
+  const tags = dimTags();
+  if (!tags.includes(name)) { tags.push(name); dimTagsSave(tags); }   // 入库：一次新增，所有场景复用
+  scnDimSel = name;
+  input.value = "";
+  scnDimNew.hidden = true;
+  renderScnDims();
+}
+document.getElementById("scnDimOk").addEventListener("click", scnDimConfirm);
+document.getElementById("scnDimName").addEventListener("keydown", e => { if (e.key === "Enter") scnDimConfirm(); });
+renderScnDims();
+</script>
+<script src="api32.js?v=1"></script>
+</body>
+</html>

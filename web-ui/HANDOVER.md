@@ -1,8 +1,72 @@
 # aite 前端 V1 静态稿 · 交接文档（2026-09-29/30 会话 → 下一会话）
 
+> ⚠️ **2026-10-24 会话交接——精度域 + agent 测试全链路实装 + 全局版本管理**（下一会话必读本段）：
+>
+> **本次完成了精度域（含 agent 评测）后端 + 前端原地对接 + 测试，以及全局版本管理（公共）**，
+> 全量 **720 passed + 3 skipped**，四道门禁全绿。
+>
+> **启动方式**：`aite serve --port 8300`（⚠️ 后端模块有改动，旧进程须重启才有 /accuracy/scripts
+> 与 /versions；新表 model_version 由 create_all 自动建）+ `cd web-ui\mockups && python serve.py 8765`
+> → 外部浏览器开 **accuracy2.html**（精度，LIVE 徽标=真后端）/ **common2.html**（模型+版本+密钥管理）。
+>
+> **精度/agent 数据链路（全部已实装）**：脚本库（18 个 builtin 预置 = examples/accuracy/*.yaml 扫描，
+> 含 agent_eval/swebench 等 agent 预置）→ 创建任务（从脚本发起=spec 整体复用 / 自定义六卡=suite raw
+> 组装，映射契约 TOOL-SUITE-PARAMS.md）→ POST /accuracy/tasks + run → 任务列表/详情（指标汇总表含
+> tool_call_correctness 等 agent 指标、失败样本、报告产物路径）。数据集选择器 = GET /tools/benchmarks
+> 真目录（含 gaia/xlam_fc 等 Agent 型）；模型下拉 = /common/models 预制 + DB 注册 + 自定义端点；
+> **被测版本 = 全局版本管理**（common2 模型管理页「版本管理」卡登记 → 精度创建抽屉 datalist 选择 +
+> 「＋ 新版本」就地登记，契约 V1-PLAN §10.6）。
+>
+> **本轮新增后端**：`service/accuracy_assets.py` + `routers/accuracy.py`（GET/POST/PATCH/DELETE
+> /accuracy/scripts，builtin 只读 409 / 自定义落 `data/accuracy/scripts/<id>.yaml`，保存经
+> resolve_suite 真实校验）；`SuiteConfig.version` additive 字段（被测版本标注，两引擎路径兼容）；
+> `model_version` 表 + GET/POST/DELETE `/versions`（common.py，(model,version) 唯一 409）。
+>
+> **适配层文件名（IAB 路径缓存约定）**：functional2/common2 = **api26.js**（用户侧 2026-10-24 上午
+> 已由 api24 改名 api25，本轮版本管理接入后升 api26 并删 api25）；accuracy2 = **api-acc2.js**
+> （api-acc1 已删）。改 js 内容必须换新文件名。
+>
+> **悬留**：趋势对比/人工评测两页仍为演示数据（趋势聚合 = V1-PLAN §8.6 缺口）；定时执行未实装
+> （前端显式拦截提示）；产物下载端点（§8.7）；脚本编辑 UI（后端 PATCH 已有）；功能域版本输入
+> 尚未切全局登记（沿用功能归档 datalist）。
+> 冒烟脚本 `scripts/smoke_acc_live.py`（隔离 DB 可复跑）；详见文末决策 42–43。
+>
+> ⚠️ **上一轮交接（2026-10-15/16，功能域）**：
+
+>
+> **本次会话完成了功能域全链路实装**（后端 + 前端原地对接 + 测试），全量 680→690 passed，门禁全绿。
+>
+> **后端启动**：`cd D:\Project\ai-test-framework && aite serve --port 8300`（conda 环境）
+> **前端启动**：`cd web-ui\mockups && python serve.py 8765`
+> **外部浏览器打开**：`http://127.0.0.1:8765/v1/functional2.html`
+> 左下角徽标 LIVE=真后端数据 / MOCK=假数据回退。
+>
+> **功能域数据链路（全部已实装）**：
+> 评估场景（9 个内置）→ 脚本（用例原子）→ 任务发起 → 用例级结果落库 → 版本归档 → 质量大屏
+>
+> **用户最后指示**：「把当前的评估场景和脚本都删掉，我要从头开始构建」——
+> **✅ 已于 2026-10-16 凌晨会话执行完毕**：`data/functional/scenarios/` 用户根本不存在
+> （= 已空，无用户自建场景/脚本/scripts.json）；`aite.db` 单事务清除 functional 域
+> 测试数据 208 行（functional_task 15 / version_result 3 / functional run 30
+> [含 9 月初 19 条早期 run，engine=pytest 口径权威圈定] / 套件 13 / case 21 /
+> case_result 21 / metric_summary 84 / metric_result 21；dim_tag 本就 0）+
+> `reports/tool/pytest/` 报告产物目录。**备份 = 项目根 `aite.db.bak-20261016-0007`**
+> （已 gitignore，确认无误后可删）。剩余 178 run 全为精度/性能/swebench 域，未动；
+> 9 个 builtin 场景为框架资产照常可见；`data/datasets/functional/mini-set` 是数据集
+> 非场景/脚本，不在指示范围，保留（用户可自行在 UI 删）。活后端 8300 实测：任务
+> 列表/版本结果库已空，无需重启。**用户现在可从 UI 从头建档**。
+>
+> **待定设计项**：模型双注册表（common.yaml 预制 vs models 表网关别名）统一方案。
+>
+> 详见文末决策 20–22 + roadmap 续三~续七。
+
 > 新会话开场必读顺序：本文档 → `web-ui/V1-PLAN.md` → `CLAUDE.md`（项目铁律）→
 > `docs/roadmap.md`（进度记录最后 5 条）。
+> **精度创建表单要动的话，先读 `web-ui/TOOL-SUITE-PARAMS.md`（2026-10-01 新增：
+> 后端已实装的参数契约 + 六卡映射 + 缺口标注，用户指示先把参数补进静态稿）。**
 > 用户正在以"逐模块评审静态稿"的方式推进前端 V1，**尚未对接后端 API**。
+> ⚠️ 上一行"尚未对接后端 API"已过时：功能域已原地对接（api6.js 适配层 + 后端全链路），
+> 其余三域（精度/性能/可靠性）仍为静态稿。
 
 ---
 
@@ -48,22 +112,57 @@
 1. **主题**：A3 六套主题（Obsidian 默认 + GitHub/Spotify/Aurora/Stripe/AntD），
    顶栏调色板统一切换、localStorage 记忆；CSS 变量令牌方案，新主题=加一组变量。
 2. **导航**：顶部一级模块（功能/性能/精度/可靠性/公共）+ 左侧二级菜单；
-   全局搜索/通知/用户在顶栏。
-3. **精度创建任务 = 结构化表单**（全按钮、零 YAML；YAML 属后台语义，前台无套件管理页）：
-   - 任务名称（置顶，留空自动生成）
-   - ① 数据集：**可搜索、可多选列表**，搜索框内筛选——点搜索框弹两级下拉
-     （先选筛选类型→再选值），选中生成 key-value token；四组筛选：
-     归属（开源/个人/客户）、存储位置（在线/离线）、能力维度（知识问答/数学推理/
-     代码/RAG/Agent/鲁棒性/长上下文，多选 OR）、类型（LLM/Agent/RAG）；不选=模糊搜索
-   - ② 抽样条数（全量/100/300/500/自定义）+ 随机种子 seed
-   - ③ 目标模型（radio 卡片）+ **被测版本（必填）**——版本趋势横轴靠它
-   - ④ 并行数（**不设档位**，用户自填，留空=引擎默认）
-   - ⑤ 模型参数：max_tokens/temperature/top_p/top_k/thinking 独立字段（留空不传）
-     + 高级 JSON 兜底；thinking 后台按引擎翻译
-   - ⑥ 指标阈值判定：auto / 不判定 / 自定义（逐指标 ≥/≤ 规则行）
-   - ⑦ 执行方式：立即执行 / 定时执行（datetime）/ 仅创建
+   全局搜索/通知/用户在顶栏。**统一口径（2026-10-02）**：四个任务域侧栏一律
+   「任务列表 / 任务详情」开头 + 模块特有页（功能=场景目录；性能=压测大屏、
+   性能数据集；精度=趋势对比、人工评测；可靠性=故障观测）；性能与可靠性
+   本轮补了独立的「任务详情」页（perf=实时运行视图+实时曲线+日志尾部；
+   reliability=实验详情：RTO 三卡+事件时间线+探针序列+配置快照）；公共模块
+   是资源管理库不适用此口径。**任务列表统一筛选条（2026-10-05）**：
+   执行状态 chips（data-status）+ 执行人下拉 + 关键词 + 模块特有筛选（精度=套件、
+   功能=目标模型、性能=—、可靠性=故障类型），共享 helper = v1.js `bindTaskFilter`，
+   四表均已接真实前端过滤（假数据内存过滤）并带「执行人」列（perf 放任务名副行）；
+   执行人假名单：zhimeng（我）/陈曦/刘畅/王维。版本 css v=9 / js v=6。
+   **任务列表=纯列表口径（2026-10-05）**：列表页只放筛选条+表格（统计卡保留），
+   创建一律走按钮——精度/功能/性能=弹抽屉（perf 的创建表单已从列表页挪进
+   newTaskDrawer），可靠性=「＋ 新建实验」跳故障观测工作台；公共不适用。
+   **一级导航重构（2026-10-05 用户拍板）**：顶栏 = 任务管理 | 用例管理 | 数据集管理 |
+   模型管理 | 执行机管理（5 个一级）。四个任务域并入「任务管理」，左侧栏顶部加
+   **域切换下拉**（功能/精度/性能/可靠性 → 换对应 html 并保留当前 hash，页面不存在的
+   自动回落到该域首页）；原公共页升级为独立一级模块（common.html 按 hash 分组出
+   单页侧栏；后台任务归入任务管理侧栏，带域下拉）。实现全在 v1.js initShell
+   （TOP_NAV/GROUP 配置），文件不合并。**单页一级模块（用例/数据集/模型/执行机管理）
+   隐藏左侧栏、内容通栏**（body.no-side，用户反馈侧栏冗余）；后台任务保留侧栏
+   （域下拉有功能语义）。**壳层拆 buildShell（一次性脚手架）+ applyRoute（载入/
+   hashchange 都跑）**：同文件内顶栏 tab 跳转（如 用例管理→数据集管理）靠
+   hashchange 路由，不再依赖整页刷新——教训：区域替换曾误删 showPage 定义，
+   全局函数丢失表现为「tab 高亮变了但页面不切」。js v=9 / css v=11。
+3. **精度创建任务 = 结构化表单**（全按钮、零 YAML；YAML 属后台语义，前台无套件管理页）。
+   2026-09-30 按用户反馈重排：**六张分节卡（编号徽标）；每个参数一行 = 左标签 + 带圈问号
+   （悬浮显示参数说明 .qmark/.tip）+ 右侧控件**：
+   - ① 基础配置：任务名称（留空自动生成）、目标模型（**下拉框**，来自公共 · 模型管理）、
+     **Judge 裁判模型**（auto/不使用/指定，开放式答案靠它打分）、**被测版本（必填，下拉框）**
+     ——版本列表来自**公共 · 版本管理（⚠️ 公共模块需新增此页 + 契约，V1-PLAN 未含）**，
+     按所选模型过滤，旁有「＋ 新版本」登记入口；版本趋势横轴靠它
+   - ② 数据集配置：**评测数据集 = 可搜索、可多选列表（无左标签，满宽）**，搜索框内筛选——点「筛选」按钮弹两级
+     下拉（先选筛选类型→再选值），选中生成 key-value token；四组筛选：
+     归属（开源/个人/客户）、存储位置（在线/离线）、能力维度（知识问答/数学推理/代码/RAG/
+     Agent/鲁棒性/长上下文，多选 OR）、类型（LLM/Agent/RAG）；不选=模糊搜索；
+     每子集抽样条数（全量/100/300/500/自定义）、总抽样条数（合计上限，留空不限）、随机种子 seed
+   - ③ 压力配置：并发数（不设档位，留空=引擎默认）、最大运行时间（超时强杀，留空不限）
+   - ④ 扩展参数：max_tokens/temperature/top_p/top_k/thinking 一行一个（留空不传）
+     + **高级 JSON 显眼展开面板**（虚线主题色边框+「高级」徽标+箭头旋转，按钮展开）
+   - ⑤ 指标阈值判定：auto / 不判定 / 自定义（逐指标 ≥/≤ 规则行）
+   - ⑥ 执行方式：立即执行 / 定时执行（datetime）/ 仅创建
    - **创建 ≠ 执行**：创建=配置固化生成 task_id（pending），执行绑定 task_id；
      同配置再跑=retry 链新 task_id
+   - **2026-10-01 参数契约对齐**（`web-ui/TOOL-SUITE-PARAMS.md`，后端已实装）：
+     Judge 去掉伪 auto 档（默认不配置=纯规则判分，judge 类基准必须显式选，否则起跑即拒）；
+     ③ 补断点续推 resume（auto/true/false）、并发=eval_batch_size（用户标准 10）、
+     超时=timeout_s（缺省 14400s）；④ 增 seed（生成侧 generation_config.seed，与②抽样种子独立）、
+     thinking→reasoning_effort 映射、高级 JSON 支持 dataset_args（subset_list 钉科 /
+     review_timeout，含 humaneval 4s 假 0 分警告与保护键提示）；每子集抽样条数语义=每子集各 N 条；
+     总抽样条数标「预留」置灰（后端未支持）；数据集数据源对齐 GET /tools/benchmarks
+     （能力维度筛选=tags，own/loc/type=catalog 标注列后端待补）。版本 css v=8 / js v=5
 4. **运行详情 = 实时运行视图**：进度五指标（总数据条数/已运行/剩余/失败/**预计剩余
    时间**）+ 当前阶段；指标汇总运行中标注「阶段性」；**全部失败用例输入输出**
    独立卡（failures.jsonl 下载）；**抽样结果复核**（seed 随机抽样+人工复核标记）；
@@ -75,13 +174,580 @@
 6. **全站不展示成本**（token 能算、钱算不准会误导）；统计卡改评测数据集/受测模型。
 7. 其余：功能详情有失败详情块（断言→输入→输出）；性能大屏照搬已定稿版式
    （统计表置顶+八图族）；可靠性故障观测三段表单+RTO 时间线。
+8. **术语口径**（2026-10-01）：精度域单条数据一律叫「**样本**」，不叫「用例」
+   （用例 = 整个评测数据集；功能域测试用例、公共 · 用例库不受影响）；
+   详情日志时间戳带完整日期（YYYY-MM-DD HH:MM:SS）。
+9. **用例 ↔ 任务绑定（2026-10-05 静态稿已落）**：用例（纯文字：标题/等级/前置/
+   步骤/预期/auto_key）**绑定任务模板**（模板 = 套件 YAML 骨架 + 运行时参数槽
+   model/version/seed，多对多，绑定存用例侧）；用例库勾选 → 「发起执行」→
+   选模板 → **自动创建任务 → 自动 run → 按 auto_key 回填**（error ≠ fail；
+   无 auto_key 的转人工评测队列）；不绑用例可直接建任务（两入口并存）。
+   静态触点：common 用例库（勾选列/最近结果列/auto_key+模板副行/发起执行抽屉/
+   成功横幅/详情抽屉补 auto_key+模板），functional 详情「关联用例结果」卡 +
+   列表行「· 用例发起」来源标记。
+   **目录组织（2026-10-05）**：用例库左目录树右列表（复用 .tree 组件），目录 =
+   纯组织维度（DIRS + case.dir，与 domain 标签/绑定/发起解耦）；支持新建目录、
+   勾选批量「移动到…」、按目录过滤（计数实时）；空目录提示引导归类。**契约未定**：case_binding 字段 / 模板实例化
+   接口 / 回填 API 落库前按架构红线过讨论。css v=11。
+9. **用例版本 / 迭代模型（2026-10-09 静态稿已落）**：master = 跨版本基线用例库；
+   每个版本（26.9.0）默认一个 baseline = 版本全集；迭代（B01…）用例是 baseline 子集；
+   迭代执行结果默认自动回填 baseline（error ≠ fail）；可从 master 拉基线 / 回刷
+   master / 版本间互拉，**编号版本唯一、跨版本拉取编号不变**，合入前按「用例标题」
+   做同名冲突检测 → 用户逐条确认保留/覆盖/并存（与代码解冲突同思路）。
+   静态实现：用例库顶部上下文 chips（master / 26.9.0 baseline / B01 / B02 / 26.8.0，
+   chip 带计数），版本 baseline 上下文出「从 master 拉取基线」、master 上下文勾选后
+   出「回刷到 26.9.0」，冲突抽屉 = 自动合入清单 + 逐条冲突三选一（保留目标/采用
+   来源/都保留）+ 确认合入横幅；最近结果带「已回填 baseline」标记；详情抽屉补
+   版本/迭代/回填说明。
+10. **定位收敛（2026-10-09 用户拍板，覆盖第 8/9 条与用例绑定相关决策）**：
+    本系统**只做测试执行**；用例管理功能整体移出（用例平台 = 另一个应用，经 API
+    集成：外部平台下发执行 + 结果回填）。mockup 已剥离：顶栏「用例管理」tab、
+    common 用例库页（目录/版本迭代/冲突合入/发起执行）、functional「关联用例结果」
+    卡与「用例发起」标记。功能域「用例结果(84)」= run 执行明细，属测试执行语义，
+    保留。顶栏现为：任务管理 | 数据集管理 | 模型管理 | 执行机管理。js v=11。
+11. **功能运行创建 = 场景多选（2026-10-09）**：套件对前端用户不可见（黑盒），不能
+    让用户盲选 —— 改为**直接选场景**（场景目录可见可数，带说明与例数）；套件降级为
+    「快捷圈选预设」（ft-full 全量 / 冒烟 / API 契约 / 工具调用），点选后展开为场景
+    清单可继续增删，预设 chip 与当前选择精确匹配才点亮；tools.cases 过滤用场景 id
+    前缀做命名空间。**功能域移除 chaos 注入字段**（注入是可靠性/性能域语义）。
+    **三层选择细化（2026-10-09 二轮）**：① 预设标签（快捷圈选）→ ② 场景行三态勾选
+    （全选 = 选中其全部用例 / 部分 = 半选态「–」显示已选 k/N）→ ③ 场景可展开散选
+    单条用例；搜索框过滤场景与用例（自动展开命中场景）+「勾选/移除命中」批量；
+    散选用例作为 tools.cases 参数由后台自动生成（2026-10-10 按用户反馈
+    移除了手动输入框——选择树已完全覆盖其能力，不再暴露手填 id）。逐套件阈值
+    判定等进阶语义待定。
+    **事故与修复（2026-10-11）**：观测页重写补丁的替换区间贪多，误删了 reliability2
+    的任务列表与故障场景库两个 section（表现为任务列表空白/侧栏页点不进）——已按
+    记录重建并验证。教训：python 锚点区间替换前，先确认区间内包含哪些同级兄弟，
+    替换后跑 div 配对 + section 计数检查。**新建任务统一右侧抽屉（2026-10-10）**：精度/功能的居中
+    弹窗转 drawer-lg（800px）右侧抽屉，perf 抽屉内容分节卡化（① 引擎与模式
+    ② 负载来源 ③ 压力参数 ④ 模型参数），可靠性新增 newExpDrawer（① 实验对象
+    ② 注入武器与参数 ③ 观测与背景流量，开始观测后跳故障观测结果页 —— observe 页
+    已瘦身为纯结果视图）。创建抽屉版式与精度统一（form-sec 分节卡 + p-row 左标签/
+    问号/控件）：① 基础配置（任务名称、目标模型）② 场景选择（预设/搜索/树）
+    ③ 压力配置（2026-10-10）：单场景超时 timeout（✅ 已实装，spec.extra.timeout，
+    缺省 1800s）+ 场景并行（⏸ 预留置灰 —— 后端场景间/内均串行，pytest_adapter
+    注释明确防嵌套 xdist 放大开销，并行实装后开放）。**压力参数随引擎与模式
+    联动渲染**（2026-10-10）：只显示当前组合支持的参数（baseline=并发/时长/QPS、
+    ramp=梯度/每档时长、probe=SLA 指标阈值/QPS 上限、soak=并发/时长；引擎附加
+    evalscope-perf=warmup、locust=spawn_rate/arrival/jitter）；probe 仅
+    evalscope-perf（locust 下禁用并自动回落 baseline）。css v=14。
+12. **脚本/预定义场景的承载方案（2026-10-11 用户提出）**：代码写的场景不进前端
+    管理，**目录即注册表** —— 功能域 `aite/functional/scenarios/<场景>/`（cases.jsonl
+    或 test_*.py）由服务端扫描自动可见；可靠性 = **故障场景库**（一次编排固化为命名
+    场景：对象/武器/观测/背景流量/预期 RTO），测试时选场景发起，不从零编排。
+    静态稿已落：功能场景目录加形态标记（数据驱动 jsonl / 脚本 test_*.py）与两条
+    新增路径引导；可靠性侧栏新增「故障场景库」页（列表 + 发起实验抽屉改选场景式，
+    observe 工作台可保存为场景沉淀回库）。
+    **发起实验 = 多场景串行/并行（2026-10-11 二轮）**：发起抽屉改为勾选式——场景
+    多选（全选/清空）+ 执行方式卡（串行连跑 = 依次注入恢复；并行注入 = 多故障同时
+    生效，附目标重叠放大提示）+ 覆盖项对所有已选场景生效 + 实时摘要/按钮计数；
+    场景库行「发起实验」= 预勾选该场景打开抽屉（expOpen）。
+    **后端缺口**：GET /functional/scenarios（目录扫描 + 元数据）、chaos 场景库
+    CRUD（GET/POST /chaos/scenarios + manifest 约定，研发预置脚本批量注册）。
+13. **目标模型支持预制/自定义（2026-10-10，精度/功能/性能三模块统一）**：
+    目标模型下拉末项内置「**自定义（手填端点）**」——选中即展开 模型访问 url /
+    模型名称 / 鉴权 api_key_env 三行（密钥不落库仅存环境变量名），免登记直接跑；
+    预制项 = 按「公共 · 模型管理」登记配置执行（只选不填）。共享助手 v1.js
+    `bindModelCustom(selectId, paneId)`（value=__custom__ 时显示面板）。
+    （初版用「模型来源 chips + 双面板」，按用户反馈简化为下拉内置选项。）js v=14。
+    **踩坑（2026-10-10）**：① perf.html 曾被内嵌浏览器路径缓存锁死（query 被忽略），
+    五个页面已改名 *2.html 绕开，旧 *.html 不要再引用；
+    后续实测：**全新路径（reliability3.html，从未访问过）仍渲染旧内容** —— 内嵌浏览器
+    文档管道本身已损坏（非路径缓存可解），本会话的 DOM 读取与截图均不可信，
+    验证请用外部浏览器或重启应用后重开预览；② 联动渲染首版有「慢一拍」
+    bug——模式卡上两个 click 监听（bindRadioCards 于 DOMContentLoaded 注册、联动渲染
+    于脚本解析时注册），事件按注册序执行导致渲染读到旧选中态；修复 = 渲染监听延迟
+    setTimeout(0)。凡依赖 bindRadioCards 切换后状态的监听都要注意注册时序。
+14. **脚本管理（四域脚本沉淀，2026-10-12 用户提出，静态稿已落）**：需求原话
+    「可靠性/功能/性能/精度都要有脚本沉淀（如每版本固定基线数据集），一脚本=一用例，
+    可复用已有脚本和自定义新脚本」。定稿口径（详见 V1-PLAN §6A，契约提案 §10.4）：
+    **脚本 = 固化的域任务 spec + 名字**（accuracy spec = suite raw 同构；预置 =
+    `examples/{domain}/*.yaml` 随框架发布、只读可复制；自定义 = 创建任务「保存为
+    脚本」沉淀）；**运行参数（目标模型/被测版本/任务名/执行方式）不沉淀**，发起时
+    覆盖；脚本编辑即生效、历史任务持配置快照（不做脚本版本化）；可靠性不另建页
+    ——故障场景库即可靠性脚本（crumb 已标注）。静态触点：三域侧栏新增「脚本库」
+    页（accuracy2 / functional2 / perf2）；创建抽屉顶部「脚本来源」双态 chips
+    （复用 v1.js `bindSrcToggles`：从脚本发起 = 选脚本+只读内容快照+运行参数 /
+    自定义 = 原表单不动）；抽屉脚部「保存为脚本」按钮 + 确认 hint（perf 原
+    「保存为套件」更名对齐）；脚本库行「发起任务」开抽屉直达复用态并选中该脚本；
+    任务列表行副行带「脚本『××』」来源标记（accuracy/functional/perf 三表）；
+    功能域预设标签与预置脚本同源（full/smoke/api/agent 即研发预置）。
+    **后端未动**：脚本 REST 为契约提案（V1-PLAN §10.4，`{D}/scripts` CRUD +
+    tasks 增 script_id/overrides），按架构红线先过评审再实装。assets（v1.css/js）
+    零改动，版本号未升。
+15. **功能模块 = 质量链路重排（2026-10-12 用户提出，静态稿已落；⚠️ 层级与脚本
+    语义已被第 16 条二轮修订，以 16 为准）**：需求原话
+    「从最终目标往回推——回答不同版本、不同模型在不同功能维度的整体表现、对比
+    优化/劣化百分比，给测试负责人多维评估场景质量展示」。定稿链路（V1-PLAN §3.0）：
+    **质量大屏（目标）← 版本结果库（任务终态按版本×模型自动归档，分析唯一数据源）
+    ← 任务执行（多选/全选评估场景或场景内子用例）← 脚本库（一脚本=一用例，可挂外部
+    平台用例编号）← 评估场景（API 兼容性/参数校验/FC…）→ 场景内子用例（低代码）**。
+    术语链：外部平台用例 ↔ 平台脚本 ⊃ 评估场景 ⊃ 子用例；子用例两形态 = 低代码
+    （输入+预期+评估方法断言模板，大部分）/ 脚本 test_*.py（少量复杂；前端内嵌
+    编辑窗口 V2）；评估方法全后端实现（不造指标红线不受影响）。
+    静态触点（全部在 functional2.html）：侧栏六页 = 任务列表/任务详情/**质量大屏/
+    版本结果库**/脚本库/评估场景（场景目录更名升级）；质量大屏 = KPI 四卡 +
+    维度×版本矩阵（Δpp+判定）+ 维度趋势折线/**多版本对比雷达**（2026-10-12 追加：
+    轴 = 评估维度、一线一版本，数据直取矩阵 BOARD 同源，v1.js `radarOption`
+    三色正好三版本）/模型对比柱状（通栏）三图 + 劣化检测汇报结论；
+    版本结果库 = 归档列表（同键覆盖取最新）；评估场景卡加「管理子用例」（低代码
+    抽屉：子用例列表 + 输入/预期/评估方法断言行 + 脚本形态勾选）与「＋新建评估
+    场景」抽屉；创建抽屉（复用/自定义两态）均补**被测版本必选**（归档前提），
+    场景选择文案改「评估场景」；任务行/详情 crumb 带版本与「已归档版本结果库」。
+    **后端缺口 = V1-PLAN §10.5 提案**（场景+子用例 CRUD、spec 增 version+终态
+    归档 version_results 新表、/functional/quality/board 聚合），契约评审后实装。
+16. **功能域用例/脚本模型二轮修订（2026-10-12 讨论定稿，覆盖 15 的层级与脚本语义）**：
+    用户问「一个 jsonl 一个脚本还是多个 jsonl 一个脚本」——定稿：**jsonl 是行级
+    格式不是身份单位；脚本 = 用例（一个测试意图，类型标签 基础/边界/异常——标签
+    非层级）→ 挂 1..N 行数据（content + params + 断言，行 = 变体，行级执行判定，
+    脚本结果 = 行级聚合）；物理 1 脚本 = 1 jsonl 文件**（场景目录下，引擎「目录
+    即注册表」零改动）。三要素与 harness.Case 原生字段一一对应
+    （aite/functional/harness.py:434：messages/params/expect + 断言键白名单；
+    vars 占位符生成器白送批量变体）。两来源同一落点：**从 0 创建**（前端结构化
+    三要素，harness 真实校验）/ **数据集导入**（外部 jsonl 同一校验，整体导入为
+    1 脚本不拆散）。**创建硬约束：先场景后用例**（场景 = 大屏维度聚合键）。
+    **功能域「从脚本发起」退位**：任务创建 = 直接选场景/子用例；ft-full 组合模板
+    取消（场景快捷圈选预设保留为选择助手）；精度/性能脚本双态保留（域间语义
+    分叉各自成立）。静态触点（functional2.html）：脚本库页改用例级（场景/类型/
+    行数/来源/定向执行，类型+来源双维筛选）；场景卡加能力覆盖（基础 x·边界 y·
+    异常 z）；三抽屉替换 caseDrawer（场景内脚本管理 scriptMgrDrawer / 从 0 创建
+    newScriptDrawer / 数据集导入 importScriptDrawer）；newRunModal 去双态恢复
+    直选场景；任务行 rid 改场景口径。契约修订：§10.4 functional spec = 用例原子
+    （scenario_id/case_type/external_ref/rows[]，预置扫描仅 accuracy/perf）；
+    §10.5 删 scenarios/{id}/cases（被 scripts 收敛）+ 增 POST
+    /functional/scripts/import；§3.0/§3.1/§3.3/§6A 同步。结构校验全绿
+    （div 229/229、页面 id 匹配、JS 语法、元素引用）。
+    **2026-10-13 展示打磨（用户反馈）**：① 场景卡标题 = 显示名（人看：大屏矩阵
+    行名/场景树同名），副行 = 场景 id（mono 机器名：jsonl 路径/tools.cases 前缀）；
+    ② 维度标签支持自定义新增——scnDrawer 内「＋ 新增标签」展开行内命名（回车/
+    添加即入选并进标签库，供所有场景复用），不再只有死的「自定义」选项；③ 展示
+    原则确立：**大段说明性提示一律收敛进带圈问号（.qmark/.tip），页面只留短句**——
+    评估场景页说明卡与 newScriptDrawer 底部说明卡已改造，后续页面照此原则逐页收敛；
+    创建任务场景树同步显示「显示名 + id 副标」。
+    **2026-10-13 标签库复用（用户反馈）**：维度标签 = 共享标签库——scnDrawer 的
+    chips 改为由标签库数据源渲染（DIM_TAGS + localStorage 持久演示，刷新后仍在），
+    「＋ 新增标签」= 添加入库（同名复用不重复建），一次新增所有场景的创建/编辑
+    直接选用；后端对应 §10.5 新增 GET/POST /functional/dim-tags（标签注册表）。
+    **2026-10-13 qmark 样式修复（用户反馈：间距太近/不对齐/直径小于文字高度）**：
+    `.qmark` 15px inline-block + line-height hack → **17px inline-flex 居中字形 +
+    vertical-align:middle + 自带 margin-left:6px**（`.p-label .qmark{margin-left:0}`
+    防与 flex gap 双倍；旧内联 `style="margin-left:6px"` 同值无副作用），tip 定位
+    left:22px 兼容 17px 宽无需动。**css 全站升 v=14**（5 页引用同步，js 未动 v=13）。
+    **v15 追加**：`vertical-align:middle` 是按拉丁 x-height 中线算的，中文字形视觉
+    中心更低（截图实证圆圈偏高）→ 改 `vertical-align:-3.5px` 按基线像素对齐
+    （12.5~13px 中文标签实测），css 全站升 v=15。
+    **v16 定案**：-3.5px 方向反了（middle 本就偏低，再压更低，用户截图实证）——
+    基线像素猜测弃用，改与 `.p-label` 同方案：**`.field>label` 加
+    `display:flex;align-items:center;gap:6px`**（问号作为 flex 项由容器居中，
+    与参数行渲染完全一致），`.field>label .qmark{margin-left:0}` 防双倍间距；
+    行内兜底场景 `vertical-align:-2.5px`；7 处历史内联 `style="margin-left:6px"`
+    清除统一走 CSS；css 全站升 v=16。教训：**中英文混排的 inline 对齐别用
+    vertical-align 猜像素，容器 flex 化是一致解**。
+    **v17 定案（截图复测仍偏高 → 浏览器实测收敛）**：v16 flex 后 DOM 测量
+    deltaCy=0.00（行盒严格居中）但 4x 放大截图仍见偏高——根因是 **CJK 字形墨水
+    在行盒内偏下，行盒居中 ≠ 视觉居中**（vertical-align 猜不中，canvas 墨水
+    metrics 也与渲染不符）。最终解 = 同屏 A/B：四行分别 top:+1/+2/+3/+4px，
+    3x 放大人眼裁定 **+2px 最正**。`.qmark` 定稿 `position:relative;top:2px`
+    （flex/inline 上下文通用，inline 兜底 vertical-align 回归 middle），css
+    全站升 v=17，`.p-row` 参数行复测无矫枉过正。方法论沉淀：**像素级样式争议
+    不隔空猜——起 serve.py + IAB evaluate 量 rect + 截图裁剪 .NET 4x 最近邻
+    放大人眼裁定**。
+    **2026-10-13 脚本库筛选（用户需求：常用参数筛选框 + 通用 key-value 筛选框）**：
+    functional 脚本库列表加 filter-bar——常用四下拉（场景/类型/来源/最近执行结果）
+    + 通用 kv 筛选框（复用 accuracy 数据集选择器同套组件：ds-picker/ds-search/
+    token/两级菜单）。kv 语法 = `key:value` 回车生成 token（key 支持 label 或
+    key 名：所属场景/类型/来源/外部用例/断言）或纯关键词（名称+id+数据行+外部
+    用例模糊匹配）；与常用下拉 AND 组合，token 可叠加可单删，foot-note 实时显示
+    「命中 X / 共 26」。CASE_SCRIPTS 数据补 result 字段（passed/failed/none，
+    sse_done_marker 改未执行示例）。IAB 冒烟全过（场景筛 3、AND 组合 1、关键词
+    定向 1、token 删除复原）。注意：**IAB 内 goto 同文档 hash 变化不重载页面，
+    改动后必须 tab.reload()**。精度/性能两域脚本库评审时照此模式复制。
+17. **侧栏重排 + 功能域后端实装（2026-10-13，用户指示「对接后端并测试」）**：
+    ①functional2 侧栏顺序定稿：任务列表 / 任务详情 / 评估场景 / 脚本库 /
+    版本结果库 / 质量大屏；②后端资产层落地（契约 §10.4/§10.5 提案转正，详见
+    roadmap 2026-10-13 条）：`service/functional_assets.py` + `routers/functional.py`
+    ——场景 GET/POST（builtin 包内只读 + 用户根 config.
+    DEFAULT_FUNCTIONAL_SCENARIOS_DIR 双根合并；manifest.json 约定）、脚本 CRUD
+    （scripts.json 登记 + scripts/<id>.jsonl + **派生 cases.jsonl** 引擎零改动；
+    legacy 收编；行级 harness.Case 校验、先补自动 id 再校验；脚本 id 全平台唯一、
+    2-64 位）、导入（jsonl/数据集二选一）、dim_tag 表标签库（内置 3 + 自定义）。
+    错误映射 404/409/422。**测试**：integration +11 全过 + 真机 uvicorn 冒烟
+    11 步（注意 Git Bash curl 中文 body 会 GBK 化，冒烟用 httpx）+ 全量
+    649 passed + ruff/lint-imports/函数长度审计全绿。**前端对接注意**：脚本
+    id 规则 `[a-z][a-z0-9_-]{1,63}`（前端「＋ 脚本」需按此生成/校验 id）；
+    创建/更新/导入响应的行数键 = `row_count`（get 详情里 rows = 行列表）；
+    builtin 场景写脚本 409（前端「管理脚本」对 builtin 应只读展示）。
+    **仍缺后端**（V1-PLAN §8.9 悬留）：任务 spec 增 version + version_results
+    归档 + /functional/version-results + /functional/quality/board。
+18. **版本归档链路实装（2026-10-13 续，「继续」指示）**：功能域质量链路后端
+    **闭环**——①`version_result` 新表（unique domain+version+model，同键覆盖
+    取最新）；②functional 任务 spec 顶层增 `version`（可选；无标注不归档），
+    `SuiteTaskExecutor.execute` 终态钩子 → `version_results.archive_maybe`
+    （仅 functional；失败告警不推翻任务结果），数据源 = summaries 的
+    `pytest:<场景>` 行；③GET /functional/version-results（version/model 过滤）
+    + GET /functional/quality/board?model=&target=&baseline=（维度并集矩阵 +
+    Δ + 达标/劣化/新增/缺失判定 + KPI；缺版本 422「无归档结果」）。
+    测试 +9（归档覆盖/守卫/矩阵判定/API 带外种子）+ 真机冒烟 4 步；全量
+    **658 passed** + 四道门禁全绿。**前端对接注意**：归档自动发生（任务创建 spec
+    带 version 即可）；大屏端点响应形态见 `service/version_results.py`
+    compute_board（matrix 元素 = scenario/target/baseline/delta/verdict）。
+    前端静态稿的版本结果库/质量大屏两页可按此对接（Vite 工程化时）。
+19. **架构审视修复（2026-10-13 续二，用户「审视+都修」）**：对照十四原则自查
+    资产层/归档层新代码，P1×3+P2×5+P3×6 全清（详见 roadmap 2026-10-13 续二）。
+    **前端对接需知的口径变化**：①场景创建 dimension 须在标签库内（API 422
+    「未知维度标签」，前端标签 chips 数据源=GET dim-tags，保持一致即可）；
+    ②case_type 白名单 = 基础/边界/异常/兼容/迁移；③坏 JSONL 导入报错带行号；
+    ④大屏 KPI 新增 added/missing 计数字段；⑤场景/脚本列表对损坏目录容错跳过
+    （服务端日志有告警，前端无感）；⑥CLI 双形态已补：`aite fscenario
+    list/create`、`fscript list/show/import/delete`、`ftag list/add`。
+    契约文档：`docs/domain-backends.md` 新增 §16。测试 +13 全过，全量
+    **670 passed**，四道门禁全绿。
+20. **前端原地对接层（2026-10-13 续三，用户拍板）**：mockups 静态稿不再纯假数据
+    ——①`serve.py` 升级同源反代（/api → AITE_API 环境变量，默认 8300，后端零
+    CORS 改动）；②`mockups/v1/api6.js`（原名 api-live.js→api2→api3→api4→api5→api6——IAB 按**路径**缓存且无视 ?v，改内容须换新文件名）对接层（仅 functional2.html 与 common2.html 引入，
+    v=2）：boot 探测后端 → 左下 LIVE/MOCK 徽标 → 逐板块真数据（脚本库/评估
+    场景/任务列表/任务详情概要/版本结果库/大屏 KPI+矩阵+结论+趋势图）+ 写操作
+    （UI 建场景/建脚本/导入/删脚本/发起任务 POST tasks+run）真落盘；后端不可达
+    自动回退假数据。fail-soft：单板块失败保持该板块演示数据不推翻 LIVE。
+    **定位边界**：任务详情 live 仅概要；评审页未对接；为过渡形态，Vite 工程化
+    时字段映射照搬。**踩坑（重要）**：IAB 按**路径**缓存且无视查询参数与
+    no-store——改 js 内容必须**换文件名**（升 ?v 无效）；`[data-page="x"]`
+    查询会命中**侧栏 `<a>` 链接**（壳层也加了 data-page）——section 定位必须
+    `main.page-host` 前缀；goto 同文档 hash 变化不重载页面，必须 tab.reload()。
+    **使用方式**：起 `aite serve --port 8300`（数据目录决定读写哪份）+
+    `python serve.py 8765`，外部浏览器开 functional2.html——左下角徽标 LIVE
+    即真数据、MOCK 即假数据回退。
+21. **模型管理对接 + 双环境兼容修复（2026-10-13 续四）**：①用户「选不到模型」
+    根因有两层——创建任务模型下拉是静态演示文案（真预制在 data/common.yaml）+
+    functional_assets 用了 `datetime.UTC`（3.11+）在 conda py3.10 运行时启动即
+    ImportError（已改 timezone.utc，双解释器 32 项测试全绿）。②新端点
+    `GET /api/v1/common/models`（web/routers/common.py，common.yaml 只读清单）
+    ——创建任务「目标模型」下拉的真源，任务发起的 target.profile 必须用这里的
+    名字；被测版本转自由输入 input+datalist（版本管理页未建）。③公共·模型管理
+    页（common2.html）对接 GET/POST/DELETE /models（DB 网关别名注册表）。
+    **待定设计项**：模型双注册表（common.yaml 预制 vs models 表网关别名）的
+    统一/同步方案未定——当前任务发起只认 common.yaml；common2 注册进 models
+    表的内容不影响 target.profile 解析。IAB 文档管道再次损坏（简单 evaluate
+    幻影报错），验证走 curl/pytest。
+22. **密钥库（api_key 密文存储，2026-10-13 续五）**：用户「不想每次上服务器
+    手动 set 环境变量」——`utils/secrets.py` 本地密钥库：存储 data/.secrets.json
+    + 独立密钥文件 data/.secret.key（均 gitignore），SHA-256 流加密 + 随机
+    nonce；`resolve_secret(name, default)` 统一解析 **环境变量 > 密钥库 >
+    default**，四处 api_key_env 解析点全部收口替换（tools/base、core/loader、
+    reliability_tasks×2、rageval_adapter）——环境变量语义完全不变，密钥库只是
+    未设置时的兜底。REST：GET /secrets（掩码）、PUT/DELETE /secrets/{name}。
+    前端 common2 模型管理页加「密钥库」卡片（掩码清单 + 录入表单）。真机 6 步
+    验证全过（明文不泄漏断言钉死）。**与红线关系**：config/配置仍只存 env 名，
+    tools/base 明文密钥禁入配置的拦截保持不变。测试 +8。
+23. **清空功能域测试数据 + 刷新跳详情修复（2026-10-16 凌晨会话）**：
+    ①清库——用户「从头开始构建」执行完毕，DB 单事务删 functional 域 208 行
+    （functional_task 15/version_result 3/run 30[engine=pytest 口径，含 9 月初
+    19 条]/suite 13/case 21/case_result 21/summary 84/metric 21）+
+    reports/tool/pytest 产物；备份 aite.db.bak-20261016-0007（gitignore）；
+    builtin 9 场景为框架资产保留；data/datasets/functional/mini-set 是数据集
+    不在指示范围保留。②前端修复——用户报「评估场景刷新跳任务详情显示加载失败」：
+    根因 = api6.js fapiBoot 的详情恢复兜底不看点位，无条件从 sessionStorage
+    `aite-live-last-task` 恢复旧任务 id（清理后已删 → 404 卡加载失败页）。
+    修复两点：boot 仅当刷新时 hash 以 #detail 开头才恢复（停在别的页刷新留在
+    原地）；showLiveTask 捕获 404 优雅回落——清 sessionStorage + toast +
+    backToRuns()，不再卡错误页。**api6.js → api7.js 改名**（IAB 路径缓存约定，
+    functional2.html 引 api7.js?v=2）；**顺手修复 common2.html 引用 api2.js
+    404 断链**（历次改名漏改，模型管理页 live 对接曾整体失效）→ 同引 api7.js。
+    IAB 实测全过：场景页带残留 id 刷新留在原地、详情刷新遇 404 回落任务列表、
+    场景 9 卡/脚本 9 行 builtin 渲染、common2 LIVE。
+24. **新建脚本抽屉「默认两行 JSON」修复（2026-10-16，用户问「怎么默认最少两行」）**：
+    根因 = 静态稿遗留——newScriptDrawer 的 #nsRows 内嵌两张演示行卡（「边界·超长
+    输入」512/64k tok 变体示例），打开从不重置，且行卡**无删除控件**只能加 →
+    UI 焊死最少两行；业务约束本就是数据行 1..N（1 行合法；harness 每行要求
+    ≥1 断言，代码只查未知键不查空）。修复：①行模板收口 `nsRowHtml(n)` 单一来源
+    （functional2 内联脚本），初始 1 空行；②每行卡「删除此行」+ 1 行下限保护
+    toast + 删除后重编号；③`nsReset()` 打开即干净态（通用入口 setTimeout 兜底 +
+    api 层 openNewScript 显式调），输入/chips/场景下拉全清；④api 层 desc 正则
+    修复（原 `/^行\d+/` 匹配不了「行 1」带空格，desc 混入整段标题）+ 无说明
+    回退「变体 k」+ **每行 ≥1 断言前置校验**（补 harness 文档声明但代码未拦的
+    空洞）。**api7.js → api8.js 改名**（IAB 路径缓存约定），functional2/common2
+    同引 api8.js?v=1。IAB 实测全过：初始 1 空行无残留、加行/删行/重编号、
+    最后 1 行拦截 toast、脏状态关闭重开自动复位。注意：脚本详情抽屉 307/309 行
+    的 512/64k 只读示例属展示内容，非创建表单，保留。清库后无用户场景 → 创建
+    脚本下拉只有占位项（先场景后用例硬约束，内置场景只读不可建脚本）。
+25. **断言参数行编辑器（2026-10-16，用户「只让选类型没让填断言结果」）**：原实现
+    一行只有单个共享「断言参数」输入框，选多个断言类型语义混乱且 http_status
+    空值静默默认 200。重做为**勾选类型即展开该类型的参数行**（renderNsAsserts，
+    按勾选序与 chip 一一对应）：http_status=关系符==+状态码（100-599 校验）/
+    JSON 字段=路径+关系（==/∈/长度/类型）+期望值（harness _JSON_SPEC_KEYS 的
+    低代码子集，fields 递归留高级）/ 包含关键词=关键词+忽略大小写 / 不含关键词
+    （替换掉引擎无对应键的「正则匹配」死芯片）/ finish_reason=四枚举下拉 /
+    非空·no_leak·sse_done=无需参数提示。api9.js submitNewScript 按参数行结构化
+    构建 expect（loose JSON 解析期望值、逐项显式报错）。**踩坑：重绘抹值**——
+    勾选新断言触发 renderNsAsserts 整体重绘会抹掉已填参数，修复=重绘前按断言名
+    收割 as-val/as-path/as-rel/as-icb 值、重绘后回填。**api8.js → api9.js 改名**
+    （functional2/common2 同引 api9.js?v=1）。IAB 实测：monkeypatch FAPI.post
+    捕获 payload，expect 六键映射全对、值保留断言过、params 透传正确。既知：
+    goto 后立即 evaluate 可能读旧帧（本轮两连误判根源），**同文档 reload 后再测**
+    是可靠路径；HTML 同路径修改在 reload 后可取到新内容（缓存非持久，旧帧问题）。
+26. **vars 生成器族扩充（2026-10-16，用户「随机乱码/数字/定长字符串要预制方法才能低代码」）**：
+    引擎 vars 占位符机制原只有 haystack 一个生成器且前端零入口。**后端**（harness.py，
+    additive 非 Schema 变更）：`_VAR_BUILDERS` 扩至 5 个——`random_string{length,
+    charset?=alnum|letters|digits|hex, seed?}` / `random_number{min?=0,max?=100,seed?}` /
+    `garbled{length,seed?}`（mojibake 底料+多区段 Unicode 采样，刻意排除代理区与控制
+    字符→JSON 安全可落库）/ `random_choice{options[],seed?}`；**seed 缺省=每次执行
+    取新随机值、给定=可复现**；加载期逐项校验（未知生成器/缺参数显式报错）。
+    **关键正确性修复**：rendered_messages 此前在发送(_post)与结果记录两处各调一次，
+    随机生成器会导致「记录的输入≠实际发送的输入」——改为实例级渲染缓存（Case._rendered），
+    同一次执行内一致、跨执行取新值。**前端低代码**（functional2.html + api10.js）：
+    行卡新增「生成值占位符（vars）」区——五生成器按钮一键插入（空 content 自动生成
+    `[{"role":"user","content":"{gN}"}]` 骨架且**光标落位 content 内**，否则第二个占位符
+    会插到 JSON 结构外——实测抓到的组合流缺陷），条目行内编辑参数（长度/字符集/min-max/
+    候选/埋码 chars-key_at-key/seed），移除条目同步清占位符；api 层 submitNewScript
+    结构化组装 row.vars（逐项显式报错）。**api9.js → api10.js 改名**（functional2/
+    common2 同引 api10.js?v=1）。契约文档 domain-backends.md §16.4；测试 +6
+    （确定性/参数校验/JSON 安全/渲染一致性/未知生成器）。全量 **686 passed + 3 skipped**
+    + ruff + lint-imports 2 kept 0 broken + 函数长度审计全绿。
+    **运维注意**：执行路径（pytest 子进程）天然生效；但**已运行的 aite serve 进程内
+    资产校验链（functional_assets 顶部 import Case）是旧模块——创建带 vars 的脚本前
+    须重启服务**。**踩坑**：本项目 addopts 已含 `-q`，命令行再叠加 `-q` 会成 `-qq`
+    （pytest 9 该模式隐藏汇总行），误判过「进程崩溃」——看汇总用默认详细度或只靠
+    addopts 的单 `-q`。
+27. **评估场景删除（2026-10-16，用户「不支持删除吗」——契约缺口补全）**：原契约
+    场景只有 GET/POST。后端 DELETE /functional/scenarios/{id}：service 层
+    delete_scenario 复用 _scenario_dir（builtin→409/404 语义零新码），整目录
+    rmtree（目录即注册表的删除语义=manifest+登记+行文件+派生）；历史任务/版本
+    归档持快照不失效。前端 **api11.js**（api10 改名）：用户场景卡「删除」按钮
+    （builtin 卡无）+ confirm 注明整目录语义 + wireScenarios 重渲染。契约 §16.2
+    补行；集成测试 +2；全量 **688 passed + 3 skipped** + 门禁绿；IAB 端到端
+    实测过（UI 建→删→磁盘移除）。既知服务重启惯例：后端模块改动后重启
+    `aite serve`（本轮 DELETE 路由已随重启生效）。悬留仍开：场景 manifest
+    PATCH、标签删除。
+28. **脚本编辑/断言关系/任务树数据源三连（2026-10-16 续，用户实建场景后反馈）**：
+    ①脚本编辑 UI——openEditScript 详情回填（断言 chips+参数行/vars 反向重建，
+    场景与脚本 id 锁定），提交切 PATCH；编辑↔新建态互切复位；**动态行卡必须
+    bindChips**（漏绑=芯片无监听）。②json 断言关系加 **neq/contains(like)**
+    （引擎 _JSON_SPEC_KEYS + UI 下拉；neq 恒区分大小写、contains 受 ignore_case）。
+    ③任务树数据源——list_scripts 增 **row_index**（[id,desc]），wireScripts 重建
+    FT_CASES（新用例默认全选）+ renderFtPick + sfScen 刷新（原写死 builtin）——
+    此前新脚本在新任务里永远选不到。④submitNewScript 场景定位改显式 id=nsScen
+    （原「最后一个 select」被 vars/断言行内 select 劫持必 422）。⑤v1.js
+    [data-open-drawer] 启动期绑定 → live 重渲染按钮死键，api 层文档级委托兜底。
+    **api14.js**（api13 改名，functional2/common2 同引）。中文名脚本名称可用
+    （脚本 id 仍须英文规则）。全量 **692 passed + 3 skipped** + 门禁绿；IAB
+    全链路实测过。既知：跨标签页不实时同步（各自 boot 时拉取），刷新即见。
+29. **http_status 关系形式（2026-10-16 续二，用户「http_status 还是只有==」）**：
+    引擎 expect.http_status 从纯 int 扩为 **int（== 兼容不变）或单键 {op: 值}**
+    （op ∈ eq/neq/gte/lte/in，值域 100-599 校验保留；`_STATUS_OPS` 常量 +
+    _validate_status 模块函数 + _check_error_response 关系分发）。**存在即预期
+    错误模式**的派生语义（expect_error="http_status" in expect）对对象形式天然
+    成立零改动。UI：http_status 参数行加关系下拉（==/!=/≥/≤/∈，∈ 逗号分隔多值），
+    eq 提交保持 int 兼容格式、其余 {op: 值}；编辑回填双向映射。**api16.js**
+    （api15 改名）。测试 +2（关系断言/校验矩阵）；全量 **694 passed + 3 skipped**
+    + 门禁绿；IAB 实测 int↔对象 双向回填与持久化。**踩坑**：dict 字面量分发
+    `{"eq": a==b, ..., "in": x in val}[op]` 全分支急切求值（op≠in 时 val=int
+    TypeError）——多分支带副作用/类型敏感的择一逻辑用 if/elif，别用 dict 索引。
+30. **完整请求体低代码化（2026-10-16 续三，用户「输入只有 message」+「stream 输出」）**：
+    行卡补齐请求体三件——**tools 字段**（JSON 数组顶层透传，FC 用例 UI 可表达）/
+    params 标签澄清（任意顶层键透传，下划线前缀=引擎控制键）/**预览完整请求体**
+    折叠区（实时合并 model 占位+messages+tools+params）；断言芯片加**最少块数**
+    （chunks_min，流式三件套 sse_done/finish_reason/chunks_min 齐）。stream 语义
+    引擎原有零改动：params.stream=true → _post_stream 真 SSE（不重试），断言对象
+    =拼接后伪响应（_chunks/_sse_ok 形态标记）。**api17.js**（api16 改名）。IAB
+    实测预览合并与载荷组装正确；编辑回填 tools 已接。
+31. **请求预览 Postman 化 + 函数吞没事故（2026-10-16 续四，用户「复制到 Postman 直接请求」）**：
+    预览升级——目标模型下拉（GET /common/models 预制缓存，空结果不缓存可重试）+
+    **真实 model 名**注入 body + **完整 curl**（base_url+/chat/completions 与引擎
+    _request_url 同规则、Authorization: Bearer ${api_key_env} 环境变量占位粘贴即用、
+    单引号转义）+ 复制 JSON/复制 curl 按钮（clipboard API，localhost 安全上下文可用）。
+    **事故**：预览功能补丁的区间替换吞掉了 6 个函数定义（NS_VAR_KINDS/nsVarRowHtml/
+    nsInsertAtCursor/nsAddVar/nsAssertHtml/renderNsAsserts）——内联脚本执行到尾部
+    renderNsAsserts(...) 即抛错，**其后所有 addEventListener 全部未绑定**（编辑/加行/
+    断言/vars 全瘫，表象=点击无反应+偶尔旧 toast），且 node --check 过不了不会报
+    （函数调用在运行期才炸）。定位手法：功能逐条探针（rowAdd 失效）→ 手动逐语句
+    执行（renderNsAsserts is not defined）→ 函数存在性审计（6 缺）。**教训入册**：
+    python 锚点区间补丁后必须跑「函数存在性审计 + node --check + 页面 reload 冒烟
+    三件套」，只查语法不查运行期；本轮已把审计循环固化为补丁后动作。
+32. **任务状态与评估结果语义分离（2026-10-16 续五，用户「任务已通过但用例失败，任务层应该说完成」）**：
+    功能域任务列表/详情的状态徽章从「已通过」（succeeded→passed 误译）改为**任务层口径**：
+    succeeded=已完成（绿）/ failed=执行异常 / running=进行中 / pending=排队中 / 已取消
+    （api 层 taskBadge，复用现有 badge 样式类零 CSS 改动）；原「场景通过率」列改为
+    **「评估结果」列** = result.status（引擎评估层判定：通过/未通过/—）——执行完没跑完
+    看任务状态，用例过没过看评估结果，两层不再混用。筛选 chips 同口径
+    （data-status 改后端原始键 succeeded/failed/running）。**api18.js**（api17 改名）。
+    后端零改动（kit 状态值与 result.status 本就分层，纯前端显示语义修正）。
+33. **评估结果列改通过率（2026-10-16 续六，用户「test3 断言失败却显示通过」）**：
+    又一层语义澄清——result.status 是**执行层判定**（阈值未配置时进程跑完即 passed，
+    ≠用例全过），test3 断言失败仍显示「通过」实锤。评估列改显**通过率**：
+    ①后端 suite_summary 增 evaluation_stats——functional pytest 行（dataset=pytest:<场景>
+    的 value=场景通过率/count=用例数）按 count 加权出 pass_rate+evaluated_cases
+    （与 version_results.extract_dimensions 同源口径；其他域无 pytest: 行 → 空缺省）；
+    ②前端评估列 = 通过率百分比（100% 绿 / 0% 红 / 中间黄）+ 用例数；③旧任务 result
+    是执行期 JSON 快照无 pass_rate → 前端 /runs/{id} summaries 兜底加权回填（下一轮
+    轮询自动重试）。**api19.js**（api18 改名）。测试 +3（加权/非 functional 行/None 跳过），
+    全量 **697 passed + 3 skipped** + 门禁绿；IAB 实测 test3 行 = 已完成 + 0% 1 例。
+34. **脚本库全瘫事故（2026-10-16 续七，用户「脚本库没有刷新出来」）**：32 的
+    taskBadge/evalCell 定义在 api 层，但页面内联脚本的**启动期** renderRuns 调用
+    （api 加载前执行）引用它们 → ReferenceError → 内联脚本中途死亡 → 其后全部
+    初始化（CASE_SCRIPTS/FT_CASES/nsRows/监听器）未执行 → 脚本库空 + 表单全瘫
+    （与 31 同类症状的第二种成因）。**修复**：taskBadge/evalCell 移入页面脚本
+    （渲染职责归页面，api 运行期经 window 共用同一份），api 层删重复定义。
+    **教训升级（与 31 合并）**：内联脚本启动期代码**禁止引用后加载脚本的函数**
+    ——v1.js 先加载可用；api 层最后加载只可在运行期（事件回调/异步链）引用；
+    补丁后三件套审计再加一条：检查新增的内联执行期代码的函数依赖加载顺序。
+35. **vars 占位符扩展到 params（2026-10-16 续八，用户「deepseek 支持 input 参数怎么加」）**：
+    任意顶层字段（input 等）低代码路径 = 行卡 params JSON 直接写；生成值需求 →
+    引擎 vars 替换从 messages 扩展到 **params**（rendered_params，与 messages
+    同源 _render_values——同占位符同一次执行内两处同值；发送与记录两处调用点
+    同步替换）。原始 params 不改动；无 vars 时原样透传。测试 +3，全量
+    **700 passed + 3 skipped** + 门禁绿。前端 vars 提示语补「占位符也可直接写进
+    params」（functional2.html 页面文案，无 js 改动未改名）。
+36. **case_type 芯片劫持修复（2026-10-16 续九，用户 422「非法用例类型: http_status」）**：
+    submitNewScript 的 case_type 取「抽屉内第一个选中 chip」——nsReset 清空类型后
+    用户只选了 http_status 断言 → 断言芯片被当 case_type → 422。与场景 select 劫持
+    同族的定位符缺陷。修复 = 用例类型芯片组显式 id=nsCaseType（提交与编辑回填都
+    从组内取；未选默认「基础」）。**api20.js**（api19 改名）。IAB 回归：只选断言
+    保存 → case_type=基础 + expect 正常组装。审计提示：表单定位一律显式 id/容器
+    限定，禁止「第 N 个/第一个 .on」式全局查询（本会话已三连：场景 select、
+    case_type chips、+可预见的未来字段）。
+37. **对话承载切换 + 行复制（2026-10-16 续十，用户澄清 deepseek input=对话放 input
+    字段 + 参数校验用例流程不顺）**：①行卡新增**「对话承载」下拉**：messages（默认）/
+    input（DeepSeek 等新版接口对话放 input；提交时 messages=[] + params.input=对话
+    数组 + `_omit_messages: true` 引擎控制键自动省略 messages——引擎原有能力零改动）/
+    不发对话（纯参数校验，content 免填）；预览同步按承载合并。②**「复制此行」按钮**
+    （cloneNode 复制值/勾选态 + bindChips 重绑 + 重编号）——同模板多变体改参数即得。
+    ③编辑回填反向解析承载（params._omit_messages/input → 承载态，控制键不回显）。
+    参数校验用例工作流收敛为：新建 → 选承载 → params 填坏值 → http_status ∈ 断言
+    → 保存；多变体=复制此行改参数。**api21.js**（api20 改名）。IAB 载荷实测：
+    input 行（messages=[]/params.input/_omit_messages）与 none 行组装正确、行复制保值。
+38. **常用参数结构化 + JSON 高级框 + 原始报文（2026-10-16 续十一，用户「常用参数加输入框，JSON 框构造结构/key 破坏场景」）**：
+    行卡 params 区重构三层——①**常用参数网格**（temperature/top_p/max_tokens/stop/
+    stream/response_format/thinking 七项，留空=官方缺省）；②**params JSON 高级框**
+    （合法 JSON 与常用值合并、JSON 键覆盖；乱写 key 原样透传测端点行为）；③**原始
+    报文开关**（勾选后框内文本经引擎 _raw_body 原样直发——构造非法 JSON/结构破坏的
+    400 场景，内容无需合法）。**关键设计：常用框不做合法值拦截**（temperature=3
+    原样透传，配合 http_status 断言即参数校验用例；破坏场景勾原始开关，两不误）。
+    nsCollectParams 页面层单一来源（预览/提交共用）；编辑回填按已知键拆回控件、
+    控制键与自定义键留 JSON 框、_raw_body 反解为原始模式；nsReset 补清 textarea/
+    checkbox 残留。**api22.js**（api21 改名）。IAB 实测：合并（JSON 覆盖 temperature）、
+    非法值透传、原始残缺报文、model_param 回填拆分四场景全过。
+39. **常用参数网格补全至设计文档全量（2026-10-16 续十二，用户「用例里的参数没全部支持」）**：
+    网格 7 → **14 项**——新增 stream_opt（stream_options.include_usage）/ tool_choice
+    （缺省/none/auto/required/具名…+具名函数名输入框显隐）/ logprobs / top_logprobs /
+    user_id / freq_penalty / pres_penalty（已废弃兼容用例）。至此测试设计文档
+    （deepseek-inference-api.md）涉及的**全部参数控件化 100% 覆盖**（messages/input
+    承载、model 覆盖走 params JSON、_raw_body 走原始开关）。采集/编辑反解同步扩展
+    （具名对象 ↔ 下拉+函数名框）；承载与具名显隐改 change 委托（click 分支移除）。
+    **api23.js**（api22 改名）。IAB 载荷实测 7 新键全对 + 具名显隐双向。踩坑：
+    探针 new Event('change') 默认不冒泡，委托监听收不到——真实用户操作无碍，
+    探针须 {bubbles: true}。
+40. **行复制丢参数修复（2026-10-16 续十三，用户「复制的时候有一些参数没有复制」）**：
+    cloneNode(true) 只拷属性——用户手输的当前值（dirty value：数字框/文本框/下拉
+    选中项/勾选框）不在属性里，克隆后全丢（此前恰好 textarea 保值造成误判"能用"）。
+    修复 = 克隆后按序逐控件显式拷贝 value/checked（17 项全量比对零差异）。
+41. **断言芯片补全至引擎全量 + 文档断言明确化（2026-10-16 续十四，用户三问「校验
+    条件没明确/有些没法选/现有条件怎么解释」）**：①引擎 resp 断言补 **contains**
+    （错误体模糊匹配，受 ignore_case 影响）+ 测试 2；②低代码断言芯片 9 → **15 个**
+    （引擎 16 键全覆盖）：指定工具被调用（tool）/ 工具参数包含（tool_args_contains）/
+    不发起工具调用（no_tool）/ 无乱码（no_garbled）/ 无复读（no_repeat）/ 错误体字段
+    （resp：path+==/包含/长度/类型/非空，**仅预期错误模式生效**）；③设计文档新增
+    「断言条件速查表」（芯片×引擎键×语义×生效范围×平台盲区）；OC 表 18 行断言要点
+    全部明确为芯片配置；**修正 2 行约束违规**（OC-11/OC-17 thinking+具名 → 官方 400，
+    调整为 auto）。**api24.js**（api23 改名）。相关 75 passed + 门禁绿；IAB 载荷实测
+    tool/resp/no_garbled 组装正确。**残余盲区**（引擎暂无对应断言，速查表已标注）：
+    成功响应外层字段（usage.total_tokens/model 回显/reasoning_content 非空）——
+    resp 现仅错误模式。
+42. **导入覆盖语义（2026-10-24，用户拍板「同 id 要做成覆盖」——此前 409 拒绝）**：
+    import_script 同 id 重导 = **整体重写**该脚本（name/case_type/external_ref/rows
+    走 update_script，行级 harness 校验 + 重派生 cases.jsonl）；**跨场景覆盖 = 迁移**
+    （delete_script 旧场景 + create_script 新场景）；全新 id 照常创建。响应增
+    **overwritten** 标记（additive），前端 toast 区分「已导入/已覆盖」。
+    **api25.js**（api24 改名）。集成测试 +1（同场景覆盖/跨场景迁移/新 id 标记三段），
+    全量 **718 passed + 3 skipped** + 门禁绿。
+43. **编辑抽屉「从 jsonl 导入行」（2026-10-24，用户「编辑时选导入，场景参数就不用再选」）**：
+    行区新增「从 jsonl 导入行」——粘贴 JSONL（逐行报错）→ 解析并**替换全部行卡**
+    （复用 openEditScript 抽出的 nsFillRowFromData 全局回填：常用参数/断言芯片/
+    vars/承载全量还原），审阅后保存（新建=create、编辑=PATCH rows 整体重写）——
+    场景/id/名称保持现值不重选。**注意**：另一会话已在同目录继续演进
+    （api26.js=api25 扩展、api-acc2.js=accuracy 域对接层、accuracy2.html），本轮
+    基于 api26 做，改名 **api27.js**（functional2/common2 同引）。openEditScript
+    的行回填内联段抽取为 nsFillRowFromData 单一来源。IAB 实测：18 行编辑回填
+    回归 + jsonl 导入 2 行（temperature/stream/断言芯片还原）全过。
+44. **失败用例卡四段重做（2026-10-24，用户「失败用例内容=输入/输出/断言/失败断言
+    日志；有时一个输出有时两个」）**：**双输出根因** = 输出 JSON 块 + 失败日志文本
+    内嵌的「输入|/输出|」摘要行重复渲染（通过用例无日志块所以只有一个——引擎
+    failure_detail 文本自带输入/输出摘要）。caseBlock 重做为用户四段模型：
+    ①输入=按 message 角色分块（role 徽章+内容，长文滚动容器）；②输出=content
+    正文为主体 + 元信息标签行（finish_reason/chunks/sse_done/usage）+ 原始响应
+    JSON 折叠；③断言对照=期望|实际 两列并排（表头+值截断换行）；④失败日志=失败
+    原因首行醒目条 + 「引擎原始日志」折叠全文（首屏不再重复输入/输出摘要）。
+    全卡各区带复制按钮（document 级委托 + __copyStore Map，clipboard API）。
+    **api28.js**（api27 改名）。IAB 实测：test6 失败任务 8 张失败卡，四段结构/
+    失败原因条/原始日志折叠/复制按钮全过。
+    **追加修复（同日）**：断言对照恒为「—」的字段错位——cases 接口返回 **expected**
+    （已解析对象），前端误读 x.expect；改 x.expected 后对照表填充（期望列=执行期
+    断言快照，实际列=前端可判定项实测/引擎判定项标灰）。**api29.js**（api28 改名）。
+45. **用例卡复现三件套 + 长输入折叠（2026-10-27，用户「想复现场景拿不到原请求；超长输入别全打」）**：
+    输入区头部三按钮——**复制输入 JSON**（完整不截断）/ **复制 curl**（任务预制模型经
+    /common/models 解析 base_url+model+${api_key_env} 密钥占位，URL 拼接与引擎
+    _request_url 同规则；body=model+messages，不做前端值校验）/ **下载 .json**
+    （超长输入走文件下载绕开剪贴板）。消息级折叠：content>300 字默认收起（前 300
+    字+「展开全文（共 N 字符）」切换）；output 正文超长同法可加。澄清：「...」为
+    提示词原文非截断；真正拿不到完整请求的长文场景由复制/下载解决。零后端改动。
+    **api30.js**（api29 改名）。IAB 实测：三按钮 + curl 按预制解析（deepseek URL/
+    密钥占位）正确。踩坑同前：长 JS 块禁 heredoc（Write/Edit 工具链）。
+    **追加（同日）**：复制 curl/JSON 的 body 升级为**完整请求体**——合并 cases 接口
+    新透出的 raw.params（剔除下划线控制键）+ raw.tools（引擎 order：model→messages
+    →params→tools）；下载 .json 同源。存量 test6 回填 11 行 tools（params 含
+    tool_choice 的行才发过 tools，回填规则据此精确匹配）。**api32.js**（api31 改名）。
+    IAB 实测：curl body 12 键齐全（含 tool_choice 具名/tools），失败原因条+日志
+    折叠正常。注意：本会话后台服务进程反复被回收（前后端各掉过 2 次）——服务
+    状态用 netstat/curl 确认后再操作。
+46. **curl 丢 messages 修复（2026-10-27，用户实测「复制 curl 只有 model」）**：
+    /runs/{id}/cases 的 **input 字段就是 messages 数组本身**（非 {messages:[...]} 包裹），
+    caseBlock 按包裹对象取 io.messages 落空 → curl body 只剩 model、输入区走 JSON 兜底
+    渲染。修复 = 前端归一化（Array.isArray(input) → {messages: input}）。**api31.js**
+    （api30 改名）。IAB 实测 curl -d 含完整 messages、输入区按角色分块渲染恢复。踩坑：heredoc 双层转义反复把 
+ 写成
+    真实换行（本会话第三次）——长 JS 块一律 Write/Edit 工具链，禁 heredoc。
+40. **行复制丢参数修复（2026-10-16 续十三，用户「复制的时候有一些参数没有复制」）**：
+    cloneNode(true) 只拷属性——用户手输的当前值（dirty value：数字框/文本框/下拉
+    选中项/勾选框）不在属性里，克隆后全丢（此前恰好 textarea 保值造成误判"能用"）。
+    修复 = 克隆后按序逐控件显式拷贝 value/checked（17 项全量比对零差异）。
+    **教训**：cloneNode 复制表单必须显式搬运 dirty 值；控件选择器跟随后缀变化
+    （ns-params input→textarea）时探针同步更新。
+
+42. **精度域 + agent 测试全链路实装（2026-10-24，用户「精度+agent测试都接入前端，我来测试」）**：
+    functional 原地对接模式（决策 20）推广到精度域。
+    **后端**：①`service/accuracy_assets.py`——脚本 = suite raw 同构（V1-PLAN §10.4 accuracy 形态），
+    builtin = `examples/accuracy/*.yaml` 扫描（18 个，裸 suite raw 即时包装为 doc，损坏文件跳过告警），
+    自定义 = `data/accuracy/scripts/<id>.yaml`（文档含 id/name/description/spec/时间戳，LF 强制 +
+    tmp+os.replace 原子写）；保存经 `resolve_suite` 真实校验（工具域轻校验/自研域强校验双路径）；
+    ②`routers/accuracy.py`——GET/POST/PATCH/DELETE `/accuracy/scripts`，错误映射与 functional 同口径
+    （404/409 builtin 只读与重名/422 校验失败），app.py 挂载；③`SuiteConfig.version` additive 字段
+    （被测版本标注；工具域 raw 透传无需改——**踩坑**：SuiteConfig extra=forbid，自研套件
+    （agent_eval 形态）顶层 version 原本会 422）。**前端**（accuracy2.html + **api-acc1.js** 新文件名，
+    IAB 路径缓存约定）：任务列表（任务层原始状态徽章，passed chip→succeeded 口径对齐 + 计数实时，
+    分数列 = /runs/{id} overall 行异步兜底）、任务详情 live 重渲染（指标汇总表 metric×dataset/分组
+    + overall 行、失败样本卡（run.details.failures 前 50）、报告产物路径卡、running 5s 自刷新、停止
+    按钮）、脚本库（预置/自定义分组 + 内容摘要/快照由 spec 派生 + 发起任务/删除/复制为自定义）、
+    创建抽屉两态（从脚本发起 = spec 深拷贝 + 运行参数覆盖 model/version/name；自定义六卡 = suite raw
+    组装按 TOOL-SUITE-PARAMS 契约，抽样 seed 在 extra_args 非 tools 顶层、thinking→reasoning_effort、
+    高级 JSON 合并 generation_config/dataset_args）、数据集选择器 = /tools/benchmarks 真目录
+    （Agent/RAG 类型按 tags 关键词派生）、模型下拉 = 预制 + 注册 + 自定义 + judge 下拉同源；
+    版本下拉转自由 input+datalist（版本管理页未建，同功能域决策 21）。趋势对比/人工评测保持演示
+    数据（后端 §8.6 缺口）。**测试**：unit +11（builtin 扫描/CRUD 往返/只读 409/重名/坏 spec/自研
+    spec/损坏文件容错）+ integration +5（REST 全 CRUD + 404/409/422），全量 **717 passed + 3 skipped**
+    + 四门禁绿；隔离冒烟（scripts/smoke_acc_live.py，临时 DB）5 步全过。
+    **踩坑（隔离卫生）**：后台起服务必须显式传 storage_url（create_app 默认 DEFAULT_DB_URL=用户库），
+    且后台 shell 孤儿进程会占端口——本次冒烟两度打到用户库（smoke-acc-task 残留），已逐一清理
+    （accuracy_task 行 + smoke-acc.yaml + 临时目录），最终以「冒烟后断言用户库 0 残留」收口。
+    **运维注意**：8300 旧进程须重启才有 /accuracy/scripts；冒烟脚本复跑 = 起 8310 隔离实例后
+    `python scripts/smoke_acc_live.py`（会写 data/accuracy/scripts/smoke-acc.yaml，跑完删）。
 
 ## 4. 环境与坑（新会话必读）
 
 - **预览服务器**：`cd web-ui/mockups && python serve.py 8765`（或 8766），
   no-store 头；**后台进程随会话死，新会话必须先起**；两个端口都有效。
 - **IAB（内嵌浏览器）缓存按路径缓存**，版本参数都会被忽略：改了 CSS/JS 必须
-  升级 `assets/v1.css?v=N` / `v1.js?v=N` 的版本号（当前 css v=5 / js v=4），必要时换文件名。
+  升级 `assets/v1.css?v=N` / `v1.js?v=N` 的版本号（当前 css v=17 / js v=13），
+  必要时换文件名。
 - **IAB 晚期极不稳定**：cua 真实鼠标注入会失效（页面收不到事件）、截图拿旧帧、
   自发重载、标签丢失。验证改用 evaluate `el.click()` + DOM 状态读取（注意多语句
   要包 IIFE，isolated world 看不到页面全局函数，但 DOM 读写与事件派发可用）。
@@ -108,6 +774,10 @@
 
 ## 6. 下一步（按优先级）
 
+0. **精度创建表单补参数**（2026-10-01 用户指示）：按 `web-ui/TOOL-SUITE-PARAMS.md`
+   把后端已实装参数补进 accuracy.html 六卡（数据源 API、resume、seed、
+   dataset_args/subset_list、thinking→reasoning_effort 映射等），缺口项
+   （总抽样条数、Judge auto）按文中标注处理，后续前后端直接对接。
 1. **用户继续评审静态稿**：精度已基本定稿（调试面板待移除）；功能/性能/可靠性/
    公共四模块的静态稿还没按精度这轮的反馈标准迭代过（比如功能创建是否也结构化
    表单化，等用户提）。
@@ -116,7 +786,10 @@
 3. 后端剩余缺口（V1-PLAN §8）：精度任务 spec 结构化表单+version、定时调度器
    （含重启恢复）、版本趋势按 (model,dataset,metric,version) 聚合 + 基线
    （D1 提前）、run 产物下载端点、catalog 归属/位置/维度/类型标注列、
-   四域 executor.cancel 子进程进程组强杀。
+   四域 executor.cancel 子进程进程组强杀；
+   **另：模型版本管理（公共模块新页 + 登记契约，2026-09-30 创建表单新增依赖，
+   被测版本下拉的数据源）；脚本管理 REST（V1-PLAN §10.4 提案，2026-10-12
+   新增——先过契约评审再实装，静态稿已按其口径落地）。**
 4. ~~评审结束后移除 accuracy.html 的调试面板与 dbg 函数~~（已于 2026-09-30 完成，
    同轮把数据集搜索框改为醒目样式：`--ac` 描边独立输入框 + 右侧「筛选 ▾」主题色按钮，
    `.ds-caret` 已删除换 `.ds-filter-btn`）。
@@ -133,3 +806,19 @@
 - TaskKit 的 `update` 对「不存在」与「非 pending」同返 409，REST 层需先查存在性
   区分 404（已在 domain_tasks.py 路由层矫正）。
 - IAB 截图偶发旧帧/黑帧/超时——以 DOM evaluate 为准，截图仅参考。
+
+43. **全局版本管理 + 精度对接（2026-10-24 续，用户「精度要对接全局的版本管理」）**：
+    被测版本从「自由输入」升级为全局登记制。**后端**：`model_version` 新表
+    （(model, version) 唯一，Schema 只增；与 version_result 是两层——登记先行、
+    归档随后）+ GET/POST/DELETE `/versions`（common.py，重复 409 / 空值 422）。
+    **前端**：①common2 模型管理页新增「版本管理」卡（清单+登记表单+删除，
+    模型下拉 = 注册模型 ∪ 已登记模型 ∪ 手填其他）——api25.js → **api26.js** 升名
+    （用户侧当日上午 api24→api25，本轮内容变更继续升名并删旧档）；②精度创建
+    抽屉两个「＋ 新版本」按钮接 POST /versions（就地登记，模型取当前所选预制
+    profile、自定义/脚本内置则 prompt），被测版本 datalist = GET /versions 全量
+    （value=版本字符串、label=模型·说明）——api-acc1.js → **api-acc2.js** 升名。
+    功能域版本输入暂沿用功能归档 datalist（切全局登记待统一）。测试 +3
+    （CRUD/409/按模型过滤/422），全量 **720 passed + 3 skipped** + 四门禁绿；
+    隔离冒烟：/versions 全链路 + 精度任务 spec.version 引用登记版本 + 脚本库
+    回归，用户库零污染。**注意**：model_version 表由重启时 create_all 自动建
+    （用户 8300 旧进程须重启）。

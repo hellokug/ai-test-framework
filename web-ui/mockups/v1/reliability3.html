@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 任务管理 · 可靠性</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=17">
+</head>
+<body data-module="reliability" data-module-label="任务管理 · 可靠性">
+<script type="text/plain" id="page-list">[
+  {"id":"history","label":"任务列表","count":"12"},
+  {"id":"detail","label":"任务详情"},
+  {"id":"lib","label":"故障场景库","count":"5"},
+  {"id":"observe","label":"故障观测"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 故障观测（自定义编排工作台） ============ -->
+  <section data-page="observe">
+    <header class="topbar">
+      <div><h1>故障观测</h1><div class="crumb">自定义编排工作台 · 编排满意可「保存为场景」沉淀回库，下次从任务列表直接发起</div></div>
+      <div class="actions"><button class="btn" data-open-drawer="newExpDrawer">从场景库发起</button><button class="btn primary">开始观测</button></div>
+    </header>
+    <div class="grid2" style="grid-template-columns:1.1fr 1fr;align-items:start">
+      <!-- 编排表单 -->
+      <section class="card">
+        <div class="form-sec" style="margin-top:0"><div class="sec-head"><span class="sec-num">1</span><b>实验对象</b><small>GET /chaos/targets</small></div>
+        <div class="field"><label>目标过滤（节点/容器/进程名，大小写不敏感子串）</label><input class="in" value="gpu-box-01 / vllm"></div>
+        <div class="tree">
+          <div class="node sel">🖥 gpu-box-01（linux · 8C32G）</div>
+          <div class="kids">
+            <div class="node">📦 vllm-server（容器 · 0.0.0.0:8000）</div>
+            <div class="node sel">⚙ vllm serve --model DeepSeek-V3（pid 4821）</div>
+            <div class="node">⚙ prometheus（pid 1188）</div>
+          </div>
+          <div class="node">💻 win-lab-02（windows）</div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>exclude 排除名单</label><input class="in" value="bash, cmd, aite"></div>
+        </div>
+        <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>注入武器与参数</b><small>GET /chaos/weapons</small></div>
+        <div class="field"><label>注入器 / kind</label>
+          <select class="in"><option>process · suspend（挂起进程）</option><option>process · kill</option>
+          <option>toxiproxy · latency</option><option>toxiproxy · timeout</option><option>toxiproxy · bandwidth</option></select></div>
+        <div class="form-grid">
+          <div class="field"><label>match 匹配模式</label><select class="in"><option>contains 名称+命令行</option><option>exact</option><option>prefix</option><option>regex</option></select></div>
+          <div class="field"><label>select 选择策略</label><select class="in"><option>first（最小 pid）</option><option>all</option><option>random(k)</option><option>percent(p)</option></select></div>
+          <div class="field"><label>注入参数（param_schema 驱动）</label><input class="in" placeholder="suspend 无参数；latency_ms 必填"></div>
+          <div class="field"><label>fault_duration 注入窗（秒）</label><input class="in" value="10"></div>
+        </div>
+        </div>
+        <div class="form-sec" style="margin-bottom:0"><div class="sec-head"><span class="sec-num">3</span><b>观测与背景流量</b><small>探针打点 · 注入窗同步背景压测</small></div>
+        <div class="form-grid">
+          <div class="field"><label>探针 URL（推理端点）</label><input class="in" value="http://127.0.0.1:8000/v1/chat/completions"></div>
+          <div class="field"><label>探针超时（秒）</label><input class="in" value="3"></div>
+          <div class="field"><label>interval 打点间隔（秒）</label><input class="in" value="5"></div>
+          <div class="field"><label>duration 观测时长（秒 ≤600）</label><input class="in" value="60"></div>
+        </div>
+        <div class="field"><label>post_window 恢复后补测窗口（秒）</label><input class="in" value="6"></div>
+        <label class="check"><input type="checkbox" checked> 背景流量（复合任务：注入窗 = 背景流量时长）</label>
+        <div class="form-grid" style="margin-top:10px">
+          <div class="field"><label>背景数据集（perf 型）</label><select class="in"><option>rag-prefix-50</option></select></div>
+          <div class="field"><label>并发 / duration</label><input class="in" value="8 并发 · 120s"></div>
+        </div>
+        <div class="row" style="margin:14px 0 0">
+          <button class="btn" id="saveSceneBtn">保存为场景</button>
+          <button class="btn primary">开始观测</button>
+        </div>
+        <div class="hint" id="saveSceneHint" hidden style="margin-top:8px">✓ 已保存为场景「自定义-网关进程挂起-0930」，可在「故障场景库」直接发起</div>
+        </div>
+      </section>
+      <!-- 结果 -->
+      <section style="display:flex;flex-direction:column;gap:14px">
+        <section class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:0">
+          <div class="stat"><div class="label"><i style="background:var(--bad)"></i>RTO</div><div class="value">3.26<span style="font-size:14px;color:var(--tx3)">s</span></div></div>
+          <div class="stat"><div class="label"><i style="background:var(--warn)"></i>失败探针</div><div class="value">2</div></div>
+          <div class="stat"><div class="label"><i style="background:var(--ok)"></i>判定</div><div class="value" style="font-size:20px;padding-top:4px;color:var(--ok)">affected·达标</div></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h3>事件时间线</h3><div class="sub">details.chaos_events</div></div></div>
+          <div class="timeline">
+            <div class="tl-item"><div class="tl-dot warn">!</div><div class="tl-time">14:32:05.102</div>
+              <div class="tl-body"><b>injected</b><div class="sub">process:suspend → vllm serve (pid 4821) · match=contains · select=first</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:05.110</div>
+              <div class="tl-body"><b>verified</b><div class="sub">注入生效确认 8ms（STATUS_STOPPED）· verify 失败将回滚并抛 ChaosVerifyError</div></div></div>
+            <div class="tl-item"><div class="tl-dot bad">✕</div><div class="tl-time">14:32:10.004</div>
+              <div class="tl-body"><b>probe fail ×2</b><div class="sub">ReadTimeout 3000ms（挂起进程不响应）</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:15.103</div>
+              <div class="tl-body"><b>recovered</b><div class="sub">定时恢复（fault_duration 到点）· finally 兜底逆序恢复双路互斥</div></div></div>
+            <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:18.371</div>
+              <div class="tl-body"><b>probe pass（恢复后首个）</b><div class="sub">RTO = 3.264s（last_fail → 首个 pass）</div></div></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h3>探针序列</h3><div class="sub">pass/fail 时间点 + 时延 · 注入窗阴影</div></div></div>
+          <div class="chart" data-chart="cProbe" style="height:200px"></div>
+        </section>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ 任务列表 ============ -->
+  <section data-page="history">
+    <header class="topbar">
+      <div><h1>任务列表</h1><div class="crumb">带 chaos_events 的 run · 背景流量 run 可跳压测大屏看曲线</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="newExpDrawer">＋ 新建实验</button></div>
+    </header>
+    <div class="filter-bar" id="histFilter">
+      <span class="chip on" data-status="all">全部 <small>12</small></span>
+      <span class="chip" data-status="passed">已通过</span>
+      <span class="chip" data-status="failed">失败</span>
+      <span style="flex:1"></span>
+      <span class="lbl">执行人</span><select class="in" data-owner style="width:136px"><option value="all">全部执行人</option><option value="zhimeng">zhimeng（我）</option><option value="陈曦">陈曦</option><option value="刘畅">刘畅</option><option value="王维">王维</option></select>
+      <select class="in" style="width:150px"><option>全部故障类型</option><option>process 注入</option><option>toxiproxy 注入</option></select>
+      <input class="in" data-kw style="width:190px" placeholder="按实验名 / 故障…">
+    </div>
+    <section class="card"><table id="histTbl"></table></section>
+  </section>
+
+  <!-- ============ 故障场景库 ============ -->
+  <section data-page="lib" hidden>
+    <header class="topbar">
+      <div><h1>故障场景库</h1><div class="crumb">可靠性域脚本 · 一次编排固化为命名用例（对象/武器/观测/背景流量/预期）· 选场景即可发起，无需从头编排 · GET /chaos/scenarios</div></div>
+      <div class="actions"><button class="btn" data-open-drawer="newExpDrawer">＋ 发起实验（选场景）</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.9">
+        场景来源两条路径：① 观测工作台编排满意后「<b style="color:var(--tx)">保存为场景</b>」沉淀；
+        ② 研发预置脚本批量注册（<span class="tag mono">chaos/scenarios/</span> 目录 + manifest，随版本发布）。
+        发起后结果自动进「任务列表」，同名场景可对比历次 RTO。
+      </div>
+    </div>
+    <section class="card"><table id="libTbl"></table></section>
+  </section>
+
+  <!-- ============ 任务详情（实验详情） ============ -->
+  <section data-page="detail" hidden>
+    <header class="topbar">
+      <div>
+        <h1>suspend-vllm-rto <span class="badge passed" style="vertical-align:3px"><i></i>已通过</span></h1>
+        <div class="crumb">run #e5519a02 · process:suspend → vllm(pid 4821) · 背景 locust 8 并发 · 09-23 14:32</div>
+      </div>
+      <div class="actions"><button class="btn primary">重跑实验（同参固化配置）</button><button class="btn" onclick="showPage('history')">← 任务列表</button></div>
+    </header>
+    <section class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>RTO</div><div class="value">3.26<span style="font-size:14px;color:var(--tx3)">s</span></div><span class="delta up">预期 ≤ 4s · 达标</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--warn)"></i>失败探针</div><div class="value">2</div><span class="delta">注入窗内 ReadTimeout ×2</span></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>判定</div><div class="value" style="font-size:20px;padding-top:4px;color:var(--ok)">affected·达标</div><span class="delta up">受扰后自动恢复</span></div>
+    </section>
+    <div class="grid2" style="grid-template-columns:1fr 1.15fr;align-items:start">
+      <section class="card">
+        <div class="card-head"><div><h3>事件时间线</h3><div class="sub">details.chaos_events · 注入 → 生效确认 → 恢复 → RTO 判定</div></div></div>
+        <div class="timeline">
+          <div class="tl-item"><div class="tl-dot warn">!</div><div class="tl-time">14:32:05.102</div>
+            <div class="tl-body"><b>injected</b><div class="sub">process:suspend → vllm serve (pid 4821) · match=contains · select=first</div></div></div>
+          <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:05.110</div>
+            <div class="tl-body"><b>verified</b><div class="sub">注入生效确认 8ms（STATUS_STOPPED）· verify 失败将回滚并抛 ChaosVerifyError</div></div></div>
+          <div class="tl-item"><div class="tl-dot bad">✕</div><div class="tl-time">14:32:10.004</div>
+            <div class="tl-body"><b>probe fail ×2</b><div class="sub">ReadTimeout 3000ms（挂起进程不响应）</div></div></div>
+          <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:15.103</div>
+            <div class="tl-body"><b>recovered</b><div class="sub">定时恢复（fault_duration 到点）· finally 兜底逆序恢复双路互斥</div></div></div>
+          <div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-time">14:32:18.371</div>
+            <div class="tl-body"><b>probe pass（恢复后首个）</b><div class="sub">RTO = 3.264s（last_fail → 首个 pass）</div></div></div>
+        </div>
+      </section>
+      <section style="display:flex;flex-direction:column;gap:14px">
+        <section class="card">
+          <div class="card-head"><div><h3>探针序列</h3><div class="sub">pass/fail 时间点 + 时延 · 注入窗阴影</div></div></div>
+          <div class="chart" data-chart="cProbe" style="height:200px"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h3>实验配置快照</h3><div class="sub">配置固化 · 重跑即同参</div></div></div>
+          <div class="detail-stack">
+            <div class="kv"><span>目标</span><pre>gpu-box-01 / vllm serve (pid 4821) · match=contains · select=first</pre></div>
+            <div class="kv"><span>武器</span><pre>process:suspend · fault_duration=10s</pre></div>
+            <div class="kv"><span>探针</span><pre>POST /v1/chat/completions · 超时 3s · 间隔 5s · 观测 60s + 恢复窗 6s</pre></div>
+            <div class="kv"><span>背景流量</span><pre>locust 8 并发 · rag-prefix-50 · 120s（与注入窗同步）</pre></div>
+          </div>
+        </section>
+      </section>
+    </div>
+  </section>
+</main>
+
+<!-- 新建实验抽屉：多场景串行/并行 -->
+<div class="drawer drawer-lg" id="newExpDrawer" hidden>
+  <div class="drawer-head"><div><h3>发起故障注入实验</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">勾选一个或多个场景 · 支持串行连跑或并行注入</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>选择故障场景</b><small>故障场景库 · 勾选一个或多个</small></div>
+      <div class="chips" style="margin-bottom:8px">
+        <span class="chip" data-expall="1">全选</span>
+        <span class="chip" data-expall="0">清空</span>
+      </div>
+      <div class="ds-list" id="expSceneList" style="max-height:260px"></div>
+      <span class="hint" style="margin-top:8px;display:block">场景在「故障场景库」页维护；观测工作台的编排可「保存为场景」沉淀回库</span>
+    </div>
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>执行方式</b><small>多场景时的编排语义</small></div>
+      <div class="radio-cards" id="expMode">
+        <div class="radio-card on" data-exec="serial"><b>串行连跑</b><small>依次 注入 → 恢复 → 下一场景 · 互不干扰</small></div>
+        <div class="radio-card" data-exec="parallel"><b>并行注入</b><small>多故障同时生效 · 观测复合故障表现</small></div>
+      </div>
+      <span class="hint" style="margin-top:8px;display:block">并行注入时若多个场景目标重叠（同进程 / 同端点），故障可能互相放大，建议确认武器与目标无冲突</span>
+    </div>
+    <div class="form-sec" style="margin-bottom:0">
+      <div class="sec-head"><span class="sec-num">3</span><b>本次覆盖项</b><small>可选 · 对所有已选场景生效</small></div>
+      <div class="form-grid">
+        <div class="field"><label>fault_duration 注入窗（秒）</label><input class="in" value="10"></div>
+        <div class="field"><label>背景流量并发</label><input class="in" value="8"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
+      <div class="dim" style="font-size:12.5px;line-height:1.7">已选 <b id="expSummaryN" style="color:var(--tx)">0</b> 个场景 · 执行方式：<b id="expSummaryMode" style="color:var(--tx)">串行连跑</b> —— 发起后自动创建 run，逐场景执行并回填各自结果（RTO / 探针 / 时间线）</div>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="expRunBtn" disabled>发起实验</button></div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 可靠性 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=13"></script>
+<script>
+const HIST = [
+  ["suspend-vllm-rto", "process:suspend → vllm(pid 4821)", "背景 locust 8 并发", "3.26s / ≤4s", "passed", "09-23 14:32", "zhimeng"],
+  ["latency-300ms-degrade", "toxiproxy:latency 300ms", "纯观测", "—", "succeeded", "09-22 20:11", "陈曦"],
+  ["kill-worker-drill", "process:kill → worker ×1", "背景 rag-prefix-50", "8.9s / ≤15s", "failed", "09-21 03:00", "刘畅"],
+  ["bandwidth-1mbps", "toxiproxy:bandwidth 1MB", "纯观测", "—", "succeeded", "09-20 15:40", "zhimeng"],
+];
+function renderHist(status, owner, kw) {
+  const hits = HIST.filter(h => (status === "all" || h[4] === status
+      || (status === "passed" && h[4] === "succeeded"))
+    && (owner === "all" || h[6] === owner)
+    && (!kw || (h[0] + h[1]).toLowerCase().includes(kw)));
+  document.getElementById("histTbl").innerHTML = `
+  <thead><tr><th>实验</th><th>故障</th><th>执行人</th><th>背景流量</th><th>RTO / 预期</th><th>结果</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${hits.length ? hits.map(h => `<tr class="clickable" onclick="showPage('detail')">
+    <td class="rname"><b>${h[0]}</b></td><td class="mono dim" style="font-size:12px">${h[1]}</td>
+    <td class="dim">${h[6]}</td>
+    <td class="dim">${h[2]}</td><td class="num mono">${h[3]}</td><td>${badge(h[4] === "succeeded" ? "passed" : h[4])}</td>
+    <td class="dim">${h[5]}</td><td style="text-align:right"><button class="btn sm">时间线</button></td></tr>`).join("")
+    : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+}
+bindTaskFilter("histFilter", renderHist);
+
+/* ---------- 故障场景库 ---------- */
+const LIB = [
+  ["网关进程挂起", "process:suspend → vllm(pid 4821)", "gpu-box-01", "locust 8 并发 · 120s", "RTO ≤ 4s", "进程类"],
+  ["推理时延注入 300ms", "toxiproxy:latency 300ms", "推理端点", "纯观测", "降水质检", "网络类"],
+  ["带宽限速 1MB/s", "toxiproxy:bandwidth 1MB", "推理端点", "纯观测", "—", "网络类"],
+  ["worker 进程杀", "process:kill → worker ×1", "gpu-box-01", "背景 rag-prefix-50", "RTO ≤ 15s", "进程类"],
+  ["token 限流风暴", "toxiproxy:bandwidth 256KB + 高并发", "推理端点", "locust 16 并发 · 300s", "错误率 ≤ 5%", "网络类"],
+];
+function renderLib() {
+function renderLib() {
+document.getElementById("libTbl").innerHTML = `
+  <thead><tr><th>场景</th><th>武器 / 目标</th><th>背景流量</th><th>预期</th><th>标签</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${LIB.map((x, idx) => `<tr class="clickable" onclick="showPage('detail')">
+    <td class="rname"><b>${x[0]}</b></td>
+    <td class="mono dim" style="font-size:12px;white-space:normal">${x[1]}</td>
+    <td class="dim">${x[3]}</td><td class="num mono">${x[4]}</td>
+    <td><span class="tag">${x[5]}</span></td>
+    <td style="text-align:right"><button class="btn sm primary" onclick="event.stopPropagation();expOpen([${idx}])">发起实验</button></td></tr>`).join("")}</tbody>`;
+}
+renderLib();
+
+/* ---------- 保存为场景：编排沉淀回场景库 ---------- */
+document.getElementById("saveSceneBtn").addEventListener("click", () => {
+  LIB.unshift(["自定义-网关进程挂起-0930", "process:suspend → vllm(pid 4821)", "gpu-box-01", "背景 locust 8 并发", "RTO ≤ 4s", "passed", "09-30"]);
+  renderLib();
+  const h = document.getElementById("saveSceneHint");
+  h.hidden = false;
+});
+}
+renderLib();
+
+/* ---------- 发起实验：多场景串行 / 并行 ---------- */
+const expSel = new Set();
+function renderExpList() {
+  document.getElementById("expSceneList").innerHTML = LIB.map((x, i) => `
+    <div class="ds-row ${expSel.has(i) ? "on" : ""}" data-i="${i}">
+      <span class="cb ${expSel.has(i) ? "on" : ""}">✓</span>
+      <span class="ds-name">${x[0]}</span>
+      <span class="ds-meta" style="white-space:normal">${x[1]} · ${x[2]}</span>
+      <span class="ds-tags"><span class="tag">${x[5]}</span><span class="tag">${x[4]}</span></span></div>`).join("");
+  document.querySelectorAll("#expSceneList .ds-row").forEach(row => row.addEventListener("click", () => {
+    const i = +row.dataset.i;
+    expSel.has(i) ? expSel.delete(i) : expSel.add(i);
+    renderExpList(); renderExpSummary();
+  }));
+}
+function renderExpSummary() {
+  const serial = !document.querySelector('#expMode .radio-card[data-exec="parallel"]').classList.contains("on");
+  const n = expSel.size;
+  document.getElementById("expSummaryN").textContent = n;
+  document.getElementById("expSummaryMode").textContent = serial ? "串行连跑" : "并行注入";
+  const btn = document.getElementById("expRunBtn");
+  btn.disabled = !n;
+  btn.textContent = n ? `发起实验（${n} 个场景 · ${serial ? "串行" : "并行"}）` : "发起实验";
+}
+document.querySelectorAll('#expMode .radio-card').forEach(card => card.addEventListener("click", () => setTimeout(renderExpSummary, 0)));
+document.querySelectorAll('[data-expall]').forEach(ch => ch.addEventListener("click", () => {
+  expSel.clear();
+  if (ch.dataset.expall === "1") LIB.forEach((x, i) => expSel.add(i));
+  renderExpList(); renderExpSummary();
+}));
+window.expOpen = ids => {
+  expSel.clear(); ids.forEach(i => expSel.add(i));
+  renderExpList(); renderExpSummary();
+  document.getElementById("newExpDrawer").hidden = false;
+};
+document.getElementById("expRunBtn").addEventListener("click", () => {
+  if (!expSel.size) return;
+  const serial = !document.querySelector('#expMode .radio-card[data-exec="parallel"]').classList.contains("on");
+  document.getElementById("newExpDrawer").hidden = true;
+  document.querySelectorAll(".exp-banner").forEach(b => b.remove());
+  const host = document.querySelector("main.page-host > section:not([hidden])");
+  const div = document.createElement("div");
+  div.className = "card exp-banner";
+  div.style.cssText = "margin-bottom:14px;padding:12px 16px;background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)";
+  div.innerHTML = `✓ 已发起 <b>${expSel.size}</b> 个场景的<b>${serial ? "串行连跑" : "并行注入"}实验</b>（run 已自动创建）—— 逐场景执行并回填 RTO / 探针 / 时间线结果，可到「任务列表」跟踪`;
+  host.prepend(div);
+});
+
+window.cProbe = t => { const c = t.charts; return {
+  grid: { left: 6, right: 12, top: 26, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  legend: { top: 0, right: 0, textStyle: { color: c.axis, fontSize: 11 }, itemWidth: 12, itemHeight: 3, icon: "roundRect" },
+  xAxis: { type: "category", data: ["14:32:00", ":05", ":10", ":15", ":20", ":25", ":30", ":35", ":40", ":45"],
+    ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis } },
+  yAxis: { type: "value", ...baseAxis(c), axisLabel: { color: c.axis, formatter: "{value}ms" } },
+  series: [
+    { name: "探针时延", type: "bar", barWidth: 10, itemStyle: { color: c.pass, borderRadius: 3 },
+      data: [412, 388, { value: 3000, itemStyle: { color: c.err } }, { value: 3000, itemStyle: { color: c.err } }, 296, 188, 142, 131, 126, 118] },
+    { name: "注入窗", type: "line", data: [], markArea: { silent: true,
+      itemStyle: { color: hexA(c.err, 0.10) }, data: [[{ xAxis: ":05" }, { xAxis: ":15" }]] } },
+  ] }; };
+</script>
+</body>
+</html>

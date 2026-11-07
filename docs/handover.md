@@ -108,7 +108,7 @@ python scripts/preview_perf_dashboard.py --demo   # 压测大屏曲线预览（t
 
 ## 4. 当前状态（2026-09-09）
 
-- 模块 A 数据集治理：暂缓（需求已存档 requirements-datasetgov.md）
+- 模块 A 数据集治理：暂缓（需求已存档 docs/archive/requirements-datasetgov.md）
 - 模块 B 指标标准性：收缩，仅剩 tokenize 中文分词（低优先）
 - 模块 C evalscope 适配器：C0-C4b 完成（REST 四域任务 CRUD/运行打通）；
   **未完：C3 平台数据集灌入、C4c 文档收尾**

@@ -808,3 +808,73 @@ CLI:  aite case-doc add/list/show/rm；aite case-doc link <id> <脚本绑定>
 - T3 版本报告聚合 + 导出。
 - T4 风险清单规则 + 导出。
 - T5 前端：用例库页 / 版本报告页 / 风险清单页。
+
+## 16. 功能域资产层：评估场景 / 脚本（用例）/ 版本结果（2026-10-13 实装）
+
+> 契约提案与演化见 `web-ui/V1-PLAN.md` §10.4/§10.5；实现 =
+> `service/functional_assets.py` + `service/version_results.py` +
+> `web/routers/functional.py`。层级口径：**评估场景（大类）⊃ 脚本 = 用例
+> （测试意图 + 类型标签）⊃ 1..N 数据行（content + params + 断言）**；
+> 物理形态 1 脚本 = 1 个 jsonl 文件。
+
+### 16.1 场景与脚本目录契约
+
+```
+builtin:  aite/functional/scenarios/<场景>/          # 包内只读
+user:     data/functional/scenarios/<场景>/          # 用户根（config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR）
+            manifest.json     # {display_name, dimension, description}
+            scripts.json      # 受管脚本登记 [{id, name, case_type, external_ref, source}]
+            scripts/<sid>.jsonl  # 脚本数据行（harness.Case 同构）
+            cases.jsonl       # 派生产物 = 全部脚本行拼接（引擎「目录即注册表」零改动）
+```
+
+首次写场景时无主 cases.jsonl 自动收编为脚本 `legacy-cases`（case_type=迁移），
+收编逐行过 harness.Case（坏行显式报错）。builtin 场景只读（写 → 409）。
+维度标签库 = `dim_tag` 表（内置 3 + 自定义），场景 manifest.dimension 引用标签名。
+
+### 16.2 端点
+
+```
+GET  /api/v1/functional/scenarios?source=       # 合并清单（id/显示名/维度/形态/cases/能力覆盖）
+POST /api/v1/functional/scenarios               # {id, display_name?, dimension?, description?}
+GET  /api/v1/functional/scenarios/{id}          # 详情（含受管脚本登记）
+DELETE /api/v1/functional/scenarios/{id}        # 删用户场景（整目录；builtin→409；历史任务/归档持快照不受影响，2026-10-16）
+GET  /api/v1/functional/scripts?scenario=       # 跨场景脚本清单（含 row_index=[id,desc] 供任务树用例数据源）
+POST /api/v1/functional/scripts                 # {scenario_id, script_id, name, case_type, external_ref?, rows[]}
+GET/PATCH/DELETE /api/v1/functional/scripts/{script_id}
+POST /api/v1/functional/scripts/import          # {scenario_id, script_id, name, case_type, external_ref?, jsonl|dataset 二选一}
+                                                # 覆盖语义：同 id 重导整体重写（跨场景迁移=删旧建新），响应含 overwritten 标记（2026-10-24）
+GET  /api/v1/functional/dim-tags                # 标签库（builtin+custom 合并）
+POST /api/v1/functional/dim-tags                # {name}
+```
+
+错误语义：404 不存在 / 409 冲突与 builtin 只读 / 422 校验失败（行级
+harness.Case、场景内用例 id 唯一、脚本 id 全平台唯一、case_type 白名单
+基础|边界|异常|兼容|迁移、dimension 须在标签库）。
+
+### 16.3 版本结果归档与大屏
+
+```
+（自动）functional 任务 spec 顶层 version 标注 → 终态归档 version_result 表
+        （unique: domain+version+model，同键覆盖取最新；status=error 不归档）
+GET  /api/v1/functional/version-results?version=&model=
+GET  /api/v1/functional/quality/board?model=&target=&baseline=
+        # 维度并集矩阵 + Δ + 判定（达标/劣化/新增/缺失）+ KPI（含 added/missing）
+```
+
+### 16.4 行数据 vars 生成器（低代码生成值，2026-10-16 扩充）
+
+行级 `vars: {NAME: {生成器: 参数}}`，messages/tools/params 中 `{NAME}` 占位符替换为生成值；
+加载期逐项校验（未知生成器/缺参数显式报错）。**seed 缺省 = 每次执行取新随机值**
+（实例级渲染缓存保证同一次执行的发送与记录一致），给定 seed = 逐字节可复现。
+
+| 生成器 | 参数 | 说明 |
+|---|---|---|
+| `haystack` | chars, key_at, key | 确定性长文埋码（needle 取回测试，长上下文） |
+| `random_string` | length, charset?=alnum\|letters\|digits\|hex, seed? | 定长随机字符串 |
+| `random_number` | min?=0, max?=100, seed? | 区间随机整数（含端点，字符串形式插入） |
+| `garbled` | length, seed? | 随机乱码（mojibake 底料 + 多区段 Unicode 采样；无代理区/控制字符，JSON 安全） |
+| `random_choice` | options[], seed? | 从候选随机选一项（参数化/等价类） |
+
+CLI 双形态：`aite fscenario list/create`、`aite fscript list/show/import/delete`、
+`aite ftag list/add`。

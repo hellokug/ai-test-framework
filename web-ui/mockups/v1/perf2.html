@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aite · 任务管理 · 性能</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="assets/v1.css?v=17">
+</head>
+<body data-module="perf" data-module-label="任务管理 · 性能">
+<script type="text/plain" id="page-list">[
+  {"id":"tasks","label":"任务列表","count":"9"},
+  {"id":"detail","label":"任务详情"},
+  {"id":"scripts","label":"脚本库","count":"6"},
+  {"id":"dashboard","label":"压测大屏"},
+  {"id":"datasets","label":"性能数据集","count":"7"}
+]</script>
+
+<header class="topnav" id="topnav"></header>
+<aside class="sidebar" id="sideNav"></aside>
+
+<main class="page-host main">
+  <!-- ============ 压测任务 ============ -->
+  <section data-page="tasks">
+    <header class="topbar">
+      <div><h1>任务列表</h1><div class="crumb">engine=evalscope-perf / locust · 提交 = POST /runs（engine 路由）</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="newTaskDrawer">＋ 新建压测任务</button></div>
+    </header>
+    <!-- 任务列表 -->
+    <!-- 任务列表 -->
+    <section class="card">
+      <div class="card-head"><div><h3>任务列表</h3><div class="sub">GET /perf/tasks（域任务）</div></div></div>
+      <div class="filter-bar" id="taskFilter" style="margin:0 0 10px">
+        <span class="chip on" data-status="all">全部</span>
+        <span class="chip" data-status="running">运行中</span>
+        <span class="chip" data-status="succeeded">已成功</span>
+        <span class="chip" data-status="failed">失败</span>
+        <span class="chip" data-status="cancelled">已取消</span>
+        <span class="lbl">执行人</span>
+        <select class="in" data-owner style="width:118px"><option value="all">全部</option><option value="zhimeng">zhimeng</option><option value="陈曦">陈曦</option><option value="刘畅">刘畅</option><option value="王维">王维</option></select>
+        <input class="in" data-kw style="flex:1;min-width:110px" placeholder="按任务名…">
+      </div>
+        <table id="taskTbl" class="sumtable"></table>
+      <div class="hint dim" style="font-size:11.5px;margin-top:10px">停止 = POST /{id}/stop（stopping → cancelled；子进程进程组强杀待补）</div>
+    </section>
+  </section>
+
+  <!-- ============ 任务详情（实时运行视图） ============ -->
+  <section data-page="detail" hidden>
+    <header class="topbar">
+      <div>
+        <h1>perf-probe-sla <span class="badge running" style="vertical-align:3px"><i></i>运行中</span></h1>
+        <div class="crumb">run #c08d12e4 · engine=evalscope-perf · probe SLA 摸高 · DeepSeek-V3 · SSE GET /runs/{id}/stream</div>
+      </div>
+      <div class="actions"><button class="btn" onclick="showPage('dashboard')">压测大屏 ↗</button><button class="btn danger">停止</button><button class="btn" onclick="showPage('tasks')">← 任务列表</button></div>
+    </header>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>实时进度</h3><div class="sub">SSE 实时推送（phase / done / total）· 每 5s 兜底轮询，终态自动刷新全页</div></div>
+        <span class="tag mono">阶段：probe 二分探高 · qps 6.5</span></div>
+      <div class="progress-line"><i style="width:62%"></i></div>
+      <div class="mini-stats">
+        <div class="mstat"><b>2312</b><span>总请求数</span></div>
+        <div class="mstat ac"><b>1434</b><span>已完成</span></div>
+        <div class="mstat bad"><b>6</b><span>失败 / 错误</span></div>
+        <div class="mstat"><b>1.62</b><span>QPS（实时）</span></div>
+        <div class="mstat ok"><b>~44 秒</b><span>预计剩余时间</span></div>
+      </div>
+    </section>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="card"><div class="card-head"><div><h3>实时 TTFT（ms）</h3><div class="sub">10s 桶滚动 · 完整曲线与档级对比进「压测大屏」</div></div></div><div class="chart" data-chart="cTTFT"></div></div>
+      <div class="card"><div class="card-head"><div><h3>实时 RPS（请求/秒）</h3></div></div><div class="chart" data-chart="cRPS"></div></div>
+    </div>
+    <div class="grid2" style="grid-template-columns:1.15fr 1fr;align-items:start">
+      <section class="card">
+        <div class="card-head"><div><h3>实时统计表</h3><div class="sub">滚动窗口 overall · 运行中数值标注「阶段性」</div></div></div>
+        <table class="sumtable" id="liveTbl"></table>
+      </section>
+      <section class="card">
+        <div class="card-head"><div><h3>运行日志</h3><div class="sub">实时尾部 · 完整日志落盘 work_dir 给下载链接</div></div>
+          <div class="chips" style="margin:0"><button class="btn sm">完整日志 .log</button></div></div>
+        <div class="logbox">
+          <div><span class="ln">2026-09-24 10:02:11</span>INFO&nbsp; run start · engine=evalscope-perf · probe SLA · qps 1.0→8.0 二分</div>
+          <div><span class="ln">2026-09-24 10:03:02</span>阶段&nbsp; warmup 5 条完成 · 进入探高</div>
+          <div><span class="ln">2026-09-24 10:05:47</span><span class="lwarn">警告</span>&nbsp; qps=6.5 · ttft_p95=512ms 超阈值（≤ 500）· 记录候选边界</div>
+          <div><span class="ln">2026-09-24 10:06:30</span>进度&nbsp; 62% · 错误率 0.4% · 预计剩余 ~44s <span class="lcursor"></span></div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ 脚本库（一个脚本 = 一个性能基线用例） ============ -->
+  <section data-page="scripts" hidden>
+    <header class="topbar">
+      <div><h1>脚本库</h1><div class="crumb">一个脚本 = 一个性能基线用例 · 引擎/模式/负载/压力参数固化，运行时只换目标端点 · GET /perf/scripts</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="newTaskDrawer">＋ 新建脚本（自定义编排）</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:14px 18px">
+      <div class="dim" style="font-size:13px;line-height:1.9">
+        <b style="color:var(--tx)">脚本两条来源：</b>① 研发预置（四类压测模板：baseline 基准 / ramp 爬坡 / probe 摸高 / soak 长稳，随框架发布，只读可复制）；
+        ② 前台沉淀（创建压测时「保存为脚本」，把一次调好的编排固化成命名用例，下次版本直接复跑对比）。<br>
+        压测脚本按版本复跑 = 容量/时延的跨版本对比口径；同端点同脚本的曲线差异才归因于版本变更。
+      </div>
+    </div>
+    <section class="card"><table id="scriptsTbl" class="sumtable"></table>
+      <div class="foot-note"><span>发起压测 = 编排整体复用，运行时仅指定目标模型与任务名；编辑/删除仅对自定义脚本开放</span></div></section>
+  </section>
+
+  <!-- ============ 压测大屏 ============ -->
+  <section data-page="dashboard" hidden>
+    <header class="topbar">
+      <div>
+        <h1>locust-ramp-deepseek <span class="badge passed" style="vertical-align:3px"><i></i>已成功</span></h1>
+        <div class="crumb">run #b21c07af · engine=locust · ramp 4→16 · 180s · DeepSeek-V3 · GET /runs/{id}/timeseries</div>
+      </div>
+      <div class="actions"><button class="btn">HTML 报告 ↗</button><button class="btn" onclick="showPage('detail')">← 任务详情</button></div>
+    </header>
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>统计结果表</h3><div class="sub">overall 与档级 · 与 CLI 汇总同源（timeseries.summaries）</div></div>
+        <div class="chips"><span class="chip on" data-single>overall</span><span class="chip" data-single>u4</span><span class="chip" data-single>u8</span><span class="chip" data-single>u16</span></div></div>
+      <table class="sumtable" id="sumTbl"></table>
+    </section>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="card"><div class="card-head"><div><h3>TTFT（首 token 时延 ms）</h3></div></div><div class="chart" data-chart="cTTFT"></div></div>
+      <div class="card"><div class="card-head"><div><h3>端到端延迟（ms）</h3></div></div><div class="chart" data-chart="cLat"></div></div>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="card"><div class="card-head"><div><h3>TPOT（每输出 token 时延 ms）</h3></div></div><div class="chart" data-chart="cTPOT"></div></div>
+      <div class="card"><div class="card-head"><div><h3>ITL（token 间隔 ms）</h3></div></div><div class="chart" data-chart="cITL"></div></div>
+    </div>
+    <div class="stats" style="grid-template-columns:repeat(3,1fr)">
+      <div class="card"><div class="card-head"><div><h3>RPS（请求/秒）</h3></div></div><div class="chart" data-chart="cRPS"></div></div>
+      <div class="card"><div class="card-head"><div><h3>吞吐（tok/s）</h3></div></div><div class="chart" data-chart="cTok"></div></div>
+      <div class="card"><div class="card-head"><div><h3>并发阶梯</h3></div></div><div class="chart" data-chart="cUsers"></div></div>
+    </div>
+    <section class="card">
+      <div class="card-head"><div><h3>错误统计</h3><div class="sub">错误码/文本 × 次数 · chaos 注入窗在全图叠加阴影</div></div></div>
+      <div class="chart" data-chart="cErr" style="height:200px"></div>
+    </section>
+  </section>
+
+  <!-- ============ 性能数据集 ============ -->
+  <section data-page="datasets" hidden>
+    <header class="topbar">
+      <div><h1>性能数据集</h1><div class="crumb">模块 J：长度分布 / 前缀共享率 / 输出控制 · 确定性可复现（seed=version）</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="genDrawer">＋ 生成场景数据集</button></div>
+    </header>
+    <section class="card"><table id="dsTbl" class="sumtable"></table></section>
+  </section>
+</main>
+
+<!-- 新建压测任务抽屉（脚本复用 / 自定义编排 双态） -->
+<div class="drawer drawer-lg" id="newTaskDrawer" hidden>
+  <div class="drawer-head"><h3>新建压测任务</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body" data-src-toggle>
+
+    <div class="chips" style="margin:0 0 14px">
+      <span class="ds-flabel" style="margin-right:4px">脚本来源</span>
+      <span class="chip on" data-src="script">从脚本发起（复用）</span>
+      <span class="chip" data-src="custom">自定义编排</span>
+      <span class="hint" style="margin:0 0 0 10px">一个脚本 = 一个性能基线用例：引擎/模式/负载/压力参数固化在脚本里，同脚本跨版本复跑才有对比口径</span>
+    </div>
+
+    <!-- ===== 复用面板：选脚本 + 本次运行参数 ===== -->
+    <div data-pane="script">
+      <div class="form-sec" style="margin-top:0"><div class="sec-head"><span class="sec-num">1</span><b>选择脚本</b><small>四类压测预置模板 + 自定义沉淀</small></div>
+        <div class="field"><label>压测脚本<span class="qmark">?<span class="tip">脚本 = 固化的压测编排（引擎/模式/负载/压力参数）；预置模板随框架发布，自定义来自创建时的「保存为脚本」。内容维护到「脚本库」页</span></span></label>
+          <select class="in" id="perfScriptSel" style="max-width:420px"></select></div>
+        <div class="seg-title">脚本内容快照（只读 · 运行时不改动）</div>
+        <div class="detail-stack" id="perfScriptSnap" style="margin-top:0"></div>
+      </div>
+      <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>本次运行参数</b><small>只指定 对谁测 · 编排不改动</small></div>
+        <div class="form-grid">
+          <div class="field"><label>任务名称</label><input class="in" placeholder="留空自动生成，如 baseline-u8-v130-0930"></div>
+        </div>
+        <div class="field"><label>目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」；选「自定义」可临时手填端点，免登记直接跑</span></span></label>
+          <select class="in" id="perfScriptModelSel" style="max-width:380px">
+            <option>DeepSeek-V3 · api.deepseek.com（鉴权 OPENAI_API_KEY）</option>
+            <option>qwen2.5-72b · gpu-box-01 vLLM（内网）</option>
+            <option value="__custom__">自定义（手填端点）</option>
+          </select></div>
+        <div id="perfScriptModelCustom" hidden>
+          <div class="form-grid">
+            <div class="field"><label>base_url</label><input class="in" placeholder="http://gpu-box-01:8000/v1"></div>
+            <div class="field"><label>model</label><input class="in" placeholder="DeepSeek-V3"></div>
+            <div class="field"><label>api_key_env</label><input class="in" placeholder="OPENAI_API_KEY"></div>
+          </div>
+          <span class="hint">密钥不落库：仅存环境变量名，运行时解析</span>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
+        <div class="dim" style="font-size:12.5px;line-height:1.7">
+          ✓ <b style="color:var(--tx)">脚本发起 = 压测编排整体复用</b>：spec 按脚本固化值下发（含 chaos 注入声明如有）；
+          需要调整并发/负载时切「自定义编排」，调好后「保存为脚本」沉淀为新基线用例。
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 自定义面板：原四段编排表单 ===== -->
+    <div data-pane="custom" hidden>
+        <div class="form-sec" style="margin-top:0"><div class="sec-head"><span class="sec-num">1</span><b>引擎与模式</b><small>evalscope-perf / locust 双引擎</small></div>
+        <div class="field"><label>压测引擎</label>
+          <div class="radio-cards">
+            <div class="radio-card on" data-e="evalscope-perf"><b>evalscope-perf</b><small>LLM 原生 TTFT/TPOT/ITL，梯度/warmup 内置</small></div>
+            <div class="radio-card" data-e="locust"><b>locust</b><small>通用 HTTP / 分布式 / QPS 闭环限速</small></div>
+          </div></div>
+        <div class="field"><label>压测模式</label>
+          <div class="radio-cards">
+            <div class="radio-card on" data-m="baseline"><b>baseline</b><small>固定并发基准</small></div>
+            <div class="radio-card" data-m="ramp"><b>ramp</b><small>from/to/step 并发爬坡</small></div>
+            <div class="radio-card" data-m="probe"><b>probe</b><small>SLA 下二分摸高</small></div>
+            <div class="radio-card" data-m="soak"><b>soak</b><small>duration 长稳</small></div>
+          </div>
+          <span class="hint">probe 仅 evalscope-perf；locust 必配时长键（无请求数上限语义）</span></div>
+        </div>
+        <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>负载来源</b><small>三选一</small></div>
+        <div class="field"><label>负载</label>
+          <div class="radio-cards three">
+            <div class="radio-card"><b>固定 prompt</b><small>与 v1 直配同构</small></div>
+            <div class="radio-card on"><b>平台数据集</b><small>perf 型场景（长度分布可控）</small></div>
+            <div class="radio-card"><b>synthetic</b><small>count + prompt_length 确定性生成</small></div>
+          </div></div>
+        <div class="field"><label>数据集（perf 型）</label>
+          <select class="in"><option>rag-prefix-50（2000 条 · 前缀共享率 0.5 · 80~640 tok）</option><option>qa-uniform（1000 条 · 均匀分布）</option></select>
+          <span class="hint">在「性能数据集」页生成与管理</span></div>
+        </div>
+        <div class="form-sec"><div class="sec-head"><span class="sec-num">3</span><b>压力参数</b><small>并发 / QPS / 时长</small></div>
+        <div class="form-grid" id="perfParams"></div>
+        <span class="hint">参数清单随引擎与压测模式联动，仅展示当前组合支持的项</span>
+        </div>
+        <div class="form-sec"><div class="sec-head"><span class="sec-num">4</span><b>模型参数</b><small>来源可选 · 生成控制通用</small></div>
+        <div class="field"><label>目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时手填端点，免登记直接跑</span></span></label>
+          <select class="in" id="perfModelSel" style="max-width:380px">
+            <option>DeepSeek-V3 · api.deepseek.com（鉴权 OPENAI_API_KEY）</option>
+            <option>qwen2.5-72b · gpu-box-01 vLLM（内网）</option>
+            <option value="__custom__">自定义（手填端点）</option>
+          </select></div>
+        <div id="perfModelCustom" hidden>
+          <div class="form-grid">
+            <div class="field"><label>base_url</label><input class="in" value="http://gpu-box-01:8000/v1"></div>
+            <div class="field"><label>model</label><input class="in" value="DeepSeek-V3"></div>
+            <div class="field"><label>api_key_env</label><input class="in" value="OPENAI_API_KEY"></div>
+          </div>
+          <span class="hint">密钥不落库：仅存环境变量名，运行时解析</span>
+        </div>
+        <div class="field" style="margin-top:10px"><label>max_tokens（定长或 [min,max]）</label><input class="in" value="[128, 512]"></div>
+        <details><summary class="check" style="margin:6px 0 12px">高级（chaos 注入 / extra_body / tokenizer）</summary>
+          <div class="field"><label>chaos 故障注入（复用可靠性选择器）</label><select class="in"><option>不注入</option><option>process:suspend ×1 @ 60s</option></select></div>
+        </details>
+  </div>
+    </div>
+  </div>
+  <div class="drawer-foot"><span class="hint" id="perfSaveHint" hidden style="margin-right:auto">✓ 已保存为脚本「DeepSeek 网关容量摸高」（目标模型不沉淀），到「脚本库」查看</span><button class="btn" id="perfSaveScript">保存为脚本</button><button class="btn" data-close>取消</button><button class="btn primary">启动压测</button></div>
+</div>
+
+<!-- 生成器抽屉 -->
+<div class="drawer" id="genDrawer" hidden>
+  <div class="drawer-head"><h3>生成压测场景数据集</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="field"><label>场景名</label><input class="in" value="rag-prefix-50"></div>
+    <div class="field"><label>语料池（目录或 jsonl）</label><input class="in" value="./data/corpora/business.txt"></div>
+    <div class="form-grid">
+      <div class="field"><label>条数 count</label><input class="in" value="2000"></div>
+      <div class="field"><label>seed</label><input class="in" value="42"></div>
+    </div>
+    <div class="field"><label>输入长度分桶（token）/ 权重</label>
+      <div class="form-grid">
+        <input class="in" value="80, 320, 640"><input class="in" value="0.5, 0.3, 0.2">
+      </div>
+      <span class="hint">桶配比决定 TTFT 形态；同 seed 逐字节可复现</span></div>
+    <div class="form-grid">
+      <div class="field"><label>输出长度（定长或区间）</label><input class="in" value="[128, 512]"></div>
+      <div class="field"><label>前缀共享率 prefix_sharing</label><input class="in" value="0.5"></div>
+    </div>
+    <div class="field"><label>prefix_groups（同组共享长前缀，模拟 RAG KV 命中）</label>
+      <input class="in" value="共享系统提示词组 ×4"></div>
+    <div class="row" style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn">干跑校验（validate）</button><button class="btn primary">生成（POST /perf/datasets）</button></div>
+    <div class="seg-title">产物 stats 摘要（上一次生成）</div>
+    <div class="detail-stack">
+      <div class="kv"><span>count</span><pre>2000 条 · 生成 1.2s</pre></div>
+      <div class="kv"><span>长度分桶</span><pre>{"80":1002, "320":601, "640":397}（实测配比 vs 目标 0.5/0.3/0.2）</pre></div>
+      <div class="kv"><span>前缀命中</span><pre>shared_ratio=0.50 · 组内平均前缀长 512 tok</pre></div>
+      <div class="kv"><span>输出长度</span><pre>min/max_tokens 透传 vLLM（ignore_eos 定长）；一般端点为区间采样</pre></div>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>关闭</button></div>
+</div>
+
+<div class="ribbon">V1 静态稿 · 性能压测 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
+
+<script src="assets/v1.js?v=13"></script>
+<script>
+/* ---------- 任务列表 ---------- */
+const TASKS = [
+  ["locust-ramp-deepseek", "locust", "ramp 4→16", "DeepSeek-V3", "succeeded", "180s", "09-23 22:31", "zhimeng", "并发爬坡 4→16"],
+  ["perf-probe-sla", "evalscope-perf", "probe SLA", "DeepSeek-V3", "running", "—", "09-24 10:02", "陈曦", "SLA 摸高 ttft_p95 ≤ 500ms"],
+  ["evalscope-soak-720", "evalscope-perf", "soak", "qwen2.5-72b", "cancelled", "512/720s", "09-23 02:00", "刘畅", ""],
+  ["qa-baseline-u8", "evalscope-perf", "baseline 8", "qwen2.5-3b", "succeeded", "60s", "09-22 19:44", "zhimeng", "基线并发 u8 · 180s"],
+  ["spike-validation", "locust", "baseline + spike", "DeepSeek-V3", "failed", "120s", "09-21 16:10", "王维", "浪涌验证 · spike"],
+];
+function renderTasks(status, owner, kw) {
+  const hits = TASKS.filter(t => (status === "all" || t[4] === status)
+    && (owner === "all" || t[7] === owner)
+    && (!kw || (t[0] + t[1] + t[2]).toLowerCase().includes(kw)));
+  document.getElementById("taskTbl").innerHTML = `
+  <thead><tr><th>任务</th><th>引擎</th><th>模式</th><th>状态</th><th>时长</th><th></th></tr></thead>
+  <tbody>${hits.length ? hits.map(t => `<tr class="clickable" onclick="showPage('detail')">
+    <td class="rname"><b>${t[0]}</b><div class="rid">${t[3]} · ${t[7]} · ${t[6]}${t[8] ? ` · 脚本「${t[8]}」` : ""}</div></td>
+    <td><span class="tag mono">${t[1]}</span></td><td class="dim">${t[2]}</td><td>${badge(t[4])}</td>
+    <td class="num dim">${t[5]}</td>
+    <td>${t[4] === "running" ? '<button class="btn sm danger">停止</button>' : `<button class="btn sm">重试</button>`}</td></tr>`).join("")
+    : '<tr><td colspan="6" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+}
+bindTaskFilter("taskFilter", renderTasks);
+
+/* ---------- 任务详情：实时统计表 ---------- */
+document.getElementById("liveTbl").innerHTML = `
+  <thead><tr><th>指标</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${[["ttft_p95_ms", "486.2", "≤ 500", 1434, null], ["qps", "1.62", "—", 1434, null],
+    ["error_rate", "0.004", "≤ 0.01", 1434, true], ["tok_per_s", "69.4", "—", 1434, null]].map((s, i) => `
+    <tr class="${i === 0 ? "overall" : ""}"><td class="mono dim">${s[0]}</td><td class="num mono">${s[1]}</td>
+    <td class="num dim">${s[2]}</td><td class="num">${s[3]}</td>
+    <td>${s[4] === null ? '<span class="faint">—</span>' : badge(s[4] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+/* ---------- 大屏统计表 ---------- */
+const SUMS = [
+  ["overall", "ttft_p50_ms", "112.4", "—", "2312", true],
+  ["overall", "ttft_p95_ms", "247.0", "≤ 500", "2312", true],
+  ["overall", "latency_avg_ms", "1830", "—", "2312", null],
+  ["overall", "tpot_p95_ms", "9.8", "—", "2312", null],
+  ["overall", "qps", "1.64", "—", "2312", null],
+  ["overall", "error_rate", "0.004", "≤ 0.01", "2312", true],
+  ["u16", "ttft_p95_ms", "505.0", "≤ 500", "1200", false],
+  ["u16", "qps", "3.38", "—", "1200", null],
+];
+document.getElementById("sumTbl").innerHTML = `
+  <thead><tr><th>档位</th><th>指标</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
+  <tbody>${SUMS.map((s, i) => `<tr class="${s[0] === "overall" ? "overall" : ""}">
+    <td class="mono">${s[0]}</td><td class="mono dim">${s[1]}</td><td class="num mono">${s[2]}</td>
+    <td class="num dim">${s[3]}</td><td class="num">${s[4]}</td>
+    <td>${s[5] === null ? '<span class="faint">—</span>' : badge(s[5] ? "passed" : "failed")}</td></tr>`).join("")}</tbody>`;
+
+/* ---------- 八图 mock 数据（180s · 10s 桶 ×19 点 · ramp 4→8→16） ---------- */
+const T = Array.from({ length: 19 }, (_, i) => i * 10);
+const USERS = T.map((_, i) => [4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16][i]);
+const wave = (base, amp, noise) => T.map((_, i) => +(base + amp * Math.sin(i / 2.5) + (Math.random() - 0.5) * noise).toFixed(1));
+const mkAvgP95 = (base, amp, noise, k) => { const avg = wave(base, amp, noise); return { avg, p95: avg.map(v => +(v * k).toFixed(1)) }; };
+const TTFT = mkAvgP95(120, 30, 14, 1.9), LAT = mkAvgP95(1600, 500, 160, 1.7),
+  TPOT = mkAvgP95(8.5, 2.2, 1.2, 1.6), ITL = mkAvgP95(6.2, 1.6, 0.9, 1.8),
+  RPSv = mkAvgP95(2.2, 1.0, 0.25, 1.15), TOK = mkAvgP95(70, 34, 12, 1.25);
+window.cTTFT = t => perfLineOption(t, { dates: T, ...TTFT, color: t.charts.pass });
+window.cLat = t => perfLineOption(t, { dates: T, ...LAT, color: t.charts.err });
+window.cTPOT = t => perfLineOption(t, { dates: T, ...TPOT, color: t.charts.radar[2] });
+window.cITL = t => perfLineOption(t, { dates: T, ...ITL, color: t.charts.radar[1] });
+window.cRPS = t => perfLineOption(t, { dates: T, ...RPSv, color: t.charts.pass });
+window.cTok = t => perfLineOption(t, { dates: T, ...TOK, color: t.charts.radar[1] });
+window.cUsers = t => { const c = t.charts; return {
+  grid: { left: 6, right: 12, top: 12, bottom: 4, containLabel: true },
+  tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  xAxis: { type: "category", data: T, ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis, formatter: v => v + "s" } },
+  yAxis: { type: "value", ...baseAxis(c), axisLabel: { color: c.axis } },
+  series: [{ type: "line", step: "end", symbol: "none", lineStyle: { width: 2.2, color: c.ac2 || c.err },
+    areaStyle: { color: vGrad(c.pass, 0.10) }, data: USERS }] }; };
+window.cErr = t => { const c = t.charts; return {
+  grid: { left: 6, right: 48, top: 16, bottom: 4, containLabel: true },
+  tooltip: { backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
+  xAxis: { type: "value", ...baseAxis(c), splitLine: { lineStyle: { color: c.split } }, axisLabel: { color: c.axis } },
+  yAxis: { type: "category", data: ["HTTP 429 Too Many Requests", "ReadTimeout", "ConnectionError"],
+    ...baseAxis(c), axisLabel: { color: c.axis }, splitLine: { show: false } },
+  series: [{ type: "bar", barWidth: 16, itemStyle: { color: c.err, borderRadius: 4 }, data: [12, 3, 1],
+    label: { show: true, position: "right", color: c.axis, fontSize: 11 } }] }; };
+
+/* ---------- 性能数据集 ---------- */
+const DS = [
+  ["rag-prefix-50", "generated", "seed42", "2000 条 · 桶 80/320/640 @ 0.5/0.3/0.2 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "09-23 21:08"],
+  ["qa-uniform", "generated", "seed7", "1000 条 · 均匀 128~512 tok · 零前缀命中", "data/datasets/perf/qa-uniform-*.jsonl", "09-22 17:30"],
+  ["long-out-soak", "generated", "seed99", "600 条 · 输出定长 1024（ignore_eos）", "data/datasets/perf/long-out-soak-*.jsonl", "09-20 22:15"],
+];
+document.getElementById("dsTbl").innerHTML = `
+  <thead><tr><th>场景</th><th>来源</th><th>版本</th><th>stats</th><th>产物</th><th>生成时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${DS.map(d => `<tr>
+    <td class="rname"><b class="mono">${d[0]}</b></td><td><span class="tag">${d[1]}</span></td>
+    <td class="mono dim">${d[2]}</td><td class="dim" style="white-space:normal">${d[3]}</td>
+    <td class="mono faint" style="font-size:11px">${d[4]}</td><td class="dim">${d[5]}</td>
+    <td style="text-align:right"><button class="btn sm" data-open-drawer="genDrawer">克隆配置</button>
+    <button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
+
+/* ---------- 压力参数：随引擎与压测模式联动渲染 ---------- */
+const PERF_MODE_PARAMS = {
+  baseline: [
+    { label: "并发数 parallel", el: '<input class="in" placeholder="如 8（固定并发）">', tip: "固定并发基准；如需逐档爬坡请改用 ramp 模式" },
+    { label: "duration 总时长（秒）", el: '<input class="in" placeholder="如 180">' },
+    { label: "QPS（可选 · 开环 rate）", el: '<input class="in" placeholder="留空 = 并发模式">', tip: "配置 QPS 后按开环速率施压，此时忽略并发数" },
+  ],
+  ramp: [
+    { label: "并发梯度 parallel", el: '<input class="in" value="4, 8, 16">', tip: "逗号数组逐档爬坡（from → to 每 step 一档）" },
+    { label: "level_duration 每档时长（秒）", el: '<input class="in" placeholder="如 60；与 duration 二选一">' },
+    { label: "duration 总时长（秒）", el: '<input class="in" placeholder="可选；到时提前结束">' },
+  ],
+  probe: [
+    { label: "SLA 指标", el: '<select class="in"><option>ttft_p95</option><option>latency_avg</option><option>error_rate</option></select>' },
+    { label: "SLA 阈值", el: '<input class="in" placeholder="如 ttft_p95 ≤ 500ms">' },
+    { label: "QPS 探测上限", el: '<input class="in" placeholder="如 8.0">' },
+    { label: "单档时长（秒）", el: '<input class="in" placeholder="如 60">' },
+  ],
+  soak: [
+    { label: "并发数 parallel", el: '<input class="in" placeholder="如 16（长稳固定并发）">' },
+    { label: "duration 总时长（秒）", el: '<input class="in" placeholder="必填，如 7200">', tip: "soak 靠 duration 定义长稳窗口，必填；locust 引擎无请求数上限语义，时长即边界" },
+  ],
+};
+const PERF_ENGINE_PARAMS = {
+  "evalscope-perf": [{ label: "warmup 预热（条）", el: '<input class="in" placeholder="如 5">', tip: "正式施压前先打 warmup 条请求，规避冷启动毛刺" }],
+  locust: [
+    { label: "spawn_rate 起压速率", el: '<input class="in" placeholder="user/s">' },
+    { label: "arrival 到达模型", el: '<select class="in"><option>无（同步波次）</option><option>poisson 泊松</option><option>spike 浪涌</option><option>custom 曲线</option></select>' },
+    { label: "jitter 到达抖动（秒）", el: '<input class="in" placeholder="缺省 0">' },
+  ],
+};
+function perfCur(attr, dft) {
+  const el = document.querySelector(`.radio-card[${attr}].on`);
+  return el ? el.dataset[attr.slice(5)] || dft : dft;
+}
+function renderPerfParams() {
+  const engine = perfCur("data-e", "e", "evalscope-perf");
+  let mode = perfCur("data-m", "m", "baseline");
+  const probeCard = document.querySelector('#newTaskDrawer .radio-card[data-m="probe"]');
+  probeCard.classList.toggle("disabled", engine === "locust");
+  if (engine === "locust" && mode === "probe") {
+    // probe 仅 evalscope-perf：切到 locust 时自动回落 baseline
+    document.querySelectorAll('#newTaskDrawer .radio-card[data-m]').forEach(x => x.classList.remove("on"));
+    document.querySelector('#newTaskDrawer .radio-card[data-m="baseline"]').classList.add("on");
+    mode = "baseline";
+  }
+  const fields = [...(PERF_MODE_PARAMS[mode] || []), ...(PERF_ENGINE_PARAMS[engine] || [])];
+  document.getElementById("perfParams").innerHTML = fields.map(f => `
+    <div class="field"><label>${f.label}${f.tip ? `<span class="qmark">?<span class="tip">${f.tip}</span></span>` : ""}</label>${f.el}</div>`).join("");
+}
+document.querySelectorAll('#newTaskDrawer .radio-card[data-e],#newTaskDrawer .radio-card[data-m]').forEach(c =>
+  c.addEventListener("click", () => setTimeout(renderPerfParams, 0)));
+renderPerfParams();
+bindModelCustom("perfModelSel", "perfModelCustom");
+bindModelCustom("perfScriptModelSel", "perfScriptModelCustom");
+
+/* ---------- 脚本库：一个脚本 = 一个性能基线用例 ---------- */
+const PERF_SCRIPTS = [
+  { id: "baseline-u8", name: "基线并发 u8 · 180s", desc: "标准容量基准：固定 8 并发", src: "preset",
+    sum: "evalscope-perf · baseline · 并发 8 · 180s · rag-prefix-50",
+    snap: [["引擎 / 模式", "evalscope-perf · baseline（固定并发基准）"],
+      ["负载", "平台数据集 rag-prefix-50（2000 条 · 桶 80/320/640 · 前缀共享 0.5）"],
+      ["压力参数", "并发 parallel=8 · duration 180s · warmup 5"],
+      ["最近执行", "09-22 19:44 · qwen2.5:3b · ttft_p95 142ms"]], last: "09-22 19:44", upd: "框架发布" },
+  { id: "ramp-4-16", name: "并发爬坡 4→16", desc: "逐档爬坡找性能拐点", src: "preset",
+    sum: "evalscope-perf · ramp · 4/8/16 · 每档 60s",
+    snap: [["引擎 / 模式", "evalscope-perf · ramp（梯度爬坡）"],
+      ["负载", "平台数据集 rag-prefix-50"],
+      ["压力参数", "parallel 4,8,16 · level_duration 60s"],
+      ["最近执行", "09-23 22:31 · DeepSeek-V3 · u16 档 ttft_p95 505ms（超阈）"]], last: "09-23 22:31", upd: "框架发布" },
+  { id: "probe-sla", name: "SLA 摸高 ttft_p95 ≤ 500ms", desc: "二分探最高可行 QPS", src: "preset",
+    sum: "evalscope-perf · probe · SLA ttft_p95≤500ms · QPS 上限 8",
+    snap: [["引擎 / 模式", "evalscope-perf · probe（SLA 二分摸高）"],
+      ["负载", "平台数据集 rag-prefix-50"],
+      ["压力参数", "SLA ttft_p95 ≤ 500ms · QPS 上限 8.0 · 单档 60s"],
+      ["最近执行", "09-24 10:02 · DeepSeek-V3 · 探得 qps≈6.4（运行中）"]], last: "09-24 10:02", upd: "框架发布" },
+  { id: "soak-7200", name: "长稳 soak · 7200s", desc: "2 小时长稳：泄漏 / 抖动 / 慢查询", src: "preset",
+    sum: "evalscope-perf · soak · 并发 16 · 7200s",
+    snap: [["引擎 / 模式", "evalscope-perf · soak（长稳）"],
+      ["负载", "qa-uniform（1000 条 · 均匀 128~512 tok）"],
+      ["压力参数", "并发 parallel=16 · duration 7200s"],
+      ["最近执行", "09-23 02:00 · qwen2.5-72b · 512/720s 手动取消"]], last: "09-23 02:00", upd: "框架发布" },
+  { id: "ds-capacity", name: "DeepSeek 网关容量摸高", desc: "沉淀：官方端点 429 限流边界探测", src: "custom",
+    sum: "locust · baseline+QPS 开环 · qps 1→10 阶梯",
+    snap: [["引擎 / 模式", "locust · baseline（QPS 开环限速）"],
+      ["负载", "固定 prompt（128 tok 入 / 256 tok 出）"],
+      ["压力参数", "qps 1,2,4,6,8,10 · arrival poisson · spawn_rate 2/s"],
+      ["最近执行", "09-20 16:10 · qps 8 起持续 429（限流边界）"]], last: "09-20 16:10", upd: "09-20" },
+  { id: "spike-val", name: "浪涌验证 · spike", desc: "沉淀：突发流量下错误率与恢复", src: "custom",
+    sum: "locust · baseline · arrival spike · 120s",
+    snap: [["引擎 / 模式", "locust · baseline + spike 到达模型"],
+      ["负载", "rag-prefix-50"],
+      ["压力参数", "并发 32（瞬时）· duration 120s · jitter 0.5s"],
+      ["最近执行", "09-21 16:10 · error_rate 0.031（失败）"]], last: "09-21 16:10", upd: "09-21" },
+];
+function renderPerfScriptsTbl() {
+  document.getElementById("scriptsTbl").innerHTML = `
+  <thead><tr><th>脚本</th><th>编排摘要</th><th>来源</th><th>最近执行</th><th>更新</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${PERF_SCRIPTS.map(s => `<tr>
+    <td class="rname"><b>${s.name}</b><div class="rid">${s.id} · ${s.desc}</div></td>
+    <td class="dim" style="white-space:normal">${s.sum}</td>
+    <td>${s.src === "preset" ? '<span class="tag">预置</span>' : '<span class="tag" style="color:var(--ac)">自定义</span>'}</td>
+    <td class="dim">${s.last}</td><td class="dim">${s.upd}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm primary" data-open-drawer="newTaskDrawer" data-run-script="${s.id}">发起压测</button>
+      ${s.src === "custom" ? '<button class="btn sm">编辑</button><button class="btn sm danger">删除</button>' : '<button class="btn sm">复制</button>'}</td></tr>`).join("")}</tbody>`;
+}
+renderPerfScriptsTbl();
+
+/* 复用面板：脚本下拉 + 快照联动；行按钮「发起压测」直达 */
+const perfScriptSel = document.getElementById("perfScriptSel");
+perfScriptSel.innerHTML = `<optgroup label="研发预置">${PERF_SCRIPTS.filter(s => s.src === "preset").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>` +
+  `<optgroup label="自定义沉淀">${PERF_SCRIPTS.filter(s => s.src === "custom").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>`;
+function renderPerfSnap() {
+  const s = PERF_SCRIPTS.find(x => x.id === perfScriptSel.value) || PERF_SCRIPTS[0];
+  document.getElementById("perfScriptSnap").innerHTML = s.snap.map(kv =>
+    `<div class="kv"><span>${kv[0]}</span><div style="font-size:12.5px;white-space:normal">${kv[1]}</div></div>`).join("");
+}
+perfScriptSel.addEventListener("change", renderPerfSnap);
+renderPerfSnap();
+document.querySelectorAll("[data-run-script]").forEach(btn => btn.addEventListener("click", () => {
+  perfScriptSel.value = btn.dataset.runScript;
+  renderPerfSnap();
+  document.querySelector('#newTaskDrawer .chip[data-src="script"]').click();
+}));
+document.getElementById("perfSaveScript").addEventListener("click", () => {
+  document.getElementById("perfSaveHint").hidden = false;
+});
+</script>
+</body>
+</html>

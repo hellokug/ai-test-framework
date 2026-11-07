@@ -49,7 +49,7 @@ v1 按**能力模块**交付，不再按"补缺口清单"推进。每个模块�
 
 ### 模块 A：数据集治理子系统（需求已对齐，暂缓实施）
 
-完整需求与对齐结论已存档：`docs/requirements-datasetgov.md`。
+完整需求与对齐结论已存档：`docs/archive/requirements-datasetgov.md`。
 恢复实施时从 M0（对象建模 + 三池存储 + 审计）直接开始，无需重新对齐。
 
 ### 模块 B：指标标准性（2026-09-01 随平台化收缩）
@@ -336,7 +336,7 @@ Pumba 留容器场景二期。**自研部分 = aite 语义层编排**（开源�
 当前压测直接复用精度域 QA 数据集——输出长度随模型自由漂移（结果不可复现
 不可比）、缓存命中只有一个固定档位（synthetic 刻意零命中）、无客户场景概念
 （RAG 客户是"长共享前缀 + 短问题"，与 QA 零命中形态的 TTFT/吞吐曲线完全是
-两回事）。已存档的数据集治理需求（requirements-datasetgov.md）通篇为精度域，
+两回事）。已存档的数据集治理需求（docs/archive/requirements-datasetgov.md）通篇为精度域，
 性能数据集工程是规划空白。
 
 **能力形态**（perf.scenario 配置，产出带长度标注的 load/prompts.txt，两引擎
@@ -399,6 +399,22 @@ target 为缺省自评模型（指标 params.model 可覆盖）。连带加固 j
 mode=llm）。教训：集成缝隙的运行时行为离线 mock 测不到，真实联调必须先行（与
 locust 首跑同一教训）。
 
+### 模块 L：任务化协作与多 agent（2026-11-08 立项，待模块分层收口后探讨）
+
+背景：owner 确立「管理者-执行者」协作模式（CLAUDE.md「协作与教学总纲」）——owner
+提架构/需求痛点，执行者推进、整体验收、交付成品。随项目膨胀，单会话串行推进的
+吞吐与上下文成本成为瓶颈，需要把「任务化管理」落成平台能力。
+
+前置条件：模块分层收口（契约级文件稳定、共享收口文件拆分完成）——多 agent 并行
+的冲突面正是共享收口文件（原则 13），先治本再并行。
+
+待探讨方向（未定，不预设方案）：
+- 任务单元：以「域 + 契约边界」切分任务（一个 agent 只动一个域的文件），任务书
+  = 目标 + 影响面（地图爆炸半径）+ 验收命令（选域测试 + 四门禁）。
+- 协作形态：主控 agent 拆解/分派/验收，执行 agent 域内实施；契约改动串行、域内
+  改动并行（原则 13 的机器化）。
+- 状态落库：复用平台已有的 bg_task/DomainTaskKit 状态机，而非另起体系（奥卡姆）。
+
 ## 基线（已完成）
 
 - [x] pytest 全量 145 用例通过；ruff 零报错（2026-08-28）
@@ -424,13 +440,28 @@ locust 首跑同一教训）。
 ## 前端体验优化（最后）
 
 - [ ] 核心能力稳定后启动（迁移路径见 web-ui/README.md）
+- **前端主航道决策（2026-11-08 owner 确认）**：三条前端线收敛为一条——
+  ①`web-ui/mockups/v1` 静态稿原地对接真后端为**主线**（已实弹接通精度/功能/通用三域）；
+  ②包内免构建 SPA（`aite/web/static`）**冻结只修不增**；③Vite+TS 工程迁移**暂缓**，
+  重启条件 = 静态稿四域全部对接完成且需要离线部署/深度定制。
+
+## 架构债记账（2026-11-08 必要性审计产出，碍事时再动，不预先重构）
+
+- `aite/cli/main.py`（~1100 行）与 `aite/storage/repositories.py`（~1080 行）是线性增长的
+  共享收口文件（每个新能力都往里追加），并行开发冲突面最大。拆分方向：cli 按命令组
+  拆子模块（main 只做挂载）；repositories 按聚合根拆 mixin。触发条件：下一次在其中
+  追加超过 100 行，或模块 L 多 agent 并行启动前。
+- 文档收割未完：`web-ui/HANDOVER.md`（其他会话仍以其为「新会话必读」）与
+  `web-ui/TOOL-SUITE-PARAMS.md`（前端对接契约）暂不动，待前端主线稳定后收割进
+  V1-PLAN / config-reference；`docs/domain-backends.md` §1-9 契约节待并入 architecture.md
+  （代码注释仍引用其章节号，移动前须同步改引用）。
 
 ## 进度记录
 
 - 2026-08-28 建立路线图，完成架构盘点（模块地图/执行链路/能力清单见会话记录）。
 - 2026-08-28 确立项目标准（架构冻结范围/解耦规则/开发节奏/git 规范），写入 CLAUDE.md；补 .gitignore；基线确认通过（145 passed + ruff clean），执行基线提交。
 - 2026-08-28 v1 重定义为按能力模块交付；首个模块"数据集治理子系统"立项（四模块 + 交付物清单），旧打磨项转入 Backlog。进入设计对齐阶段。
-- 2026-08-28 数据集治理子系统完成需求对齐（位置/依赖/接口/补齐项均确认，见 requirements-datasetgov.md）后**暂缓实施**；焦点转回测试框架整体关键能力补齐。
+- 2026-08-28 数据集治理子系统完成需求对齐（位置/依赖/接口/补齐项均确认，见 docs/archive/requirements-datasetgov.md）后**暂缓实施**；焦点转回测试框架整体关键能力补齐。
 - 2026-08-29 新增能力：HF 数据集离线导入（`aite dataset add-hf` + `add_hf_dataset()`，双形态接口标准写入 CLAUDE.md）。外部注册表 `./data/aite_datasets.json` 与内置 BUILTIN_INFO 合并，数据不进包源码。+9 离线单测。
 - 2026-08-29 体验修复三连：报告显示 target/datasets 信息（rich/html）、报告目录改为 `模型/数据集/时间_短id` 三层结构。
 - 2026-08-30 指标审计结论：规则类指标教科书级可靠；统计类（bleu/rouge_l）结构正确但平滑/BP 细节与标准实现有偏差；tokenize 按空格切分导致**中文场景统计类指标失效**。用户决策：评测终态要业界认可分数 → 立项模块 B（标准后端 + 中文分词 + 对拍验证）。
@@ -583,3 +614,81 @@ locust 首跑同一教训）。
 
 
 - 2026-09-30 工具域断点续推语义重做（用户指出悖论：「跑完后重跑想从头，关 resume 又丢断电续推」）：`resume` 从 bool 升三态 **auto（缺省，状态感知）/ true（force）/ false**——auto：最近目录没跑完（断电/402）→ 就地续推只补缺失，跑完 → 自动全新起跑；force：改判官只重判/重出报告；false：永远全新。**生成侧身份指纹** `tool_identity`（模型/端点/数据集/limit/生成参数的规范化哈希，判官与基础设施参数 timeout_s/python_exe/eval_batch_size/rerun_review 刻意不在内）+ `run_state.json`（running→completed/failed 生命周期由 run_tool_suite 落盘，completed 刻意晚于 persist——persist 内部二次 parse 依赖 running 态保持决策稳定）；身份变更一律全新，不混入不可比预测（limit 5 验管线后跑全量=新任务）。**契约级记录**：POST /api/v1/runs 的 LaunchRequest 增可选 `resume` 字段（additive；CLI `--resume` 同名透传，用户需求「前端选择续推还是新任务」）。**顺带修复套娃 bug**：use_cache 相对路径在子进程 cwd 切换后二次拼接，产物整套嵌套一层（2026-09-29 aa_lcr 实弹发现）——`_normalize_cfg_paths` 统一绝对路径化。设计权衡显式记录：续推决策读 run_state.json（文件）而非 DB——状态文件是**绑定产物目录的缓存元数据**（同 evalscope 自身 identity snapshot 机制），与产出物同生共死、跨进程一致（agent/master/CLI 共享 FS 时决策相同）；业务运行状态的唯一权威仍是 DB test_run 行（原则 8 双轨 prohibition 针对「内存 dict vs DB」记账，此处为目录级工件元数据）。原则自查整改：parse_tool_suite 85 行超 80 上限 → 决策块下沉 `_apply_resume_policy`（66 行）；failed 态写盘 contextlib.suppress 静默吞错（原则 9）→ 显式 warning；completion 写盘失败不推翻已入库结果但告警（状态滞后=下次白续推一趟，无害）。测试 +14（决策矩阵 8/身份指纹/路径归一/状态生命周期 3），637 passed + ruff clean + lint-imports 2 kept 0 broken。收尾同步：renderers 新四段报告路径（模块/模型/数据集/时间）遗留的陈旧测试 test_report_relpath_model_dataset_time 仍按三段解包（本批 layout-v2 漏改），已同步为四段断言后全树 638 passed；gitignore 补 outputs/ 与 .venv-evalscope/（运行时产物/本地环境不入库）。
+
+- 2026-10-12 定期架构评审（机械门禁 + 三路分层审查：接口/编排层、插件层、契约/基础层）。基线全绿：lint-imports 2 kept 0 broken（12+7 豁免）、ruff clean、638 passed + 3 skipped（79s）。总体结论：四层架构无结构性偏航，分层合同/registry/段落化组织执行到位，全仓无超 80 行函数。发现四类存量债（均未动契约级文件，整改排期待对齐）：【P1·原则 10 复发】Repository 接口漂移未闭环——SqlAlchemyRepository 23 个实现特有公开方法（manual_eval 4 / bg_task 6 / agent 10 / suites-cases 3）零「实现特有」注记 + 2 处签名偏离（save_case_result 增 variant/variant_of、save_metric_results 增 source，engine 已按实现签名调用，接口形同虚设），调用方普遍以 repo: Any 持仓致类型检查不设防；整改 = 方法升接口或注记「实现特有」+ 调用方注解收紧。【P1·原则 9 真违例】connectors/gemini.py:79-81 响应解析失败静默返回空 output（坏数据换合法外观，CLAUDE.md 记载教训同款）；gateway/llm_gateway.py:377-379 embedding 缺依赖静默降级 hash 无告警无来源标注。【P2·结构性重复】gateway 绕过 connectors 直连三家 LLM API（httpx 越位 + 默认 base_url 两份并行维护）；metrics/performance.py（24 注册名）/reliability.py/agent_metrics.py 零生产调用仅测试引用——「存量自研指标迁移」最大最安全清理对象；metrics/swebench.py:65 在指标内做 harness 子进程编排（应迁 tools/）；engine.py:510 与 storage/__init__.py:15 重复 build_repository（engine 版可删）；阈值方向两张并行小表（tools/perf_common.py:30 与 datasets/compat/bench_import.py:18，现无交集属潜在漂移点）。【P3·收口与尾巴】AITE_FT_* 读写两处硬编码无共享常量、AITE_CACHE_DIR/toxiproxy 默认地址未进 config；service/agent_client.py:135-139 心跳循环每 ~5s 新建 httpx.Client（原则 1 点名教训模式）；路由瘦身尾巴（runs 后台编排、runs/suites 配置解析重复、manual_eval N+1 创建循环、reports 渲染编排含临时目录不清理、perfdata 跨层直达、agents 状态白名单）。豁免台账评估：撤销条件比台账暗示的近——engine 组合根残留仅约 30 行，其中 4 行注册副作用 import 一次小 PR 可外移 run_service；其余豁免（RateLimiter/renderers/datasets.catalog/context→gateway）是运行时依赖，撤销需抽接口而非搬家。工作区卫生：web-ui 改版中途（6 个 _patch_*.py 一次性脚本与 2/3 后缀新 mockup 待收尾提交）。
+
+- 2026-10-13 功能域评估场景/脚本/标签库后端实装（用户指示「对接功能后端并测试」；契约=V1-PLAN §10.4/§10.5 提案转正）：①场景双根——builtin（`aite/functional/scenarios` 包内只读）+ 用户根（config 新增 `DEFAULT_FUNCTIONAL_SCENARIOS_DIR=./data/functional/scenarios`），GET /functional/scenarios 合并扫描（id/显示名/维度/说明/形态 forms/受管脚本数/cases 数/**能力覆盖 coverage**=类型×行数聚合）、POST 建目录写 manifest.json（显示名缺省=id，id 正则约束）；②脚本（用例原子）CRUD——目录契约 `<场景>/scripts.json`（登记：name/case_type/external_ref/source）+ `scripts/<sid>.jsonl`（数据行）+ **派生 cases.jsonl**（全量脚本行拼接，pytest 引擎「目录即注册表」零改动消费），行级 harness.Case 校验（先补自动 id `sid.n` 再校验——Case 必填 id 的顺序教训）、场景内 id 唯一显式报错、脚本 id 全平台唯一、**legacy 收编**（首次写入若存在无主 cases.jsonl 自动收编为 legacy-cases 脚本 case_type=迁移，防派生覆盖丢失）、文件写出强制 LF（Windows CRLF 教训复用）；③维度标签库 dim_tag 表（Schema additive，create_all 建表）+ repo 段落 + 内置标签（API 契约/模型能力/Agent）与自定义合并去重返回；④导入 POST /functional/scripts/import（粘贴 jsonl 或数据集引用二选一，经 resolve_dataset_ref 读文件，同一 harness 校验）。路由 `web/routers/functional.py` 薄壳（异常映射 404/409/422：ScenarioReadOnlyError/FileExistsError→409）；测试 `tests/integration/test_functional_assets_api.py` +11（builtin/user 合并、manifest 详情、标签库去重、派生与 LF、builtin 只读 409、坏行 422 零落盘、跨脚本 id 冲突、patch/delete 重派生、legacy 收编、双来源导入）+ 真机 uvicorn 冒烟 11 步（httpx 驱动——Git Bash curl 中文 body GBK 化的老坑复现）。全量 649 passed + 3 skipped + ruff 干净 + lint-imports 2 kept 0 broken + 函数长度审计达标。**悬留**：任务 spec 增 version + 终态归档 version_results 表、GET /functional/version-results、/functional/quality/board 聚合（大屏/结果库后端）；场景 manifest PATCH、标签删除；CLI 双形态（本批 REST 优先，按需补 `aite functional-scenario` 子命令）；引擎默认消费用户场景根（现走 suite `tools.tests_dir` 指向用户根即用）。
+
+- 2026-10-13（续）版本归档链路实装（功能域质量链路收尾，用户「继续」）：①契约扩展（additive）——`storage/models.py` 新增 `version_result` 表（unique：domain+version+model，同键覆盖取最新；details JSON 存 dimensions 场景→pass_rate / overall 加权 / cases / run_id）；functional 任务 spec 顶层增 `version`（parse_tool_suite 对未知顶层键宽容，实测无害）。②归档钩子——`service/version_results.py`：`archive_maybe` 挂 `SuiteTaskExecutor.execute`（仅 module=functional 守卫；spec 无 version → debug 跳过；归档异常仅告警不推翻任务结果，原则 9），数据源 = RunReport.summaries 的 `pytest:<场景>` 行（场景级 pass_rate），overall = count 加权；`compute_board` 纯函数 = 目标 vs 基线维度并集矩阵 + Δ + 判定（达标/劣化/新增/缺失，与精度劣化同口径）+ KPI（总率差/劣化维度数）。③端点——GET /functional/version-results（version/model 过滤）、GET /functional/quality/board（缺版本 422 显式报错），repo 追加 upsert/list 段落（INSERT 分支补 identity 三键的教训：WHERE 键 ≠ 落库键）。④测试 `test_functional_version_results.py` +9（归档覆盖语义/无 version 跳过/钩子守卫不外抛/model 提取/矩阵判定含新增缺失/缺版本 422/API 带外种子查询——跨 loop 驱动 app aiosqlite 的规避：独立连接同库种子）。真机冒烟 4 步过（结果库列表/版本过滤/大屏矩阵与 KPI/缺基线 422）。全量 658 passed + 3 skipped + ruff 干净 + lint-imports 2 kept 0 broken + 函数长度审计达标。**功能域质量链路（场景→脚本→任务→版本归档→大屏）后端至此闭环**；悬留：场景 manifest PATCH、标签删除、CLI 双形态、前端 Vite 工程对接。
+
+- 2026-10-13（续二）功能域资产层架构审视修复（用户「审视代码是否符合架构要求，都修吧」）：逐条对照 CLAUDE.md 十四原则自查新代码，P1×3 + P2×5 + P3×6 全清。**P1**：①列表端点容错——单个损坏 manifest/scripts.json 只跳过 + logger.warning，不拖垮整个列表（原则 9，对齐 aggregator collect 先例；此前坏一个目录全页 422）；②归档跳过 status=error 的 run（崩溃半截数据不入版本矩阵，passed/failed 照归）；③legacy 收编逐行过 harness.Case，坏行显式报「无法收编」不静默入派生。**P2**：④create_dim_tag 捕获 IntegrityError → 409（并发双击唯一约束兜底，原先 500）；⑤大屏 KPI 增 added/missing 计数、improved 收敛为「达标且 Δ>0」（新增维度原先永不计入的语义 bug）；⑥case_type 白名单 CASE_TYPES（基础/边界/异常/兼容/迁移，防覆盖统计键漂移）；⑦行号解析收口 `functional/ingest.iter_cases_lines`（ingest/import_script/收编三处复用，坏 JSON 报「第 N 行」）；⑧场景 dimension 须在标签库内（create_scenario 转 async + repo，标签库与场景数据不再漂移）。**P3**：⑨_write_text 原子化（tmp + os.replace，崩溃不留半截 registry/派生文件）；⑩async 路由同步文件 IO 改 asyncio.to_thread（事件循环不被阻塞，service 保持框架无关）；⑪**CLI 双形态补齐**（`aite fscenario list/create`、`fscript list/show/import/delete`、`ftag list/add`，typer 子应用照 dataset_app 模板；CLI 侧业务异常本地映射退出码，不 import web 路由层）；⑫`docs/domain-backends.md` 新增 §16 契约文档（目录契约/端点/错误语义/CLI）。测试 +13（容错告警 caplog、收编坏行、白名单、行号、并发竞态、payload 内重复 id、未知维度、CLI 三组）+ CliRunner 表格在 80 列终端裁空单元格的坑（测试设 COLUMNS=240）。全量 **670 passed + 3 skipped** + ruff + lint-imports 2 kept 0 broken + 函数长度审计全绿（chaos observer 1 例 xdist 环境敏感 flaky 串行即过，既有问题与本次无关）。
+
+- 2026-10-13（续三）前端原地对接层（用户拍板「静态稿原地对接」路径，区别于 Vite 工程化正路）：①`web-ui/mockups/serve.py` 升级为**同源反向代理**——`/api/*` → `AITE_API`（默认 127.0.0.1:8300），后端零 CORS 改动；后端不可达代理回 502。②新增 `mockups/v1/api-live.js` 对接层（仅 functional2.html 引入，其他静态稿零影响）：boot 探测 `/functional/scenarios` 可达性 → 左下角 **LIVE/MOCK 徽标**，live 时逐板块真数据渲染（脚本库 GET /functional/scripts 重映射回假数据字段名以复用整套筛选管线；场景卡 + 能力覆盖；任务列表 GET /functional/tasks；版本结果库；大屏 quality/board 的 KPI/矩阵/结论/趋势图全真），写操作真通（UI 新建场景/新建脚本（行编辑→harness 校验）/导入/删脚本/发起任务 POST tasks+run）；**后端不可达自动回退假数据**，评审功能不受影响。③踩坑三连（全部实测）：IAB **按路径缓存且无视查询参数与 no-store**——api.js 改内容必须**换文件名**（api.js→api-live.js 再升 ?v 均无效经验，改名才生效）；**`[data-page="board"]` 会命中侧栏 `<a>` 链接**（v1.js 壳层给侧栏链接也加了 data-page）——section 查询必须 `main.page-host` 前缀限定；IAB 内 goto 同文档 hash 变化不重载。④boot 逐板块 fail-soft：单板块失败 toast 告警并保持该板块演示数据，不推翻整页 LIVE 状态（ping 为唯一权威）。验证：IAB 实测 LIVE 徽标 + 脚本库/场景卡/任务列表/详情/版本结果库/大屏矩阵全真数据 + UI 建场景写操作真落盘 + 断后端回退 MOCK。定位边界：任务详情 live 视图仅概要（场景级明细/曲线等详情端点后续接）；human 评审页未对接；本层为过渡形态，Vite 工程化时照搬字段映射。
+
+- 2026-10-13（续四）模型管理对接 + py3.10 兼容修复（用户「选不到模型」）：①兼容修复——functional_assets 用了 `datetime.UTC`（3.11+）在 conda evalscope（py3.10，日常运行环境）启动即 ImportError；改 `timezone.utc` 并在双解释器各跑 32 项资产测试全绿（教训入 HANDOVER：requires-python>=3.10 是硬约束，新代码禁 3.11+ 特性；.venv py3.14 测试过 ≠ conda 运行时可用）。②`GET /api/v1/common/models` 新端点（web/routers/common.py +2 测试）——模型预制清单（data/common.yaml 只读，name/model/base_url/api_key_env），是 suite `target.profile` 的可选值真源；common 缺失返回空不报错。③前端 api-live.js——创建任务「目标模型」下拉接 /common/models（真预制名作 value，静态演示文案退场；空库 toast 引导 `aite common show`）；被测版本 select 转 input+datalist（版本管理页未建前允许自由输入，历史版本作提示）；公共·模型管理页（common2.html）对接 GET/POST/DELETE /models（DB 网关别名注册表：列表/注册/删除）。**待定设计项**：模型双注册表（common.yaml 预制 = 任务 target.profile 来源 vs models 表 = 网关别名）的统一/同步方案未定，HANDOVER 已记录。
+
+- 2026-10-13（续五）密钥库：api_key 密文存储 + 运行时透明解密（用户「api_key 密文显示，不想每次上服务器手动 set 环境变量」）：①`utils/secrets.py` 本地密钥库——存储 `data/.secrets.json`（name → {enc, mask}）+ 独立密钥文件 `data/.secret.key`（随机 32B，与库分离，均不入 git 已验证）；加密 = 本地密钥派生 SHA-256 流加密 + 随机 nonce（威胁模型：单机单用户，防随手翻库，不对抗本机攻击者——明文注释写明）；`resolve_secret(name, default)` 统一解析：**环境变量 > 密钥库 > default**，解密失败降级 default 并告警（原则 9）。②四处解析点收口替换：tools/base（evalscope/pytest/locust 共用）、core/loader（自研域 effective_api_key）、reliability_tasks（agent+probe）、rageval_adapter（judge）——密钥值经原链路流动，子进程/客户端零改动。③REST 三端点：GET /secrets（仅 name+掩码，明文/密文永不回传——测试断言钉死）、PUT /secrets/{name}（422 空值）、DELETE。④前端 common2 模型管理页加「密钥库」卡片（掩码清单 + 录入表单 password 型，PUT 后回显掩码）。测试 +8（回环/nonce 不重复/覆盖/清单无明文/持久跨实例/env 优先/store 兜底/坏条目降级/API 全链）。真机验证 6 步全过（PUT 200 掩码 → 明文不泄漏 → 无 env 解密成功 → env 优先 → 删除 → EMPTY）。**与既有红线的关系**：config 仍只存 env 名（api_key_env 惯例不变），密文值在独立存储且 gitignore；tools/base 明文密钥禁入配置的拦截保持不变。
+
+- 2026-10-13（续六）功能域用例级数据落库 + live 详情真数据（用户「要有场景汇总/总通过率/成功失败个数/成功失败用例原始输入输出」+「状态要自动转换」+「只选 api_limits 却全跑」）：①**选择翻译修复**——整选场景原先不写任何过滤（datasets 空 = 适配器语义全跑，实测 9 场景全跑实锤）→ 前端提交改写 `tools.datasets = [勾选场景名]` + 部分勾选场景叠加 `tools.cases`（场景内用例 id，不带前缀）；parse/adapter 双重实测精确圈定。**语义说明**：错误 = 执行异常（超时/连接），断言不通过 = 失败，两者都拉低 pass_rate——错误 0 + pass_rate < 100% 是合法状态。②**用例级数据落库**（此前 pytest 工具路径只落 run 行 + junit，用例明细仅存 work_dir）——harness 插件 `pytest_runtest_makereport`（hookwrapper）逐用例写 `AITE_FT_RESULTS` 指向的 results.jsonl（external_key/desc/messages/params/expect/response/passed/error）；adapter env 注入路径 + collect 解析回填 `ToolRunResult.case_records`（additive 字段，tools/base dataclass 非 core 契约）；persist_tool_result 落三表：`save_metric_summary`（overall+每场景 → run_metric_summary，此前工具域从不写该表导致 GET /runs/{id} summaries 恒空）+ `repo.save_tool_case_record`（test_case 快照按 external_key 复用 → case_result 原始输出/错误 → pass 指标行，单事务三写）。③**live 详情真数据重写**：run 行（DB 权威）+ summaries 场景表 + KPI 四卡（总通过率/成功/失败/错误）+ **成功/失败用例原始输入输出**（GET /runs/{id}/cases，list_case_results outerjoin test_case 透出 input/expected）+ 运行中进度卡 + 刷新按钮；任务列表 5s 轮询状态自动转换（签名比对免重渲染扰动）。④**F5/侧栏详情恢复**：showLiveTask 写 hash `#detail/<taskId>` + sessionStorage；boot 用解析期捕获的初始 hash 恢复真实视图。测试 +10（secrets 8 + 归档 error 跳过 + KPI 语义；rageval 隔离补丁；工具用例落库链路）；全量 679 passed + ruff/lint-imports/audit 全绿。踩坑：heredoc 转义写坏 harness.py（patch 脚本改走 Write+Edit 工具链）；rageval「未设置应报错」测试被真实用户密钥库击穿——测试须隔离用户数据。
+
+- 2026-10-13（续七）用例级采集真机联调收尾（用户实测揪出三连）：①`record_result` 建目录缺失——results/ 子目录无人创建 → 每用例 FileNotFoundError → pytest INTERNALERROR 整场崩（孤立冒烟没暴露：独立跑用了绝对路径且手建目录），补 `os.makedirs`；②NameError——harness 模块无 Path 导入，改 os.makedirs；③真机 6 步验证全过（PUT 密钥掩码 → 明文不泄漏 → 无 env 解密成功 → env 优先 → 删除 → 降级），真实 deepseek run 的用例级记录 2+ 条带原始输入输出入库并可经 GET /runs/{id}/cases 查询。**运维教训（用户实测反复撞上）**：aite serve 是长驻进程，Python 模块改动必须重启进程才生效——本轮「改完没重启」导致的误报（采集不工作/仍全跑）消耗了多轮排查；`[data-page=]` 选择器会命中侧栏 `<a>` 链接同理是环境类误报的高发区。
+
+- 2026-10-16 清空功能域测试数据（用户指示「把当前的评估场景和脚本都删掉，我要从头开始构建」——上会话遗留待办，本会话第一件事执行）：①场景/脚本资产本就已空（`data/functional/scenarios/` 用户根不存在、无 scripts.json，上个会话的 UI 测试数据只落在 DB）；②`aite.db` 单事务清除 functional 域测试数据 **208 行**——functional_task 15（test~test10/verify-*）/ version_result 3 / test_run 30（engine=pytest 权威口径圈定，含 9 月初 19 条早期 ft-* 测试 run；与 web_service.run_domain 同源映射防漏防多删，交叉核对 13 套件无跨域共享）/ test_suite 13 / test_case 21 / test_case_result 21 / run_metric_summary 84 / metric_result 21，dim_tag 本就 0；③`reports/tool/pytest/` 报告产物目录（702K，恰为 13 个已删套件）；④备份 `aite.db.bak-20261016-0007`（已 gitignore `aite.db.bak-*`）。不动项：精度/性能/swebench 历史 178 run、9 个 builtin 场景（框架资产）、`data/datasets/functional/mini-set`（数据集非场景/脚本，不在指示范围，UI 可自行删）。活后端 8300 实测任务列表/版本结果库已空（SQLite 并发安全，无需重启），用户可从 UI 从头建档。
+
+- 2026-10-16（续）前端两连修复（用户实测反馈）：①「评估场景刷新跳任务详情+加载失败」——api 对接层 fapiBoot 详情恢复兜底不看点位、无条件从 sessionStorage 恢复最后任务 id（清库后 404 卡死错误页）；修复 = 仅刷新时 hash 以 #detail 开头才恢复（停别的页刷新留在原地）+ 任务 404 优雅回落（清会话记录 + toast + 回任务列表）。②「新建脚本默认最少两行 JSON」——静态稿遗留两张演示行卡（512/64k 变体示例）+ 行卡无删除控件，UI 焊死最少两行；业务约束本就是 1..N。修复 = 行模板收口 nsRowHtml(n)（初始 1 空行）+ 每行删除控件（1 行下限 toast + 重编号）+ nsReset 打开即干净态（通用入口与场景卡入口全覆盖）+ desc 正则修复（/^\u884c\d+/ 匹配不了「行 1」带空格）+ 每行 ≥1 断言前置校验（harness 文档声明但代码未拦的空洞，前端补上防空断言恒过）。**api 对接层再次改名 api7.js → api8.js**（IAB 路径缓存铁律），functional2/common2 同引 api8.js?v=1。IAB 实测 9 项全过（刷新点位保持/404 回落/初始干净态/增删行/重编号/下限拦截/脏状态复位等）。既知：本轮实测证明当前 IAB 对 HTML 同路径内容修改可正常刷新（历史「必须改名」结论仅适用旧损坏实例），js 仍保守遵守改名约定。
+
+- 2026-10-16（续二）断言参数行编辑器（用户「只让选类型没让填断言结果，怎么断言」）：新建脚本抽屉的断言编辑从「chips + 单个共享断言参数框」重做为**勾选类型即展开该类型参数行**——http_status（== 状态码，100-599 校验）/ JSON 字段（路径 + ==/∈/长度/类型 关系 + 期望值，harness _JSON_SPEC_KEYS 低代码子集）/ 包含关键词（+忽略大小写）/ 不含关键词（替换引擎无对应键的「正则匹配」死芯片）/ finish_reason（四枚举下拉）/ 非空·no_leak·sse_done（无需参数）；api 层按参数行结构化构建 expect（loose JSON 解析、逐项显式报错），「正则匹配」移除理由=引擎断言键族无此键、勾了必 422。踩坑两连：①重绘抹值——勾选新断言整体重绘参数区抹掉已填值，修复=重绘前按断言名收割值回填；②IAB goto 后立即 evaluate 读旧帧造成两连误判（一度误判为持久 HTML 缓存），同文档 reload 后再测才是可靠路径，HTML 同路径修改 reload 后可取新内容。**api8.js → api9.js 改名**，functional2/common2 同引。IAB 实测：monkeypatch FAPI.post 捕获 payload——expect 六键映射全对 + 值保留断言 + params 透传正确，零落盘。
+
+- 2026-10-16（续三）vars 生成器族扩充 + 前端低代码封装（用户「随机乱码/数字/定长字符串要预制方法才能低代码」）：引擎 vars 占位符机制（决策 16 的"白送批量变体"）原只有 haystack 一个生成器、前端零入口。①后端 harness.py 生成器族扩至 5 个——random_string（定长+charset alnum/letters/digits/hex）/ random_number（区间整数）/ garbled（乱码：mojibake 底料 + 多区段 Unicode 采样，**刻意排除代理区与控制字符保证 JSON 安全可落库**）/ random_choice（参数化等价类）+ 可选 seed（缺省每次执行新随机值、给定可复现）；**正确性修复**：rendered_messages 在发送与结果记录两处各调一次，随机生成器会「记录的输入≠实际发送的输入」→ 实例级渲染缓存（同次执行一致、跨执行取新值）；加载期逐项校验未知生成器/缺参数显式报错。②前端低代码：新建脚本行卡新增「生成值占位符」区——五生成器按钮一键插入 {gN}（空 content 自动骨架且光标落位 content 内——实测抓到的组合流缺陷：否则第二占位符插到 JSON 结构外），条目行内编辑参数+seed，移除同步清占位符；api10.js（api9 改名）结构化组装 row.vars。③契约 domain-backends.md §16.4；测试 +6 全绿，全量 686 passed + 3 skipped + 四门禁绿。**运维**：pytest 子进程执行天然生效；已运行 serve 进程内资产校验链（顶部 import Case）需重启才能创建带 vars 的脚本。**踩坑**：addopts 已含 -q 再叠加 -q 成 -qq（pytest 9 隐藏汇总行），误判过进程崩溃。
+
+- 2026-10-16（续四）评估场景删除（用户「评估场景不支持删除吗」——契约缺口，场景此前只有 GET/POST）：①后端 DELETE /functional/scenarios/{id}——service 层 delete_scenario 复用 _scenario_dir 解析（builtin→409 只读、不存在→404），整目录 rmtree（manifest+scripts 登记+行文件+派生 cases.jsonl，目录即注册表的删除语义）；历史任务/版本归档持配置快照与维度键分数，不随删除失效（docstring/确认框均注明）；路由 asyncio.to_thread + 既有 _asset_errors 映射零新增。②前端 api11.js（api10 改名）——用户场景卡加「删除」按钮（builtin 卡维持「随框架发布」无删除），confirm 确认框注明整目录语义，成功后 wireScenarios 全量重渲染（场景树/抽屉下拉同步）。③契约 §16.2 补 DELETE 行；集成测试 +2（删目录+404/409 语义、级联脚本后 GET 404）。全量 **688 passed + 3 skipped** + ruff/lint-imports 绿；IAB 端到端实测：UI 建探针场景→删除按钮→确认框→消失→磁盘目录移除，用户自建场景不受影响。
+
+- 2026-10-16（续五）脚本生命周期补全四连（用户开始实建场景后的实测反馈）：①**脚本编辑**——后端 PATCH 本在但前端未接：openEditScript 详情回填（content/params/断言 chips+参数行/vars 全量重建，场景与脚本 id 编辑态锁定），提交切 PATCH（name/case_type/external_ref/rows 整体重写），编辑↔新建态互切复位（按钮文案/禁用态/editSid）；踩坑=动态行卡漏 bindChips（芯片无监听连勾选都不切换）。②**断言关系扩充**——引擎 _JSON_SPEC_KEYS 加 neq（不等于，恒区分大小写，与 eq 的 ic 语义刻意分离）与 contains（like：目标转字符串子串包含，ignore_case 生效）；UI 关系下拉补 !=/包含(like)，编辑回填反向映射。③**任务树数据源修复**（"新建任务选不到"）——根因：FT_CASES 只在 wireScenarios 置空、从不随真实脚本更新，新场景用例永远不可选；修复=list_scripts 增 row_index（[id,desc] additive）+ wireScripts 以其重建 FT_CASES（新用例默认全选语义）+ renderFtPick + sfScen 场景筛选下拉刷新（原写死 builtin）。④**新建脚本保存错位**——submitNewScript 用「drawer 内最后一个 select」定位场景下拉，vars/断言引入行内 select 后被劫持（scenario_id 解析成 alnum/neq 必 422）；修复=场景 select 显式 id=nsScen。**连带发现**：v1.js 的 [data-open-drawer] 监听只在启动期绑定，live 重渲染的行按钮（定向执行/过滤跑）全是死按钮→文档级委托兜底（重复触发幂等）。中文名脚本名称验证可用（id 规则英文不变）。测试 +3（neq/contains 单测、row_index 集成），全量 **692 passed + 3 skipped** + 四门禁绿；IAB 全链路实测（编辑回填→PATCH 持久化 neq/http_status、定向执行→树展开勾选、错位回归、探针数据清理）。既知：IAB goto 后立即 evaluate 读旧帧第三次复现，一律 reload 后再测。
+
+
+- 2026-10-16（续六）http_status 关系形式（用户「http_status 还是只有==」）：expect.http_status 从纯 int 扩为 **int（== 兼容不变）或单键 {op: 值}**（eq/neq/gte/lte/in，值域 100-599）；「配了 http_status = 预期错误模式」的存在性派生对对象形式零改动；UI 参数行加关系下拉（∈ 逗号分隔多值），eq 提交保持 int 兼容、编辑回填双向映射。测试 +2，全量 **694 passed + 3 skipped** + 门禁绿，IAB 实测 int↔对象双向回填与持久化（探针清理）。踩坑：dict 字面量择一分发全分支急切求值（op≠in 分支 TypeError）——类型敏感择一逻辑用 if/elif。既知边界：http_status 的 ∈ 语义=命中任一即过；neq 语义=错误模式下发错响应当被测对象后「状态码不得等于某值」。
+- 2026-10-16（续七）完整请求体低代码化（用户「输入只有 message，需要完整请求体」+「stream=true 输出是流式吗」）：①行卡新增 **tools 字段**（OpenAI tools 数组 JSON，请求体顶层透传；此前 UI 无法表达 FC 用例的 tools）+ **「预览完整请求体」**折叠区（实时合并 model 占位/messages/tools/params 渲染 JSON，占位符原样显示标注执行时替换）；params 标签/提示澄清为「请求体其余字段·任意顶层键透传」（stream/temperature/response_format…，下划线前缀=引擎控制键不进请求体）。②流式断言凑齐三件套：断言芯片新增**最少块数**（chunks_min ≥1 整数，SSE chunk 数下限）——与既有 sse_done/finish_reason 组成 stream:true 全套。③stream 语义已在引擎（零改动）：params.stream=true → _post_stream 真 SSE 逐块接收（不重试），断言对象=拼接后伪响应（content=delta 拼接、finish_reason=末块、附 _chunks/_sse_ok）。api17.js（api16 改名）。IAB 实测：预览合并正确、载荷 tools/chunks_min/stream 组装完整（monkeypatch 零落盘）。
+
+
+- 2026-10-16（续八）请求预览 Postman 化 + 函数吞没事故：预览升级为可直连形态——目标模型下拉（/common/models 预制，空结果不缓存可重试）+ 真实 model 名 + 完整 curl（base_url+/chat/completions 同引擎 _request_url 规则；Authorization: Bearer ${api_key_env} 环境变量占位粘贴即用；单引号转义）+ 复制 JSON/curl 按钮。**事故与修复**：预览补丁区间替换吞掉 6 个函数定义（vars/asserts 全家），内联脚本尾部抛错致后续 addEventListener 全灭（表象=全页点击无反应、node --check 不报——运行期才炸）；定位=功能逐条探针→逐语句执行→函数存在性审计（6 缺全数补回）。**教训**：python 锚点区间补丁后三件套必跑——函数存在性审计 + node --check + reload 冒烟；语法检查不覆盖运行期引用。IAB 实测：deepseek/glm 预制切换 body model 与 URL/鉴权头联动正确，复制按钮就位（密钥永为环境变量占位不内嵌）。
+
+- 2026-10-16（续九）任务状态与评估结果语义分离（用户「任务显示已通过但用例失败——通过是评估层说法，完成是任务层说法」）：功能域任务列表/详情状态徽章从 succeeded→「已通过」的误译改为任务层口径（已完成/执行异常/进行中/排队中/已取消，api 层 taskBadge 复用现有样式零 CSS 改动）；原「场景通过率」列改「评估结果」列 = result.status 引擎评估判定（通过/未通过/—）；筛选 chips 同口径改后端原始键。api18.js（api17 改名），后端零改动（kit 状态值与 result.status 本就分层，纯前端显示语义修正）。IAB 实测两列徽章正确。
+
+- 2026-10-16（续十）评估结果列改通过率（用户「test3 断言失败却显示通过」——第三层语义澄清）：result.status 实为执行层判定（阈值未配置时进程跑完即 passed），非用例评估真值。评估列改显**通过率**：①suite_summary 增 evaluation_stats——functional pytest 行（dataset=pytest:<场景>，value=场景通过率/count=用例数）按 count 加权出 pass_rate/evaluated_cases（与 version_results 同源口径，其他域空缺省）；②前端评估列 = 百分比（100% 绿/0% 红/中间黄）+ 用例数；③存量任务 result 为执行期快照无 pass_rate → 前端 /runs/{id} summaries 兜底加权回填。api19.js（api18 改名）。测试 +3，全量 **697 passed + 3 skipped** + 门禁绿；IAB 实测 test3 = 已完成 + 红色 0% 1 例。至此任务三层语义对齐：任务状态（执行层）→ 评估结果（用例通过率）→ 详情 KPI/用例明细（逐例归因）。
+
+- 2026-10-16（续十一）脚本库全瘫事故（用户「脚本库没有刷新出来」）：32 的 taskBadge/evalCell 定义在 api 层，页面内联脚本**启动期** renderRuns 引用（api 加载前）→ ReferenceError 中途死亡 → CASE_SCRIPTS/FT_CASES/nsRows/全部监听器未初始化（脚本库空+表单瘫，与决策 31 同症第二种成因）。修复=渲染函数移入页面脚本（api 运行期经 window 共用），api 删重复。**教训**：内联脚本启动期禁止引用后加载脚本的函数（v1.js 先加载可用；api 层只可运行期引用）；补丁审计三件套再加加载顺序检查。IAB 复测：脚本库 10 行、nsRows 初始化、任务列表两层徽章全恢复。
+
+- 2026-10-16（续十二）vars 占位符扩展到 params（用户「deepseek 支持 input 参数怎么低代码加」）：任意顶层字段（input 等）= 行卡 params JSON 直接写（原有能力，澄清）；生成值需求 → 引擎 vars 替换从 messages 扩展到 **params**（rendered_params 与 messages 同源 _render_values，同占位符同次执行两处同值；发送/记录两调用点同步替换；原始 params 不改动；无 vars 原样透传）。测试 +3，全量 **700 passed + 3 skipped** + 门禁绿；前端 vars 提示语同步（页面文案零 js 改动）。
+
+- 2026-10-16（续十三）case_type 芯片劫持修复（用户 422「非法用例类型: http_status」）：submitNewScript 的 case_type 取「抽屉内第一个选中 chip」——干净态打开+只选断言时被断言芯片劫持。修复=类型芯片组显式 id=nsCaseType，提交/编辑回填均组内解析（未选默认「基础」）。api20.js（api19 改名）。IAB 回归过。审计结论：本会话定位符劫持三连（场景 select/case_type chips/+inputs 索引潜在）——表单取值一律显式 id，禁「第 N 个/第一个 .on」。
+
+- 2026-10-16（续十四）对话承载切换 + 行复制（用户澄清 deepseek input=对话放 input 字段；参数校验用例「新增→抄 messages→抄参数→改参数」流程不顺）：①行卡「对话承载」下拉 messages/input/不发对话——input 与 none 提交时 messages=[] + params._omit_messages=true 引擎控制键自动省略（引擎原有能力零改动），input 模式对话数组进 params.input；预览同步按承载合并；编辑回填反向解析（控制键不回显）。②行卡「复制此行」（cloneNode 保值 + bindChips 重绑 + 重编号）——同模板多变体改参数即得。参数校验用例工作流收敛为：新建→选承载→params 填坏值→http_status 断言→保存；多变体=复制改参。api21.js（api20 改名）。IAB 载荷实测过。
+
+- 2026-10-16（续十五）常用参数结构化 + JSON 高级框 + 原始报文模式（用户「常用参数加输入框，JSON 框构造结构/key 破坏场景」）：行卡 params 区三层重构——常用参数网格七项（temperature/top_p/max_tokens/stop/stream/response_format/thinking，留空=官方缺省）/ params JSON 高级框（合法 JSON 覆盖合并常用值，乱写 key 原样透传）/ 原始报文开关（_raw_body 原样直发，构造非法 JSON 结构破坏 400 场景无需合法）。**设计要点：常用框不做合法值拦截**（非法值透传配 http_status 断言=参数校验用例）。nsCollectParams 页面层单一来源（预览/提交共用）；编辑回填按已知键拆控件、_raw_body 反解原始模式；nsReset 补清 textarea/checkbox。api22.js（api21 改名）。IAB 四场景实测全过。
+
+- 2026-10-16（续十六）常用参数网格补全至设计文档全量（用户「用例里的参数没全部支持」）：网格 7→14 项——新增 stream_options(include_usage)/tool_choice(缺省/none/auto/required/具名+函数名框显隐)/logprobs/top_logprobs/user_id/freq_penalty/pres_penalty（废弃兼容用例）。至此 deepseek-inference-api.md 测试设计涉及参数控件化 100%（承载/model 覆盖/原始报文此前已支持）。采集与编辑反解同步扩展（具名对象↔下拉+函数名框）；承载/具名显隐迁 change 委托。api23.js（api22 改名）。IAB 载荷实测 7 新键 + 具名显隐双向全对。踩坑：探针 new Event 默认不冒泡，委托收不到——须 {bubbles:true}。
+
+- 2026-10-16（续十七）行复制丢参数修复（用户「复制的时候有一些参数没有复制」）：cloneNode(true) 只拷属性，用户手输的 dirty value（输入框/下拉/勾选）不在属性里 → 克隆后丢参（此前 textarea 恰好保值造成误判）。修复 = 克隆后按序逐控件显式拷贝 value/checked，17 项控件全量比对零差异。教训：cloneNode 复制表单必须显式搬运 dirty 值。
+
+- 2026-10-16（续十九）断言芯片补全至引擎全量 + 文档断言明确化（用户三问：校验没明确/没法选/怎么解释）：①引擎 resp 断言补 contains（错误体模糊匹配，受 ignore_case）；②低代码断言芯片 9→15（引擎 16 键全覆盖）：指定工具被调用/工具参数包含/不发起工具调用/无乱码/无复读/错误体字段（resp：path+==/包含/长度/类型/非空，仅预期错误模式生效）；③设计文档新增断言速查表（芯片×键×语义×生效范围×盲区），OC 表 18 行断言要点明确为芯片配置，修正 OC-11/17 thinking+具名约束违规（官方 400）。api24.js（api23 改名）。相关 75 passed + 门禁绿；IAB 载荷实测过。残余盲区：成功响应外层字段（usage/model 回显/reasoning_content）——resp 仅错误模式，文档已标注。
+- 2026-10-24 精度域（含 agent 评测）前端全链路实装（用户「精度+agent测试都接入前端，我来测试」）：functional 原地对接模式（HANDOVER 决策 20）推广到精度域。**后端**：①accuracy_assets 脚本资产层——脚本 = suite raw 同构（V1-PLAN §10.4 accuracy 形态），builtin = examples/accuracy/*.yaml 扫描（18 个：mmlu/ceval/gsm8k…+ agent_eval/swebench 等 agent 预置，裸 suite raw 即时包装 doc，损坏文件跳过告警），自定义 = data/accuracy/scripts/<id>.yaml（LF 强制 + 原子写），保存经 resolve_suite 真实校验（工具域轻校验/自研域 SuiteConfig 强校验双路径）；②GET/POST/PATCH/DELETE /accuracy/scripts（routers/accuracy.py，404/409 只读与重名/422 校验错误映射与 functional 同口径）；③SuiteConfig 增 version（additive，被测版本标注；工具域 raw 透传零改动——SuiteConfig extra=forbid，自研套件顶层 version 原会 422，此字段解锁前端版本输入直传）。**前端**（accuracy2.html + api-acc1.js 新文件名防 IAB 路径缓存）：任务列表（任务层状态徽章 + passed chip→succeeded 口径对齐 + 计数实时 + 分数列 /runs/{id} overall 兜底）、任务详情 live（指标汇总 metric×dataset + overall 加权行、失败样本卡、报告产物路径、running 5s 自刷新、停止）、脚本库（预置/自定义分组 + 发起任务/删除/复制）、创建抽屉两态（从脚本发起 = spec 深拷贝 + 运行参数覆盖；自定义六卡 = suite raw 组装严格按 TOOL-SUITE-PARAMS 契约：抽样 seed 在 extra_args、thinking→reasoning_effort、高级 JSON 合并 dataset_args/generation_config）、数据集选择器 = GET /tools/benchmarks 真目录（Agent/RAG 类型按 tags 派生，gaia/xlam_fc/swe 系 Agent 型可见）、模型下拉 = /common/models + DB 注册 + 自定义端点（judge 下拉同源）、版本输入自由填写（datalist）。定时执行前端显式拦截（调度器 §8.5 未实装）；趋势对比/人工评测保持演示数据（§8.6 缺口）。测试 +16（unit 11 + integration 5），全量 **717 passed + 3 skipped** + ruff/lint-imports/函数长度审计全绿；隔离冒烟（scripts/smoke_acc_live.py）5 步全过。**踩坑**：后台起服务必须显式 storage_url（create_app 默认=用户库）+ 后台 shell 孤儿进程占端口——冒烟曾两度打到用户库，已全部清理并以「冒烟后断言用户库 0 残留」收口；8300 旧进程须重启才有新路由。
+
+
+- 2026-10-24 导入覆盖语义（用户拍板「同 id 要做成覆盖」——此前同 id 重导 409 拒绝）：import_script 同 id = **整体重写**（update_script 链路：行级校验+重派生），跨场景覆盖 = 迁移（删旧建新），全新 id 照常创建；响应增 overwritten 标记（additive），前端 toast 区分导入/覆盖。api25.js（api24 改名）。集成测试 +1，全量 **718 passed + 3 skipped** + 门禁绿。
+- 2026-10-24（续）全局版本管理 + 精度对接（用户「精度要对接全局的版本管理」）：`model_version` 新表（(model,version) 唯一，Schema 只增；与 version_result 分层——登记先行/归档随后）+ GET/POST/DELETE `/versions`（common.py；重复 409、空值 422、按模型过滤）。前端：common2 模型管理页「版本管理」卡（清单+登记+删除，模型下拉 = 注册 ∪ 已登记 ∪ 手填）——适配层 api25.js→api26.js（用户侧当日上午 api24→api25 改名，本轮内容变更续升名，IAB 路径缓存约定）；精度创建抽屉「＋ 新版本」两按钮接 POST /versions（就地登记，模型取当前预制 profile，自定义/脚本内置 prompt）+ 被测版本 datalist = GET /versions（api-acc1.js→api-acc2.js）。功能域版本输入暂沿用归档 datalist（统一待后续）。测试 +3，全量 **720 passed + 3 skipped** + 四门禁绿；隔离冒烟（临时 DB）：/versions 全链路 + 精度任务引用登记版本 + 脚本库回归，用户库零污染。契约文档 V1-PLAN §10.6。
+
+
+- 2026-10-24 编辑抽屉「从 jsonl 导入行」（用户「编辑时选导入，场景参数就不用再选」）：行区新增 jsonl 导入入口——粘贴 JSONL（逐行行号报错）→ 解析并替换全部行卡（nsFillRowFromData 全局回填：常用参数/断言芯片/vars/承载全量还原），审阅后保存（新建=create/编辑=PATCH 整体重写），场景/id/名称保持现值。重导修正版无需再走数据集导入表单。注：另一会话已演进 api26.js（api25 扩展）与 api-acc2.js（accuracy 域），本轮基于 api26 做，改名 api27.js（functional2/common2 同引）。openEditScript 行回填内联段抽取为 nsFillRowFromData 单一来源。IAB 实测：18 行编辑回填回归 + jsonl 导入 2 行控件还原全过。
+
+- 2026-10-24 失败用例卡四段重做（用户「失败用例内容=输入/输出/断言/失败断言日志；有时一个输出有时两个」）：双输出根因 = 输出 JSON 块与失败日志内嵌「输入|/输出|」摘要行重复（通过用例无日志块故只有一个）。caseBlock 重做为四段模型：①输入按 message 角色分块（长文滚动容器）②输出 content 正文为主体+元信息标签（finish_reason/chunks/sse_done/usage）+原始响应 JSON 折叠③断言对照期望|实际两列并排④失败原因首行醒目+引擎原始日志折叠全文（首屏去重）。全卡复制按钮（document 委托+__copyStore，clipboard API）。api28.js（api27 改名）。IAB 实测 test6 失败任务 8 卡全过。踩坑：heredoc 双层转义第三次把 
+ 写成真实换行——长 JS 块一律 Write/Edit 工具链。
+
+- 2026-10-24 断言对照字段错位修复：cases 接口返回 expected（已解析断言对象），前端误读 x.expect 致对照表恒「—」；改 x.expected 后期望列=执行期断言快照、实际列=前端可判定项实测/引擎判定项标灰。api29.js（api28 改名）。
+
+- 2026-10-27 用例卡复现三件套 + 长输入折叠（用户「想复现场景拿不到原请求；超长输入别全打」）：失败用例卡输入区三按钮——复制输入 JSON（完整）/复制 curl（任务预制模型经 /common/models 解析 base_url+model，密钥 ${api_key_env} 占位，URL 拼接同引擎 _request_url 规则）/下载请求体 .json（超长输入走文件）；消息级折叠 content>300 字默认收起可展开。澄清：oc01 的「...」是提示词原文非 UI 截断。零后端改动，api30.js（api29 改名）。IAB 实测 curl 按预制解析正确、三按钮就位。
+
+- 2026-10-27 curl 丢 messages 修复（用户实测「复制 curl 只有 model」）：/runs/{id}/cases 的 input 字段即 messages 数组本身，caseBlock 按包裹对象取 io.messages 落空 → curl body 只剩 model、输入区走 JSON 兜底渲染。修复 = 前端归一化（Array.isArray(input) → {messages: input}）。api31.js（api30 改名）。IAB 实测 curl -d 含完整 messages、输入区按角色分块恢复。
+
+- 2026-11-08 掌控工程一期（owner：项目膨胀后「掌握不住、牵一发动全身、文档看不过来」）：①**架构地图** `docs/architecture-map.html` + 生成器 `scripts/arch_map.py`——分层带/模块依赖图/REST 全量清单/CLI 全集/适配器资产表/核心数据结构/必要性审计/术语表/文档裁决/仓库健康，事实全部从代码 AST + git 实时提取，内置知识逐条校验、漂移即拒绝生成（文档过期即撒谎，地图是算出来的不是写出来的）；重构后 `python scripts/arch_map.py` 再生。②**积压分域提交**：09-30 后五周未提交的 34 改 + 40 新文件按依赖顺序拆 6 个 commit（密钥库 → 模型/版本基座 → 任务/工具加固 → 功能资产 → 精度资产 → REST/CLI 面），每个提交只引用已入库代码。③**杂物清理**：根目录调试探针、mockup 一次性补丁脚本 13 个、压测预览产物、过期库备份删除；`docs/archive/` 归档 requirements-datasetgov / ollama-guide / test-designs（引用同步）。④**协作与教学总纲**写入 CLAUDE.md（管理者-执行者 / 新增代码必附设计说明 / 奥卡姆剃刀 / 架构检查成本不随代码膨胀）。⑤前端主航道决策与架构债记账（见上两节），模块 L 立项。数据实测结论：最常改的文件（适配器，27/17 次提交）爆炸半径为 0、契约文件波及面最大但几乎不动——震荡被隔离在正确位置。全量 **722 passed + 3 skipped** + ruff/lint-imports/函数长度审计全绿。
+
+- 2026-10-27 复制 curl/JSON 升级为完整请求体（用户 Postman 复现 vs 平台不一致的根因收口）：用例卡 curl/下载 body 从「model+messages 最小体」升级为合并 cases 接口新透出的 raw.params（剔除下划线控制键）+ raw.tools——与引擎 _post 合并顺序一致（model→messages→params→tools）。存量回填：test6 的 11 行 raw.tools 按「params 含 tool_choice 才发过 tools」规则精确回填。api32.js（api31 改名）。IAB 实测 curl body 12 键齐全。运维注意：本会话后台服务进程反复被外部回收（前后端各 2 次）——操作前用 netstat/curl 确认服务状态。

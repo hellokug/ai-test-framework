@@ -54,6 +54,7 @@ body,.card,.stat,.sidebar,.topnav,.search,.btn,.chip{transition:background-color
 .search svg{width:14px;height:14px;flex:none}
 .search input{background:none;border:none;outline:none;color:var(--tx);font-size:12.5px;width:100%}
 .search input::placeholder{color:var(--tx3)}
+.btn[disabled]{opacity:.45;cursor:not-allowed;pointer-events:none}
 .icon-btn{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--tx2);cursor:pointer;
   border:none;background:none;transition:.15s;position:relative}
 .icon-btn:hover{color:var(--tx);background:var(--hov2)}
@@ -107,6 +108,10 @@ nav a.active .count{color:var(--ac);background:color-mix(in srgb,var(--ac) 14%,t
 .sub{font-size:12px;color:var(--tx3);margin-top:3px}
 .grid2{display:grid;grid-template-columns:1.85fr 1fr;gap:14px}
 .chips{display:flex;gap:8px;margin:2px 0 6px;align-items:center;flex-wrap:wrap}
+/* 任务列表筛选条：状态 chips + 执行人 + 模块特有筛选 + 关键词 */
+.filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.filter-bar .in{height:32px;padding:4px 10px}
+.filter-bar .lbl{font-size:11.5px;color:var(--tx3);flex:none}
 .chip{padding:5px 13px;border-radius:99px;font-size:12.5px;color:var(--tx2);border:1px solid var(--line);cursor:pointer;transition:.15s;user-select:none;background:var(--chipbg)}
 .chip:hover{color:var(--tx)}
 .chip.on{color:#fff;background:linear-gradient(135deg,var(--ac),var(--ac-deep));border-color:transparent;font-weight:600}
@@ -163,7 +168,7 @@ tr.detail-row td{background:var(--hov);white-space:normal}
 
 /* ================= 表单 ================= */
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
-.field>label{font-size:12.5px;color:var(--tx2);font-weight:600}
+.field>label{font-size:12.5px;color:var(--tx2);font-weight:600;display:flex;align-items:center;gap:6px}
 .field .hint{font-size:11.5px;color:var(--tx3)}
 input.in,select.in,textarea.in{background:var(--input);border:1px solid var(--line);border-radius:9px;color:var(--tx);
   padding:8px 12px;font-size:13px;outline:none;font-family:inherit;width:100%;transition:.15s}
@@ -210,9 +215,11 @@ textarea.in{font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:ver
 .form-sec .p-row:last-child{margin-bottom:0}
 .p-label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--tx2);line-height:1.5}
 .p-label .req{color:var(--bad);font-style:normal;font-weight:700;margin-left:-2px}
-.qmark{flex:none;width:15px;height:15px;border-radius:50%;border:1px solid var(--tx3);color:var(--tx3);
-  font-size:10px;font-weight:400;text-align:center;line-height:13px;display:inline-block;position:relative;
+.qmark{flex:none;width:17px;height:17px;border-radius:50%;border:1px solid var(--tx3);color:var(--tx3);
+  font-size:10.5px;font-weight:400;display:inline-flex;align-items:center;justify-content:center;
+  vertical-align:middle;margin-left:6px;position:relative;top:2px;
   cursor:help;user-select:none;transition:.15s}
+.p-label .qmark,.field>label .qmark{margin-left:0}
 .qmark:hover{color:var(--ac);border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 14%,transparent)}
 .qmark .tip{position:absolute;left:22px;top:50%;transform:translateY(-50%);width:250px;
   background:var(--card);border:1px solid color-mix(in srgb,var(--ac) 35%,var(--line));border-radius:9px;
@@ -367,3 +374,24 @@ tr.overall td:first-child{color:var(--ac)}
 .ds-search{position:relative}
 .ds-menu{top:calc(100% + 6px);left:-1px;right:-1px;border-radius:10px}
 .ds-menu .ds-mitem[data-v],.ds-menu .ds-mitem[data-t]{cursor:pointer}
+
+/* 用例库目录面板 */
+.dir-head{display:flex;justify-content:space-between;align-items:center;padding:4px 8px 8px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.dir-cnt{margin-left:auto;font-size:11px;color:var(--tx3)}
+.dir-new{display:flex;gap:6px;padding:8px 4px 2px}
+.dir-new .in{height:28px;font-size:12px}
+
+/* 单页一级模块：无左侧栏，内容通栏 */
+body.no-side .sidebar{display:none}
+body.no-side .main{margin-left:0}
+
+/* 功能新建运行：场景/用例两层选择树 */
+#ftPick .caret{width:14px;flex:none;color:var(--tx3);font-size:10px;cursor:pointer;transition:.15s;user-select:none}
+#ftPick .caret.open{transform:rotate(90deg);color:var(--ac)}
+#ftPick .ds-row.part{background:color-mix(in srgb,var(--ac) 6%,transparent)}
+#ftPick .cb.part{background:var(--ac);border-color:var(--ac);color:#fff}
+#ftPick .ds-row.ft-case{margin-left:34px;padding:4px 10px;font-size:12px}
+#ftPick .ds-row.ft-case .ds-name{min-width:0;font-weight:400;color:var(--tx2)}
+
+/* 宽抽屉（新建任务类表单） */
+.drawer-lg{width:800px;max-width:92vw}

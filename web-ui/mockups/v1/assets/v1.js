@@ -16,15 +16,20 @@ const THEMES = {
   antd: { name: "Ant Design 晴蓝", desc: "ant.design 企业亮色", dots: ["#1677ff", "#13c2c2", "#f5f6fa"],
     charts: { axis: "#9298a9", axisLine: "#e7e9f2", split: "#eef0f6", radarSplit: "#eef0f6", splitArea: ["#fafbfe", "transparent"], tipBg: "#ffffff", tipBorder: "#e7e9f2", tipTx: "#171a2b", tipShadow: true, pass: "#1677ff", err: "#13c2c2", radar: ["#1677ff", "#52c41a", "#722ed1"], glow: false } },
 };
-const MODULE_FILES = { functional: "functional.html", perf: "perf.html", accuracy: "accuracy.html", reliability: "reliability.html", common: "common.html" };
+const DOMAIN_FILES = { functional: "functional2.html", perf: "perf2.html", accuracy: "accuracy2.html", reliability: "reliability3.html" };
+const DOMAIN_LABELS = { functional: "功能", perf: "性能", accuracy: "精度", reliability: "可靠性" };
+const TOP_NAV = [
+  { label: "任务管理", href: "accuracy2.html", modules: Object.keys(DOMAIN_FILES) },
+  { label: "数据集管理", href: "common2.html#datasets", pages: ["datasets"] },
+  { label: "模型管理", href: "common2.html#models", pages: ["models"] },
+  { label: "执行机管理", href: "common2.html#agents", pages: ["agents"] },
+];
 
 /* ============ 壳：顶栏 + 侧栏 + 页内路由 ============ */
-function initShell() {
-  const module = document.body.dataset.module;
-  const pages = JSON.parse(document.getElementById("page-list").textContent);
-  // 顶栏
+function buildShell() {
+  // 顶栏脚手架只建一次（主题按钮等监听绑定在其上）
   document.getElementById("topnav").innerHTML = `
-    <a class="brand" href="accuracy.html">
+    <a class="brand" href="accuracy2.html">
       <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></div>
       <b>aite</b>
     </a>
@@ -46,18 +51,42 @@ function initShell() {
       </button>
       <div class="avatar" title="zhimeng · 管理员">Z</div>
     </div>`;
-  const tabs = document.getElementById("mtabs");
-  tabs.innerHTML = Object.keys(MODULE_FILES).map(k =>
-    `<a class="mtab ${k === module ? "active" : ""}" href="${MODULE_FILES[k]}">${
-      { functional: "功能", perf: "性能", accuracy: "精度", reliability: "可靠性", common: "公共" }[k]}</a>`).join("");
-  // 侧栏 + 页内路由（hash）
+  document.getElementById("mtabs").innerHTML = TOP_NAV.map(t =>
+    `<a class="mtab" data-label="${t.label}" href="${t.href}">${t.label}</a>`).join("");
+}
+
+/* 每次路由（载入 / hashchange）都重算：tab 高亮、侧栏内容、通栏标记、当前页 */
+function applyRoute() {
+  const module = document.body.dataset.module;
+  const pages = JSON.parse(document.getElementById("page-list").textContent);
+  const isTask = !!DOMAIN_FILES[module];
+  const curPageId = (location.hash || "").replace("#", "") || pages[0].id;
+  const GROUP = { datasets: "数据集管理", models: "模型管理", agents: "执行机管理", tasks: "任务管理" };
+  const grp = isTask ? "任务管理" : (GROUP[curPageId] || GROUP[pages[0].id]);
+  if (module === "common") document.body.dataset.moduleLabel = grp;
+  const activeLabel = isTask || grp === "任务管理" ? "任务管理" : grp;
+  document.querySelectorAll("#mtabs .mtab").forEach(a => a.classList.toggle("active", a.dataset.label === activeLabel));
   const side = document.getElementById("sideNav");
-  side.innerHTML = `<div class="nav-label">${document.body.dataset.moduleLabel}</div><nav class="side">` +
-    pages.map(p => `<a data-page="${p.id}">${p.label}${p.count ? `<span class="count">${p.count}</span>` : ""}</a>`).join("") +
+  const sidePages = isTask ? pages : pages.filter(p => GROUP[p.id] === grp);
+  // 单页一级模块（用例/数据集/模型/执行机管理）：左侧栏冗余，隐藏并让内容通栏
+  const singlePage = !isTask && module === "common" && grp !== "任务管理" && sidePages.length <= 1;
+  document.body.classList.toggle("no-side", singlePage);
+  let sideHtml = "";
+  const showSwitch = isTask || (module === "common" && curPageId === "tasks");
+  if (showSwitch) {
+    sideHtml += `<div style="padding:2px 10px 12px"><select id="domainSwitch" class="in" style="width:100%;height:32px;padding:4px 10px">` +
+      Object.keys(DOMAIN_FILES).map(k => `<option value="${k}" ${k === module ? "selected" : ""}>${DOMAIN_LABELS[k]}域</option>`).join("") +
+      `</select></div>`;
+  }
+  sideHtml += `<div class="nav-label">${document.body.dataset.moduleLabel}</div><nav class="side">` +
+    sidePages.map(p => `<a data-page="${p.id}">${p.label}${p.count ? `<span class="count">${p.count}</span>` : ""}</a>`).join("") +
     `</nav><div class="side-foot"><span>aite v0.4 · 静态稿</span><a href="/docs" onclick="return false">API Docs</a></div>`;
-  const initial = (location.hash || "").replace("#", "") || pages[0].id;
-  side.querySelectorAll("a").forEach(a => a.addEventListener("click", () => showPage(a.dataset.page)));
-  showPage(pages.some(p => p.id === initial) ? initial : pages[0].id);
+  side.hidden = singlePage;
+  side.innerHTML = sideHtml;
+  side.querySelectorAll("nav a").forEach(a => a.addEventListener("click", () => showPage(a.dataset.page)));
+  const sw = document.getElementById("domainSwitch");
+  if (sw) sw.addEventListener("change", () => { location.href = DOMAIN_FILES[sw.value] + (location.hash || ""); });
+  showPage(pages.some(p => p.id === curPageId) ? curPageId : pages[0].id);
 }
 
 function showPage(id) {
@@ -183,6 +212,32 @@ function bindRadioCards(root = document) {
   root.querySelectorAll(".radio-cards").forEach(group => group.querySelectorAll(".radio-card").forEach(card =>
     card.addEventListener("click", () => group.querySelectorAll(".radio-card").forEach(x => x.classList.remove("on")) || card.classList.add("on"))));
 }
+/* 预制/自定义切换：容器[data-src-toggle]内 .chip[data-src] 切换 [data-pane] 显隐 */
+function bindSrcToggles() {
+  document.querySelectorAll("[data-src-toggle]").forEach(box => {
+    const apply = () => {
+      const on = box.querySelector(".chip[data-src].on");
+      const v = on ? on.dataset.src : "preset";
+      box.querySelectorAll("[data-pane]").forEach(p => { p.hidden = p.dataset.pane !== v; });
+    };
+    box.querySelectorAll(".chip[data-src]").forEach(ch => ch.addEventListener("click", () => {
+      box.querySelectorAll(".chip[data-src]").forEach(x => x.classList.remove("on"));
+      ch.classList.add("on"); apply();
+    }));
+    apply();
+  });
+}
+
+/* 目标模型下拉含「自定义」项：选中即展开手填端点字段 */
+function bindModelCustom(selectId, paneId) {
+  const sel = document.getElementById(selectId);
+  const pane = document.getElementById(paneId);
+  if (!sel || !pane) return;
+  const sync = () => { pane.hidden = sel.value !== "__custom__"; };
+  sel.addEventListener("change", sync);
+  sync();
+}
+
 function bindDrawers() {
   document.querySelectorAll("[data-open-drawer]").forEach(btn => btn.addEventListener("click", () => {
     const d = document.getElementById(btn.dataset.openDrawer); if (d) d.hidden = false;
@@ -194,9 +249,31 @@ function bindDrawers() {
   }));
 }
 
+/* 任务列表筛选条：状态 chips(data-status) + 执行人([data-owner]) + 关键词([data-kw]) → render(status, owner, kw) */
+function bindTaskFilter(boxId, render) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  const chips = [...box.querySelectorAll(".chip[data-status]")];
+  const owner = box.querySelector("[data-owner]");
+  const kw = box.querySelector("[data-kw]");
+  const apply = () => {
+    const on = chips.find(c => c.classList.contains("on"));
+    render(on ? on.dataset.status : "all", owner ? owner.value : "all", kw ? kw.value.trim().toLowerCase() : "");
+  };
+  chips.forEach(c => c.addEventListener("click", () => {
+    chips.forEach(x => x.classList.remove("on")); c.classList.add("on"); apply();
+  }));
+  if (owner) owner.addEventListener("change", apply);
+  if (kw) kw.addEventListener("input", apply);
+  apply();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  initShell();
+  buildShell();
+  applyRoute();
+  window.addEventListener("hashchange", applyRoute);
   initTheme();
+  bindSrcToggles();
   bindChips(); bindRadioCards(); bindDrawers();
   autoCharts();
   window.addEventListener("resize", autoCharts);
