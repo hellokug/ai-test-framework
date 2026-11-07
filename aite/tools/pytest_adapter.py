@@ -22,6 +22,7 @@ suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一�
 
 from __future__ import annotations
 
+import json
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -120,6 +121,8 @@ class PytestAdapter(ToolAdapter):
                 "targets": targets,
                 "junit_xml": str(req.work_dir / "junit" / f"{n}.xml"),
                 "log": str(req.work_dir / "logs" / f"{n}.log"),
+                # 逐用例原始记录落盘路径（输入/输出/断言）→ 平台用例级数据源
+                "results": str(req.work_dir / "results" / f"{n}.jsonl"),
             })
         argv = {s["name"]: [
             sys.executable, "-m", "pytest", *s["targets"],
@@ -146,11 +149,12 @@ class PytestAdapter(ToolAdapter):
 
     def _run_one(self, sc: dict, cfg: dict) -> None:
         """单场景 subprocess 执行；stdout/stderr 落日志，异常退出码抛错。"""
-        for key in ("junit_xml", "log"):
+        for key in ("junit_xml", "log", "results"):
             Path(sc[key]).parent.mkdir(parents=True, exist_ok=True)
+        env_extra = {**cfg["env"], "AITE_FT_RESULTS": sc["results"]}
         rc, out, err = run_tool_subprocess(
             cfg["argv"][sc["name"]], log_path=Path(sc["log"]), timeout=cfg["timeout"],
-            env_extra=cfg["env"])
+            env_extra=env_extra)
         if rc is None:
             raise RuntimeError(f"功能场景 {sc['name']} 超时（{cfg['timeout']}s）")
         if rc not in (0, 1):   # 0=全过 1=有失败；2+ = 执行异常
@@ -200,6 +204,14 @@ class PytestAdapter(ToolAdapter):
             out.report_files[f"{sc['name']}.xml"] = str(xml_path)
             if Path(sc["log"]).is_file():
                 out.report_files[f"{sc['name']}.log"] = sc["log"]
+            results_path = Path(sc.get("results") or "")
+            if results_path.is_file():
+                for line in results_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    rec = json.loads(line)
+                    rec["scenario"] = sc["name"]
+                    out.case_records.append(rec)
         return out
 
     def list_tasks(self) -> list[dict]:

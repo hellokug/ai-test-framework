@@ -50,9 +50,9 @@ def _resolve_api_key(cfg: dict) -> str | None:
     if cfg.get("api_key"):
         return str(cfg["api_key"])
     env = cfg.get("api_key_env")
-    import os
+    from aite.utils.secrets import resolve_secret
 
-    return os.environ.get(env) if env else None
+    return resolve_secret(env) if env else None
 
 
 def _patch_ragas_instructor_model_args(judge_cfg: dict) -> None:

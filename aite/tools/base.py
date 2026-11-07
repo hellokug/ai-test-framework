@@ -12,12 +12,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
+
+from aite.utils.secrets import resolve_secret
 
 
 @dataclass
@@ -59,6 +60,7 @@ class ToolRunResult:
     raw_score: dict[str, float] = field(default_factory=dict)    # dataset -> 总分
     perf: dict[str, dict] = field(default_factory=dict)          # dataset -> 性能摘要
     failures: list[dict] = field(default_factory=list)           # 用例级失败详情 [{dataset, case, detail}]
+    case_records: list[dict] = field(default_factory=list)       # 用例级原始记录 [{scenario, external_key, messages, params, expect, response, passed, error}]（functional pytest 路径）
 
 
 class ToolAdapter(ABC):
@@ -125,7 +127,7 @@ def api_endpoint(target: dict, *, suffix: str = "/chat/completions") -> tuple[st
                          "请删除该字段并改用 api_key_env: <环境变量名>")
     base = str(target.get("base_url", "")).rstrip("/")
     url = base if base.endswith(suffix) else base + suffix
-    key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
+    key = resolve_secret(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
     return url, key
 
 

@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import replace
 from typing import Any
@@ -39,6 +38,7 @@ from aite.datasets.catalog import resolve_dataset_ref
 from aite.events import EventBus
 from aite.service.suite_task import suite_summary
 from aite.storage.models import ReliabilityTaskRow
+from aite.utils.secrets import resolve_secret
 
 _MAX_OBSERVE_DURATION = 600.0      # 纯观测时长上限（秒），与同步 REST 端点同口径
 _MAX_BACKGROUND_DURATION = 3600.0  # 复合任务背景流量时长上限（秒）
@@ -59,7 +59,7 @@ def build_observe_cfg(body: dict) -> tuple[list, ProbeConfig]:
     if interval <= 0 or duration <= 0 or duration > _MAX_OBSERVE_DURATION:
         raise ValueError(f"interval 须 >0；duration 须在 (0, "
                          f"{_MAX_OBSERVE_DURATION:.0f}] 秒内")
-    api_key = os.environ.get(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
+    api_key = resolve_secret(target.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
     timeout = float(body.get("timeout") or 30.0)
     if timeout <= 0:
         raise ValueError("timeout 须 >0")
@@ -237,7 +237,7 @@ async def run_experiment_suite(body: dict, ctx: TaskRunContext) -> dict:
     model = str(probe.get("model") or "").strip()
     url = base_url if base_url.endswith("/chat/completions") \
         else base_url + "/chat/completions"
-    api_key = os.environ.get(probe.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
+    api_key = resolve_secret(probe.get("api_key_env") or "OPENAI_API_KEY", "EMPTY")
     interval = float(probe.get("interval") or 5.0)
     timeout = float(probe.get("timeout") or 30.0)
     post_window = float(probe.get("post_window") or interval * 3)

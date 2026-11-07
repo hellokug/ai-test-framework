@@ -107,6 +107,29 @@ def test_metrics_auto_without_builtin_errors(qa_file, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_tool_case_record_raw_exposes_params_tools(repo):
+    """工具域用例落库：raw 快照（params/tools）随 cases 接口透出（复现 curl 数据源）。"""
+    record = {
+        "external_key": "oc03", "dataset": "pytest:demo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "params": {"tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+                   "stream": False},
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        "expect": {"tool": "get_weather"},
+        "response": {"choices": [{"message": {"role": "assistant", "content": ""},
+                                  "finish_reason": "tool_calls"}]},
+        "passed": False, "error": None,
+    }
+    suite_id = await repo.upsert_suite("raw-exposure-suite")
+    run_id = await repo.create_run("raw-exposure-test", {}, suite_id=suite_id)
+    await repo.save_tool_case_record(run_id, suite_id, record)
+    items = await repo.list_case_results(run_id)
+    assert items[0]["raw"]["params"]["tool_choice"]["function"]["name"] == "get_weather"
+    assert items[0]["raw"]["tools"][0]["function"]["name"] == "get_weather"
+    assert items[0]["raw"]["expect"]["tool"] == "get_weather"
+
+
 async def test_unknown_metric_fails_before_execution(repo, qa_file, tmp_path):
     """指标名写错时 fail-fast：不执行任何用例，run 记为 error。"""
     suite = suite_config(tmp_path, metrics=["no_such_metric"])

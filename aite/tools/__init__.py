@@ -344,8 +344,8 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
         run_name=req.run_name, pass_strategy="all_of", started_at=utcnow(),
         config=cfg_snapshot,
     )
+    suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)   # 幂等：用例快照挂靠需要
     if run_id is None:
-        suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)
         run_id = await repo.create_run(req.run_name, cfg_snapshot, suite_id)
     report.run_id = run_id
 
@@ -380,6 +380,8 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
 
     for s in summaries:
         await repo.save_metric_summary(run_id, s)
+    for rec in getattr(result, "case_records", None) or []:
+        await repo.save_tool_case_record(run_id, suite_id, rec)
     # 平台报告渲染（与自研引擎同款）：suite report: 配置的格式落盘 work_dir
     from aite.reporting.renderers import render_report_formats
 

@@ -213,6 +213,10 @@ def test_instructor_model_args_patch_injects_max_tokens(monkeypatch):
 
 
 def test_local_judge_gets_placeholder_key(monkeypatch, tmp_path):
+    # 密钥库隔离：本机 data/.secrets.json 可能已录入同名密钥（真实用户数据），
+    # 该测试验证的是「未设置」分支，须指向空库
+    monkeypatch.setattr("aite.config.SECRET_STORE_FILE", str(tmp_path / ".secrets.json"))
+    monkeypatch.setattr("aite.config.SECRET_KEY_FILE", str(tmp_path / ".secret.key"))
     """Ollama/vLLM 等本地端点无需 key——OpenAI 客户端仍要求非空 → 注入占位；
     api_key_env 指向未设置的环境变量则显式报错（不静默）。"""
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
