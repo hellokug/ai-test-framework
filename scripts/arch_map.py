@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -183,14 +184,18 @@ def _kw_str(call: ast.Call, arg: str) -> str | None:
     return None
 
 
-def run_gate(cmd: list[str], timeout: int = 180) -> dict:
+def run_gate(cmd: list[str], timeout: int = 180, detail_re: str = "") -> dict:
     try:
         p = subprocess.run([sys.executable, *cmd], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", cwd=ROOT, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "detail": f"无法执行: {exc}"}
-    tail = (p.stderr or p.stdout or "").strip().splitlines()
-    return {"ok": p.returncode == 0, "detail": tail[-1] if tail else ""}
+    lines = (p.stdout + "\n" + p.stderr).strip().splitlines()
+    if detail_re:
+        picked = [ln for ln in lines if re.search(detail_re, ln)]
+        if picked:
+            return {"ok": p.returncode == 0, "detail": picked[-1].strip()}
+    return {"ok": p.returncode == 0, "detail": lines[-1].strip() if lines else ""}
 
 
 # ------------------------------------------------------------ 内置人工知识（带校验）
@@ -878,8 +883,8 @@ def main() -> int:
                                     "sys.exit(lint_imports())"])}
     pytest_badge = ""
     if args.pytest:
-        r = run_gate(["-m", "pytest", "tests/", "-q", "-W", "ignore", "-p", "no:cacheprovider"],
-                     timeout=600)
+        r = run_gate(["-m", "pytest", "tests/", "-W", "ignore", "-p", "no:cacheprovider"],
+                     timeout=600, detail_re=r"\d+ passed")
         cls = "ok" if r["ok"] else "warn"
         pytest_badge = f'<span class="badge {cls}">pytest: {esc(r["detail"])}</span>'
     health = git_health()
