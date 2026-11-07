@@ -15,16 +15,22 @@
 - ``id``：用例 id（场景内唯一，即测试名）
 - ``desc``：场景说明（这个请求体测什么）
 - ``messages`` / ``tools``（可选）/ ``params``（可选）：请求体
-- ``vars``（可选）：占位符变量，messages 中 ``{NAME}`` 被替换为生成值；
-  目前支持 ``{"haystack": {chars, key_at, key}}``（确定性长文填充，needle 埋点）
+- ``vars``（可选）：占位符变量，messages 中 ``{NAME}`` 被替换为生成值。生成器：
+  ``haystack{chars,key_at,key}``（确定性长文埋码，needle 取回测试）/
+  ``random_string{length,charset?,seed?}``（定长随机串，charset ∈ alnum/letters/digits/hex）/
+  ``random_number{min?,max?,seed?}``（区间随机整数）/ ``garbled{length,seed?}``（随机乱码）/
+  ``random_choice{options,seed?}``（随机选一项）；``seed`` 缺省 = 每次执行取新随机值
+  （同一次执行的发送与记录保持一致），给定 = 可复现。占位符可出现在 **messages 与
+  params** 两处（input 等自定义顶层字段的低代码生成值），同一次执行内同占位符同值
 - ``expect``（必填，至少一个断言）：
   ``contains`` / ``ignore_case`` / ``nonempty`` /
-  ``json{path,type,eq,in,len,nonempty,item_type,item_nonempty,fields}``（空规格
+  ``json{path,type,eq,neq,in,len,contains,nonempty,item_type,item_nonempty,fields}``（空规格
   ``{}`` = 仅校验剥围栏后可解析，即 JSON 输出格式正确性）/
   ``tool`` / ``tool_args_contains``，以及质量类断言：
   ``no_garbled``（乱码）/ ``no_leak``（内部标签泄露，可 ``{extra_patterns}`` 扩展）/
   ``no_repeat``（复读）；API 契约类断言：
-  ``not_contains`` / ``no_tool``（不发起 tool call）/ ``http_status``（预期错误码，
+  ``not_contains`` / ``no_tool``（不发起 tool call）/ ``http_status``（预期错误码；
+  可关系形式 ``{"neq"/"gte"/"lte"/"in": 值}``，如 ``{"neq": 200}``/``{"gte": 500}``，
   配 ``params`` 发坏请求测参数校验）/ ``finish_reason`` /
   ``resp{path,type,eq,len,nonempty}``（响应体字段断言，如 usage.id 等）。
   ``stream: true`` 经 ``params`` 传入即走 SSE 流式（断言拼接后的完整结果）。
@@ -41,6 +47,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import random
 import re
 from collections import Counter
 
@@ -56,10 +63,24 @@ _EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool",
                 "tool_args_contains", "no_garbled", "no_leak", "no_repeat",
                 "not_contains", "no_tool", "http_status", "finish_reason", "resp",
                 "chunks_min", "sse_done"}
-_JSON_SPEC_KEYS = {"path", "type", "eq", "in", "len", "nonempty",
+_JSON_SPEC_KEYS = {"path", "type", "eq", "neq", "in", "len", "contains", "nonempty",
                    "item_type", "item_nonempty", "fields"}
-_RESP_SPEC_KEYS = {"path", "type", "eq", "len", "nonempty"}   # 响应体断言（无递归 fields）
-_VAR_BUILDERS = {"haystack"}
+_RESP_SPEC_KEYS = {"path", "type", "eq", "len", "nonempty", "contains"}   # 响应体断言（无递归 fields）
+_STATUS_OPS = {"eq": "==", "neq": "!=", "gte": ">=", "lte": "<=", "in": "∈"}   # http_status 关系形式
+_VAR_BUILDERS = {"haystack", "random_string", "random_number", "garbled", "random_choice"}
+_VAR_PARAM_KEYS = {"haystack": {"chars", "key_at", "key"},
+                   "random_string": {"length"},
+                   "garbled": {"length"},
+                   "random_choice": {"options"},
+                   "random_number": set()}   # min/max/seed 全缺省
+_STRING_CHARSETS = {"alnum": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                    "letters": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                    "digits": "0123456789",
+                    "hex": "0123456789abcdef"}
+# 乱码采样区段：mojibake 拉丁段 + 多语区段 + 制表符号 + 私用区（豆腐块观感）。
+# 刻意排除代理区（U+D800-DFFF）与控制字符——产物可安全 JSON 序列化与落库展示。
+_GARBLED_RANGES = [(0xA1, 0xFF), (0x3000, 0x303F), (0x4E00, 0x9FFF), (0x0400, 0x04FF),
+                   (0x0370, 0x03FF), (0x2500, 0x257F), (0xE000, 0xF8FF)]
 _FINISH_REASONS = {"stop", "length", "tool_calls", "content_filter"}
 
 _REPLY_BRIEF = 160   # 失败信息里实际回复的截断长度
@@ -302,15 +323,66 @@ def build_haystack(chars: int, key_at: float, key: str) -> str:
     return doc[:idx] + f"\nThe access code is {key}.\n" + doc[idx:]
 
 
+def build_random_string(*, length: int, charset: str = "alnum", seed: int | None = None) -> str:
+    """定长随机字符串；charset ∈ alnum/letters/digits/hex；seed 缺省每次执行取新值。"""
+    pool = _STRING_CHARSETS.get(charset)
+    if not pool:
+        raise ValueError(f"未知字符集 {charset!r}（可用: {sorted(_STRING_CHARSETS)}）")
+    if not isinstance(length, int) or isinstance(length, bool) or length <= 0:
+        raise ValueError(f"length 须为正整数，实际: {length!r}")
+    rng = random.Random(seed)
+    return "".join(rng.choice(pool) for _ in range(length))
+
+
+def build_random_number(*, min: int = 0, max: int = 100, seed: int | None = None) -> str:
+    """[min, max] 区间随机整数（含端点），以字符串形式插入占位符。"""
+    lo, hi = int(min), int(max)
+    if lo > hi:
+        raise ValueError(f"min 不得大于 max（实际 {lo} > {hi}）")
+    return str(random.Random(seed).randint(lo, hi))
+
+
+def build_garbled(*, length: int, seed: int | None = None) -> str:
+    """随机乱码（编码鲁棒性测试）：mojibake 底料 + 多区段 Unicode 采样。"""
+    if not isinstance(length, int) or isinstance(length, bool) or length <= 0:
+        raise ValueError(f"length 须为正整数，实际: {length!r}")
+    rng = random.Random(seed)
+    mojibake = "功能用例样例 mixed sample 0123".encode().decode("latin-1")   # utf-8 字节按 latin-1 解 = 乱码底料
+    chars = [mojibake[rng.randrange(len(mojibake))]]
+    while len(chars) < length:
+        lo, hi = rng.choice(_GARBLED_RANGES)
+        chars.append(chr(rng.randint(lo, hi)))
+    return "".join(chars[:length])
+
+
+def build_random_choice(*, options: list, seed: int | None = None) -> str:
+    """从 options 随机选一项（参数化 / 等价类测试）。"""
+    if not isinstance(options, list) or not options:
+        raise ValueError("options 须为非空数组")
+    return str(random.Random(seed).choice(options))
+
+
 def _build_var(spec: dict) -> str:
     if not isinstance(spec, dict) or len(spec) != 1:
         raise ValueError(f"vars 项必须是单键对象（如 {{\"haystack\": {{...}}}}），实际: {spec!r}")
     (kind, kw), = spec.items()
     if kind not in _VAR_BUILDERS:
         raise ValueError(f"未知 vars 生成器 {kind!r}（可用: {sorted(_VAR_BUILDERS)}）")
-    if not isinstance(kw, dict) or not {"chars", "key_at", "key"} <= set(kw):
-        raise ValueError("haystack 需要 chars / key_at / key 参数")
-    return build_haystack(kw["chars"], kw["key_at"], str(kw["key"]))
+    if not isinstance(kw, dict):
+        raise ValueError(f"vars 生成器 {kind} 的参数须为对象，实际: {kw!r}")
+    missing = _VAR_PARAM_KEYS[kind] - set(kw)
+    if missing:
+        raise ValueError(f"vars 生成器 {kind} 缺少参数 {sorted(missing)}")
+    seed = kw.get("seed")
+    if kind == "haystack":
+        return build_haystack(kw["chars"], kw["key_at"], str(kw["key"]))
+    if kind == "random_string":
+        return build_random_string(length=kw["length"], charset=kw.get("charset", "alnum"), seed=seed)
+    if kind == "random_number":
+        return build_random_number(min=kw.get("min", 0), max=kw.get("max", 100), seed=seed)
+    if kind == "garbled":
+        return build_garbled(length=kw["length"], seed=seed)
+    return build_random_choice(options=kw["options"], seed=seed)
 
 
 def _brief(value) -> str:
@@ -379,6 +451,25 @@ def _validate_json_spec(spec: dict, where: str) -> None:
         _validate_json_spec(sub, f"{where}.fields.{fname}")
 
 
+def _validate_status(hs, source: str) -> None:
+    """http_status：int（== 语义，兼容）或单键 {op: 值} 对象，op ∈ eq/neq/gte/lte/in。"""
+    if hs is None:
+        return
+    if isinstance(hs, dict):
+        if len(hs) != 1 or next(iter(hs), None) not in _STATUS_OPS:
+            raise ValueError(f"{source}: http_status 关系须为单键对象 {sorted(_STATUS_OPS)}")
+        op, val = next(iter(hs.items()))
+        vals = val if op == "in" else [val]
+        if not isinstance(vals, list) or not vals or not all(
+                isinstance(v, int) and not isinstance(v, bool) and 100 <= v <= 599 for v in vals):
+            raise ValueError(f"{source}: http_status {_STATUS_OPS[op]} 的值须为 100-599 的整数"
+                             + ("，逗号分隔多值" if op == "in" else ""))
+        return
+    if not isinstance(hs, int) or isinstance(hs, bool) or not 100 <= hs <= 599:
+        raise ValueError(f"{source}: http_status 须为 100-599 的整数"
+                         f"或 {sorted(_STATUS_OPS)} 关系对象")
+
+
 def _type_ok(value, type_name: str) -> bool:
     if type_name == "int":   # bool 是 int 子类，须排除
         return isinstance(value, int) and not isinstance(value, bool)
@@ -406,6 +497,17 @@ def _check_json_spec(spec: dict, value, where: str, ic: bool) -> None:
         if ic and isinstance(value, str) and isinstance(expected, str):
             got, expected = value.strip().lower(), expected.strip().lower()
         assert got == expected, f"{where}: 期望 == {expected!r}，实际 {_brief(value)}"
+    if "neq" in spec:      # 不等关系恒区分大小写（与 eq 的 ic 语义刻意不同，避免双重歧义）
+        assert value != spec["neq"], (
+            f"{where}: 期望 != {spec['neq']!r}，实际与之相等 {_brief(value)}")
+    if "contains" in spec:   # like：目标转字符串后做子串包含
+        needle = str(spec["contains"])
+        hay = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        if ic:
+            assert needle.lower() in hay.lower(), (
+                f"{where}: 期望包含 {needle!r}，实际 {_brief(value)}")
+        else:
+            assert needle in hay, f"{where}: 期望包含 {needle!r}，实际 {_brief(value)}"
     if "in" in spec:
         options = spec["in"]
         got = value.strip().lower() if ic and isinstance(value, str) else value
@@ -451,9 +553,7 @@ class Case:
         if unknown:
             raise ValueError(f"{source}: 未知断言键 {sorted(unknown)}（可用: {sorted(_EXPECT_KEYS)}）")
         _validate_json_spec(expect.get("json") or {}, f"{source}: json")
-        hs = expect.get("http_status")
-        if hs is not None and (not isinstance(hs, int) or not 100 <= hs <= 599):
-            raise ValueError(f"{source}: http_status 须为 100-599 的整数")
+        _validate_status(expect.get("http_status"), source)
         cm = expect.get("chunks_min")
         if cm is not None and (not isinstance(cm, int) or cm < 1):
             raise ValueError(f"{source}: chunks_min 须为 ≥1 的整数")
@@ -506,27 +606,54 @@ class Case:
         self.vars: dict = raw.get("vars") or {}
         self.expect = expect
         self._extra_leak = [re.compile(p) for p in extra]
+        self._rendered: list | None = None       # messages 渲染缓存
+        self._rendered_params: dict | None = None  # params 渲染缓存
+        self._values: dict | None = None         # 同一次执行内各字段共享同一组生成值
         for spec in self.vars.values():
             _build_var(spec)   # 加载期校验生成器规格
 
+    def _render_values(self) -> dict:
+        """生成值（实例级缓存）：messages 与 params 共享同一组，{g1} 两处同值。"""
+        if self._values is None:
+            self._values = {name: _build_var(spec) for name, spec in self.vars.items()}
+        return self._values
+
+    @staticmethod
+    def _subst(values: dict, obj):
+        def _replace(o):
+            if isinstance(o, str):
+                for name, val in values.items():
+                    o = o.replace("{" + name + "}", val)
+                return o
+            if isinstance(o, list):
+                return [_replace(x) for x in o]
+            if isinstance(o, dict):
+                return {k: _replace(v) for k, v in o.items()}
+            return o
+        return _replace(obj)
+
     def rendered_messages(self) -> list:
-        """应用 vars 占位符后的 messages（{NAME} → 生成值）。"""
+        """应用 vars 占位符后的 messages（{NAME} → 生成值）。
+
+        实例级渲染缓存：随机生成器（seed 缺省）在发送（_post）与结果记录
+        两处调用间返回同一份，保证「记录的输入 = 实际发送的输入」；
+        跨执行（重新采集/重跑）取新随机值。
+        """
         if not self.vars:
             return self.messages
-        values = {name: _build_var(spec) for name, spec in self.vars.items()}
+        if self._rendered is None:
+            self._rendered = self._subst(self._render_values(),
+                                         copy.deepcopy(self.messages))
+        return self._rendered
 
-        def _replace(obj):
-            if isinstance(obj, str):
-                for name, val in values.items():
-                    obj = obj.replace("{" + name + "}", val)
-                return obj
-            if isinstance(obj, list):
-                return [_replace(x) for x in obj]
-            if isinstance(obj, dict):
-                return {k: _replace(v) for k, v in obj.items()}
-            return obj
-
-        return _replace(copy.deepcopy(self.messages))
+    def rendered_params(self) -> dict:
+        """应用 vars 占位符后的 params（input 等自定义顶层字段的低代码生成值）。"""
+        if not self.vars or not self.params:
+            return self.params
+        if self._rendered_params is None:
+            self._rendered_params = self._subst(self._render_values(),
+                                                copy.deepcopy(self.params))
+        return self._rendered_params
 
     def check(self, response: dict) -> None:
         """按 expect 校验响应（失败抛 AssertionError，信息含期望与实际）。
@@ -624,15 +751,33 @@ class Case:
         """预期错误模式（响应带 _status）：断言 http_status；resp 断言 _body。"""
         assert "http_status" in self.expect, (
             f"收到错误响应 {response['_status']} 但未配置 http_status 期望")
-        assert response["_status"] == self.expect["http_status"], (
-            f"期望 HTTP {self.expect['http_status']}，实际 {response['_status']}"
-            f"（body: {_brief(response.get('_body'))}）")
+        expected = self.expect["http_status"]
+        actual = response["_status"]
+        if isinstance(expected, dict):     # 关系形式 {op: 值}（校验期保证单键合法）
+            op, val = next(iter(expected.items()))
+            if op == "eq":
+                ok = actual == val
+            elif op == "neq":
+                ok = actual != val
+            elif op == "gte":
+                ok = actual >= val
+            elif op == "lte":
+                ok = actual <= val
+            else:
+                ok = actual in val
+            assert ok, (f"期望 HTTP {_STATUS_OPS[op]} {val}，实际 {actual}"
+                        f"（body: {_brief(response.get('_body'))}）")
+        else:
+            assert actual == expected, (
+                f"期望 HTTP {expected}，实际 {actual}"
+                f"（body: {_brief(response.get('_body'))}）")
         if "resp" in self.expect:
             specs = self.expect["resp"]
             for spec in (specs if isinstance(specs, list) else [specs]):
-                self._check_resp_spec(spec, response.get("_body"), "resp")
+                self._check_resp_spec(spec, response.get("_body"), "resp",
+                              ic=bool(self.expect.get("ignore_case")))
 
-    def _check_resp_spec(self, spec: dict, data, where: str) -> None:
+    def _check_resp_spec(self, spec: dict, data, where: str, ic: bool = False) -> None:
         """响应体字段断言（path 支持数字索引如 choices.0；eq 可比较整数）。"""
         if "path" in spec:
             for part in str(spec["path"]).split("."):
@@ -660,6 +805,12 @@ class Case:
             if isinstance(data, str):
                 ok = data.strip() != ""
             assert ok, f"{where}: 期望非空（实际: {_brief(data)}）"
+        if "contains" in spec:
+            needle = str(spec["contains"])
+            hay = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+            if ic:
+                hay, needle = hay.lower(), needle.lower()
+            assert needle in hay, f"{where}: 期望包含 {needle!r}，实际 {_brief(data)}"
         if "eq" in spec:
             expected = spec["eq"]
             got = data.strip().lower() if isinstance(data, str) and isinstance(expected, str) \
@@ -699,6 +850,19 @@ def pytest_collect_file(file_path, parent):
     return None
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """用例执行结束即落原始记录（含失败详情）；非 call 阶段（setup/teardown）不记。"""
+    outcome = yield
+    rep = outcome.get_result()
+    if rep.when != "call" or getattr(item, "case", None) is None:
+        return
+    longrepr = rep.longreprtext if rep.failed else None
+    record = getattr(item, "record_result", None)
+    if record is not None:
+        record(rep.outcome, longrepr)
+
+
 class CasesFile(pytest.File):
     def collect(self):
         for case in load_cases(self.path):
@@ -713,7 +877,7 @@ class CaseItem(pytest.Item):
 
     def runtest(self):
         response = _post(_shared_client(), self.case.rendered_messages(),
-                         tools=self.case.tools, params=self.case.params,
+                         tools=self.case.tools, params=self.case.rendered_params(),
                          expect_error="http_status" in self.case.expect)
         self._last_response = response   # repr_failure 组装失败详情用（断言→输入→输出）
         try:
@@ -728,6 +892,32 @@ class CaseItem(pytest.Item):
         if isinstance(excinfo.value, pytest.fail.Exception):
             return str(excinfo.value)
         return super().repr_failure(excinfo)
+
+    def record_result(self, outcome: str, longrepr: str | None = None) -> None:
+        """逐用例原始记录 → AITE_FT_RESULTS 指向的 jsonl（平台用例级落库数据源）。
+
+        输入 = 渲染后的 messages + params，输出 = 模型响应，断言结果 = passed；
+        AITE_FT_RESULTS 未设置（用户手跑 pytest）时不写——平台链路专属。
+        """
+        import json
+        import os
+        path = os.environ.get("AITE_FT_RESULTS")
+        if not path:
+            return
+        entry = {
+            "external_key": self.case.id,
+            "desc": self.case.desc,
+            "messages": self.case.rendered_messages(),
+            "params": self.case.rendered_params(),
+            "tools": self.case.tools,
+            "expect": self.case.expect,
+            "response": self._last_response,
+            "passed": outcome == "passed",
+            "error": (longrepr or "")[:2000] or None,
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
     def reportinfo(self):
         return self.path, 0, f"[{self.case.id}] {self.case.desc}"

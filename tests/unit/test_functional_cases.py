@@ -12,7 +12,11 @@ import pytest
 from aite.functional.harness import (
     Case,
     _post,
+    build_garbled,
     build_haystack,
+    build_random_choice,
+    build_random_number,
+    build_random_string,
     failure_detail,
     load_cases,
 )
@@ -126,6 +130,171 @@ class TestRenderedMessages:
         assert "{DOC}" not in rendered[0]["content"]
         assert "The access code is K" in rendered[0]["content"]
         assert case.messages[0]["content"] == "Doc:\n{DOC}\nfind key"   # 原始不改动
+
+
+class TestVarBuilders:
+    """vars 生成器族：确定性 / 参数校验 / 占位符渲染一致性（2026-10-16 低代码生成值）。"""
+
+    def test_random_string_length_charset(self):
+        s = build_random_string(length=32, seed=42)
+        assert len(s) == 32 and s.isalnum()
+        assert s == build_random_string(length=32, seed=42)          # seed 可复现
+        assert build_random_string(length=8, seed=1) != build_random_string(length=8, seed=2)
+        assert build_random_string(length=8, charset="digits", seed=1).isdigit()
+        assert build_random_string(length=8, charset="hex", seed=1) ==             build_random_string(length=8, charset="hex", seed=1)
+        with pytest.raises(ValueError, match="未知字符集"):
+            build_random_string(length=8, charset="nope")
+        with pytest.raises(ValueError, match="正整数"):
+            build_random_string(length=0)
+
+    def test_random_number_bounds(self):
+        assert build_random_number(min=5, max=5, seed=1) == "5"
+        for _ in range(20):
+            v = int(build_random_number(min=3, max=9))
+            assert 3 <= v <= 9
+        with pytest.raises(ValueError, match="不得大于"):
+            build_random_number(min=9, max=3)
+        assert build_random_number(seed=7) == build_random_number(seed=7)
+
+    def test_garbled_json_safe_and_seeded(self):
+        g = build_garbled(length=200, seed=9)
+        assert len(g) == 200
+        json.dumps(g, ensure_ascii=False)         # 无代理区/控制字符，可安全落库
+        assert g == build_garbled(length=200, seed=9)
+        others = {build_garbled(length=64) for _ in range(8)}   # 无 seed → 彼此不同
+        assert len(others) > 1
+
+    def test_random_choice_and_errors(self):
+        assert build_random_choice(options=["a"], seed=1) == "a"
+        assert build_random_choice(options=[1, "x"], seed=3) in ("1", "x")
+        with pytest.raises(ValueError, match="非空数组"):
+            build_random_choice(options=[])
+
+    def test_unknown_builder_and_missing_param(self):
+        raw = {"id": "t", "desc": "d", "messages": [], "expect": {"nonempty": True},
+               "vars": {"X": {"no_such_gen": {}}}}
+        with pytest.raises(ValueError, match="未知 vars 生成器"):
+            Case(raw, "cases.jsonl:1")
+        raw["vars"] = {"X": {"random_string": {}}}
+        with pytest.raises(ValueError, match="缺少参数"):
+            Case(raw, "cases.jsonl:1")
+
+    def test_rendered_memoized_within_execution(self):
+        """同一次执行的发送与记录两处调用返回同一份（随机值一致）；原始 messages 不动。"""
+        case = _case({"nonempty": True},
+                     vars={"S": {"random_string": {"length": 16}}, "N": {"random_number": {"min": 0, "max": 9}}},
+                     messages=[{"role": "user", "content": "id={S} n={N}"}])
+        a = case.rendered_messages()[0]["content"]
+        b = case.rendered_messages()[0]["content"]
+        assert a == b
+        assert "{S}" not in a and "{N}" not in a
+        assert case.messages[0]["content"] == "id={S} n={N}"
+        # 两个 Case 各自独立渲染（不同实例不同值，除非撞车——16 位字母数字撞车概率可忽略）
+        other = _case({"nonempty": True},
+                      vars={"S": {"random_string": {"length": 16}}},
+                      messages=[{"role": "user", "content": "{S}"}])
+        assert other.rendered_messages()[0]["content"] != case.rendered_messages()[0]["content"]
+
+
+class TestJsonRelations:
+    """json 断言关系：neq（不等于）/ contains（like 子串包含）。"""
+
+    def _resp(self, content):
+        return _response(content=content)
+
+    def test_neq(self):
+        spec = {"json": {"path": "usage.total_tokens", "neq": 0}}
+        case = _case(spec)
+        case.check(_response(content='{"usage": {"total_tokens": 5}}'))
+        with pytest.raises(AssertionError, match="期望 !="):
+            case.check(_response(content='{"usage": {"total_tokens": 0}}'))
+
+    def test_contains_like(self):
+        case = _case({"json": {"path": "id", "contains": "req-"}})
+        case.check(_response(content='{"id": "req-abc-123"}'))
+        with pytest.raises(AssertionError, match="期望包含"):
+            case.check(_response(content='{"id": "abc-123"}'))
+        # 非字符串目标转 JSON 串后包含；ignore_case 生效
+        _case({"json": {"contains": "ABC"}, "ignore_case": True}).check(self._resp('"xyzabc"'))
+        _case({"json": {"contains": 7}}).check(self._resp('{"n": 7}'))
+
+    def test_new_keys_pass_validation(self):
+        _case({"json": {"path": "a", "neq": "x", "contains": "y"}})
+
+
+class TestHttpStatusRelations:
+    """http_status 关系形式：{neq/gte/lte/in: 值}（int 兼容 == 不变）。"""
+
+    def test_relations(self):
+        _case({"http_status": {"neq": 200}}).check({"_status": 404, "_body": "nf"})
+        with pytest.raises(AssertionError, match="期望 HTTP !="):
+            _case({"http_status": {"neq": 200}}).check({"_status": 200, "_body": "ok"})
+        _case({"http_status": {"gte": 500}}).check({"_status": 503, "_body": ""})
+        with pytest.raises(AssertionError, match="期望 HTTP >="):
+            _case({"http_status": {"gte": 500}}).check({"_status": 404, "_body": ""})
+        _case({"http_status": {"lte": 299}}).check({"_status": 204, "_body": ""})
+        _case({"http_status": {"in": [400, 422]}}).check({"_status": 422, "_body": ""})
+        with pytest.raises(AssertionError, match="期望 HTTP ∈"):
+            _case({"http_status": {"in": [400, 422]}}).check({"_status": 500, "_body": ""})
+
+    def test_relation_validation(self):
+        for bad in ({"nope": 200}, {"eq": 99}, {"eq": 200, "neq": 300},
+                    {"in": []}, {"in": [200.5]}, {"gte": "5xx"}):
+            with pytest.raises(ValueError, match="http_status"):
+                _case({"http_status": bad})
+        _case({"http_status": {"in": [400, 422]}})   # 合法不抛
+        _case({"http_status": 413})                  # int 兼容不变
+
+
+class TestParamsRendering:
+    """vars 占位符扩展到 params（input 等自定义顶层字段的低代码生成值）。"""
+
+    def test_params_placeholder_replaced(self):
+        case = _case({"nonempty": True},
+                     vars={"S": {"random_string": {"length": 8, "seed": 1}}},
+                     messages=[{"role": "user", "content": "{S}"}],
+                     params={"input": "txt-{S}", "temperature": 0.5})
+        rp = case.rendered_params()
+        assert rp["input"] != "txt-{S}" and "txt-" in rp["input"]
+        assert len(rp["input"].split("-", 1)[1]) == 8
+        assert rp["temperature"] == 0.5               # 非字符串值原样保留
+        assert case.params["input"] == "txt-{S}"      # 原始 params 不改动
+
+    def test_messages_and_params_share_values(self):
+        """同一次执行内同占位符在 messages 与 params 中同值（同源生成值）。"""
+        case = _case({"nonempty": True},
+                     vars={"S": {"random_string": {"length": 16}}},
+                     messages=[{"role": "user", "content": "{S}"}],
+                     params={"input": "{S}"})
+        m = case.rendered_messages()[0]["content"]
+        p = case.rendered_params()["input"]
+        assert m == p and len(m) == 16
+        # 缓存一致：再次调用同值（随机生成器同次执行不漂移）
+        assert case.rendered_params()["input"] == p
+
+    def test_no_vars_params_untouched(self):
+        case = _case({"nonempty": True}, params={"input": "{S}"})
+        assert case.rendered_params()["input"] == "{S}"   # 无 vars → 原样透传
+
+
+class TestRecordResultSnapshot:
+    """record_result 快照：params/tools 随用例记录（复现 curl 数据源）。"""
+
+    def test_record_includes_params_and_tools(self, tmp_path, monkeypatch):
+        results_file = tmp_path / "results.jsonl"
+        monkeypatch.setenv("AITE_FT_RESULTS", str(results_file))
+        from aite.functional.harness import CaseItem
+        case = _case({"nonempty": True},
+                     tools=[{"type": "function", "function": {"name": "get_weather"}}],
+                     params={"tool_choice": "auto"})
+        item = CaseItem.__new__(CaseItem)          # 只借用 record_result（case/_last_response 两个字段）
+        item.case = case
+        item._last_response = {"choices": [{"message": {"role": "assistant", "content": "ok"},
+                                            "finish_reason": "stop"}]}
+        CaseItem.record_result(item, "passed", None)
+        entry = json.loads(results_file.read_text(encoding="utf-8").strip())
+        assert entry["params"] == {"tool_choice": "auto"}
+        assert entry["tools"][0]["function"]["name"] == "get_weather"
 
 
 class TestCheck:
@@ -563,3 +732,18 @@ class TestPostAgainstFakeServer:
         with pytest.raises(httpx.HTTPStatusError):
             _post(env, [{"role": "user", "content": "hi"}], tools=None,
                   params={"model": "no-such-model"})
+
+
+class TestRespContains:
+    """resp 断言 contains 关系（错误体模糊匹配，低代码「错误体字段」芯片）。"""
+
+    def test_resp_contains_on_error_response(self):
+        case = _case({"http_status": 400,
+                      "resp": {"path": "error.message", "contains": "Model"}})
+        case.check({"_status": 400, "_body": {"error": {"message": "Model not exist"}}})
+        with pytest.raises(AssertionError, match="期望包含"):
+            case.check({"_status": 400, "_body": {"error": {"message": "bad request"}}})
+
+    def test_resp_contains_non_string_target(self):
+        case = _case({"http_status": 422, "resp": {"path": "error.param", "contains": "temperature"}})
+        case.check({"_status": 422, "_body": {"error": {"param": ["temperature", "top_p"]}}})

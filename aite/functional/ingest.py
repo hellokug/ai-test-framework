@@ -20,28 +20,33 @@ from aite.functional.harness import Case
 FUNCTIONAL_ROOT = Path("./data/datasets/functional")
 
 
+def iter_cases_lines(text: str, source: str = "<text>") -> list[tuple[int, dict]]:
+    """cases.jsonl 文本 → [(行号, Case 字典)]；坏 JSON 行显式报错带行号（原则 9）。"""
+    rows: list[tuple[int, dict]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append((lineno, json.loads(line)))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{source} 第 {lineno} 行不是合法 JSON: {exc}") from exc
+    if not rows:
+        raise ValueError(f"{source}: 没有有效用例（至少一行 cases.jsonl）")
+    return rows
+
+
 def validate_cases_file(path: str | Path) -> dict:
     """逐行过 harness.Case 校验，返回 stats（case 数 + 断言键分布）。"""
     src = Path(path)
     if not src.is_file():
         raise FileNotFoundError(f"功能数据集文件不存在: {src}")
     assertion_keys: dict[str, int] = {}
-    count = 0
-    for lineno, line in enumerate(
-            src.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            raw = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{src} 第 {lineno} 行不是合法 JSON: {exc}") from exc
+    rows = iter_cases_lines(src.read_text(encoding="utf-8"), str(src))
+    for lineno, raw in rows:
         case = Case(raw, f"{src}#L{lineno}")     # 校验失败抛 ValueError
         for key in case.expect:
             assertion_keys[key] = assertion_keys.get(key, 0) + 1
-        count += 1
-    if count == 0:
-        raise ValueError(f"{src}: 没有有效用例（至少一行 cases.jsonl）")
-    return {"count": count, "assertion_keys": assertion_keys}
+    return {"count": len(rows), "assertion_keys": assertion_keys}
 
 
 async def ingest_functional(repo: Any, src_path: str | Path, name: str,
