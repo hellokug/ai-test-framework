@@ -288,6 +288,19 @@ class DatasetCatalogRow(Base):
                                                  onupdate=utcnow)
 
 
+class DimTagRow(Base):
+    """功能域维度标签库（V1-PLAN §10.5）：跨场景共享的业务归类标签。
+
+    场景 manifest 的 dimension 字段引用标签名；一次入库所有场景复用
+    （前端「＋ 新增标签」即写此表）。
+    """
+
+    __tablename__ = "dim_tag"
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(sa.String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+
+
 class TestCaseDocRow(Base):
     """文字用例库（§15，T 系列）：人写人读的"测什么"层——目的/步骤/业务预期/
     优先级/风险，经 script 绑定定位到可执行层（实验套件用例/场景 case/指标），
@@ -338,3 +351,42 @@ def aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+class VersionResultRow(Base):
+    """版本测试结果归档（V1-PLAN §10.5）：任务终态按（域 × 版本 × 模型）聚合落库。
+
+    unique 键同键覆盖取最新（updated_at 刷新）；details.dimensions = 场景 →
+    pass_rate，是大屏「维度 × 版本矩阵」的数据源（分析只读本表，不扫原始 run）。
+    """
+
+    __tablename__ = "version_result"
+    __table_args__ = (sa.UniqueConstraint("domain", "version", "model"),)
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    domain: Mapped[str] = mapped_column(sa.String(16), index=True)
+    version: Mapped[str] = mapped_column(sa.String(64), index=True)
+    model: Mapped[str] = mapped_column(sa.String(128), default="", index=True)
+    run_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
+    details: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow,
+                                                 onupdate=utcnow)
+
+
+class ModelVersionRow(Base):
+    """全局版本登记（V1-PLAN §10.6）：被测系统/模型的版本注册表，跨域共享。
+
+    「公共 · 版本管理」的数据源：精度/功能等域任务发起时的「被测版本」从这里
+    选择（按模型过滤），同一模型逐版本执行的结果才可做版本间对比。与
+    version_result（域 × 版本 × 模型的结果归档）是两层：登记先行，归档随后。
+    """
+
+    __tablename__ = "model_version"
+    __table_args__ = (sa.UniqueConstraint("model", "version"),)
+
+    id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
+    model: Mapped[str] = mapped_column(sa.String(255), index=True)
+    version: Mapped[str] = mapped_column(sa.String(64))
+    description: Mapped[str] = mapped_column(sa.Text(), default="")
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)

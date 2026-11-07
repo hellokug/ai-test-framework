@@ -28,16 +28,19 @@ from aite.storage.models import (
     BgTaskRow,
     CaseRunRow,
     DatasetCatalogRow,
+    DimTagRow,
     ManualEvalScoreRow,
     ManualEvalTaskRow,
     MetricResultRow,
     ModelConfigRow,
+    ModelVersionRow,
     RunMetricSummaryRow,
     TestCaseDocRow,
     TestCaseResultRow,
     TestCaseRow,
     TestRunRow,
     TestSuiteRow,
+    VersionResultRow,
     aware,
     new_id,
 )
@@ -232,12 +235,20 @@ class SqlAlchemyRepository(Repository):
 
     async def list_case_results(self, run_id: str, limit: int | None = None) -> list[dict]:
         async with self.db.sessions() as session:
-            q = (select(TestCaseResultRow).where(TestCaseResultRow.run_id == run_id)
+            q = (select(TestCaseResultRow, TestCaseRow)
+                 .outerjoin(TestCaseRow, TestCaseResultRow.case_id == TestCaseRow.id)
+                 .where(TestCaseResultRow.run_id == run_id)
                  .order_by(TestCaseResultRow.id))
             if limit:
                 q = q.limit(limit)
-            rows = (await session.execute(q)).scalars().all()
-            return [self._result_dict(r) for r in rows]
+            pairs = (await session.execute(q)).all()
+            items = []
+            for res, case in pairs:
+                item = self._result_dict(res)
+                item["input"] = _json_safe(case.input) if case else None
+                item["expected"] = _json_safe(case.expected) if case else None
+                items.append(item)
+            return items
 
     @staticmethod
     def _result_dict(row: TestCaseResultRow) -> dict:
@@ -246,7 +257,51 @@ class SqlAlchemyRepository(Repository):
             "dataset": row.dataset, "output": row.output, "error": row.error,
             "usage": row.usage, "timings": row.timings, "cost_usd": row.cost_usd,
             "variant": row.variant, "variant_of": row.variant_of, "trace": row.trace,
+            "raw": _json_safe(row.raw),
         }
+
+    # ------------------------------------------------ tool 用例级落库（§16）
+    async def save_tool_case_record(self, run_id: str, suite_id: str,
+                                    record: dict[str, Any]) -> int:
+        """工具域用例原子落库：test_case 快照（复用按 external_key）→
+        case_result（原始输出/错误）→ pass 指标行。单事务。"""
+        async with self.db.sessions() as session:
+            case_row = (await session.execute(
+                select(TestCaseRow).where(
+                    TestCaseRow.suite_id == suite_id,
+                    TestCaseRow.external_key == record["external_key"])
+            )).scalar_one_or_none()
+            if case_row is None:
+                case_row = TestCaseRow(
+                    suite_id=suite_id, external_key=record["external_key"],
+                    input=_json_safe(record.get("messages")),
+                    expected=_json_safe(record.get("expect")),
+                    dataset=record.get("dataset"))
+                session.add(case_row)
+            else:
+                case_row.input = _json_safe(record.get("messages"))
+                case_row.expected = _json_safe(record.get("expect"))
+            await session.flush()
+            result_row = TestCaseResultRow(
+                run_id=run_id, case_id=int(case_row.id),
+                external_key=record["external_key"],
+                dataset=record.get("dataset"),
+                output=_json_safe(record.get("response")),
+                error=record.get("error"),
+                raw=_json_safe({"expect": record.get("expect"),
+                                "params": record.get("params"),
+                                "tools": record.get("tools")}),
+            )
+            session.add(result_row)
+            await session.flush()
+            if record.get("passed") is not None:
+                session.add(MetricResultRow(
+                    run_id=run_id, case_result_id=int(result_row.id),
+                    metric="pass_rate",
+                    value=1.0 if record["passed"] else 0.0,
+                    passed=record["passed"], source="pytest"))
+            await session.commit()
+            return int(result_row.id)
 
     # ---------------------------------------------------------------- metrics
     async def save_metric_results(self, run_id: str, case_result_id: int,
@@ -351,6 +406,47 @@ class SqlAlchemyRepository(Repository):
     async def delete_model_config(self, model_id: str) -> bool:
         async with self.db.sessions() as session:
             row = await session.get(ModelConfigRow, model_id)
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    # ------------------------------------------------------- model versions（§10.6）
+    async def list_model_versions(self, model: str | None = None) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(ModelVersionRow).order_by(ModelVersionRow.model,
+                                                    ModelVersionRow.created_at.desc())
+            if model:
+                stmt = stmt.where(ModelVersionRow.model == model)
+            rows = (await session.execute(stmt)).scalars().all()
+            return [{"id": str(r.id), "model": r.model, "version": r.version,
+                     "description": r.description,
+                     "created_at": aware(r.created_at).isoformat()} for r in rows]
+
+    async def create_model_version(self, data: dict[str, Any]) -> dict:
+        """登记版本：(model, version) 唯一，重复显式报错（FileExistsError→409）。"""
+        async with self.db.sessions() as session:
+            dup = (await session.execute(
+                select(ModelVersionRow).where(
+                    ModelVersionRow.model == data["model"],
+                    ModelVersionRow.version == data["version"]),
+            )).scalar_one_or_none()
+            if dup is not None:
+                raise FileExistsError(
+                    f"{data['model']} 的版本 {data['version']} 已登记")
+            row = ModelVersionRow(id=new_id(), model=data["model"],
+                                  version=data["version"],
+                                  description=data.get("description") or "")
+            session.add(row)
+            await session.commit()
+            return {"id": str(row.id), "model": row.model, "version": row.version,
+                    "description": row.description,
+                    "created_at": aware(row.created_at).isoformat()}
+
+    async def delete_model_version(self, version_id: str) -> bool:
+        async with self.db.sessions() as session:
+            row = await session.get(ModelVersionRow, version_id)
             if row is None:
                 return False
             await session.delete(row)
@@ -728,6 +824,64 @@ class SqlAlchemyRepository(Repository):
             "started_at": aware(row.started_at).isoformat() if row.started_at else None,
             "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,
         }
+
+    # --------------------------------------------- version results（§10.5）
+    async def upsert_version_result(self, entry: dict[str, Any]) -> dict:
+        """同（domain, version, model）覆盖取最新；details 整体替换。"""
+        async with self.db.sessions() as session:
+            row = (await session.execute(
+                select(VersionResultRow).where(
+                    VersionResultRow.domain == entry["domain"],
+                    VersionResultRow.version == entry["version"],
+                    VersionResultRow.model == entry["model"])
+            )).scalar_one_or_none()
+            if row is None:
+                row = VersionResultRow(id=new_id(), domain=entry["domain"],
+                                       version=entry["version"],
+                                       model=entry.get("model", ""))
+                session.add(row)
+            row.run_id = entry.get("run_id")
+            row.details = entry.get("details") or {}
+            await session.commit()
+            await session.refresh(row)
+            return {"id": str(row.id), "domain": row.domain,
+                    "version": row.version, "model": row.model,
+                    "run_id": row.run_id, "details": row.details,
+                    "updated_at": aware(row.updated_at).isoformat()}
+
+    async def list_version_results(self, *, domain: str, version: str | None = None,
+                                   model: str | None = None,
+                                   limit: int = 200) -> list[dict]:
+        async with self.db.sessions() as session:
+            stmt = select(VersionResultRow).where(
+                VersionResultRow.domain == domain)
+            if version:
+                stmt = stmt.where(VersionResultRow.version == version)
+            if model:
+                stmt = stmt.where(VersionResultRow.model == model)
+            rows = (await session.execute(
+                stmt.order_by(VersionResultRow.updated_at.desc())
+                .limit(limit))).scalars().all()
+            return [{"id": str(r.id), "domain": r.domain, "version": r.version,
+                     "model": r.model, "run_id": r.run_id, "details": r.details,
+                     "updated_at": aware(r.updated_at).isoformat()} for r in rows]
+
+    # ------------------------------------------------------- dim tags（§10.5）
+    async def list_dim_tags(self) -> list[dict]:
+        async with self.db.sessions() as session:
+            rows = (await session.execute(
+                select(DimTagRow).order_by(DimTagRow.created_at))).scalars().all()
+            return [{"id": str(r.id), "name": r.name,
+                     "created_at": aware(r.created_at).isoformat()} for r in rows]
+
+    async def create_dim_tag(self, name: str) -> dict:
+        async with self.db.sessions() as session:
+            row = DimTagRow(id=new_id(), name=name)
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return {"id": str(row.id), "name": row.name,
+                    "created_at": aware(row.created_at).isoformat()}
 
     # ------------------------------------------------- dataset catalog（§12.1）
     async def upsert_dataset_catalog(self, entry: dict[str, Any]) -> dict:

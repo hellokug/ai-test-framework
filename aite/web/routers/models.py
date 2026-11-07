@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from aite.core.profiles import remove_model_profile, upsert_model_profile
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["models"])
@@ -31,12 +32,21 @@ async def list_models(state: Any = Depends(get_state)):
 @router.post("/models")
 async def save_model(body: ModelIn, state: Any = Depends(get_state)):
     model_id = await state.repo.save_model_config(body.model_dump())
-    return {"id": model_id}
+    # 同步 common.yaml 模型预制：注册即可被任务发起 target.profile 直接引用
+    upsert_model_profile(body.name, {
+        "model": body.model, "base_url": body.base_url,
+        "api_key_env": body.api_key_env, "params": body.params or None,
+    })
+    return {"id": model_id, "common_profile": body.name}
 
 
 @router.delete("/models/{model_id}")
 async def delete_model(model_id: str, state: Any = Depends(get_state)):
+    name = next((m["name"] for m in await state.repo.list_model_configs()
+                 if m["id"] == model_id), None)
     ok = await state.repo.delete_model_config(model_id)
     if not ok:
         raise HTTPException(404, "model not found")
+    if name:
+        remove_model_profile(name)   # 预制同步删除（手工维护的同名条目一并移除）
     return {"deleted": True}

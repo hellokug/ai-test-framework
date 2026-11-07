@@ -41,11 +41,11 @@ class TargetConfig(BaseModel):
 
     @property
     def effective_api_key(self) -> str | None:
-        import os
         if self.api_key:
             return self.api_key
         if self.api_key_env:
-            return os.environ.get(self.api_key_env)
+            from aite.utils.secrets import resolve_secret
+            return resolve_secret(self.api_key_env)
         return None
 
     @field_validator("base_url")
@@ -131,6 +131,7 @@ class SuiteConfig(BaseModel):
     max_cost_usd: float | None = None            # global cost circuit breaker
     case_timeout_s: float | None = None
     module: str | None = None                    # 评测模块标签：reports/<module>/ 归位（缺省 misc）
+    version: str | None = None                   # 被测版本标注（additive，前端表单透传；趋势/归档消费）
 
     @field_validator("module")
     @classmethod

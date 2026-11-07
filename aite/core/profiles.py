@@ -51,6 +51,41 @@ def load_common() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def upsert_model_profile(name: str, entry: dict[str, Any]) -> dict[str, Any]:
+    """模型管理注册/更新 → 同步 common.yaml 模型预制（models 段合并，其余保留）。
+
+    YAML 重写会丢失注释（未引入 ruamel）——预制以机器管理为主时使用；
+    手工维护的预制请直接编辑文件。返回写入后的条目。
+    """
+    if not name or not isinstance(entry, dict):
+        raise ValueError(f"非法模型预制: {name!r}")
+    path = common_path()
+    data = load_common()
+    models = data.get("models") or {}
+    clean = {k: v for k, v in entry.items() if v not in (None, {}, [])}
+    models[name] = clean
+    data["models"] = models
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+    return clean
+
+
+def remove_model_profile(name: str) -> bool:
+    """删除 common.yaml 模型预制（模型管理删除时同步）；不存在返回 False。"""
+    data = load_common()
+    models = data.get("models") or {}
+    if name not in models:
+        return False
+    del models[name]
+    data["models"] = models
+    path = common_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+    return True
+
+
 def apply_common(raw: dict[str, Any],
                  common: dict[str, Any] | None = None) -> dict[str, Any]:
     """就地展开 suite 原始 dict 的预制引用：target/judge 模型 profile + tools 环境缺省。
