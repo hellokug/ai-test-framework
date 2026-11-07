@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
@@ -16,6 +17,7 @@ from aite import config as aite_config
 from aite.core.registry import registry
 from aite.reporting.rebuild import rebuild_report
 from aite.reporting.renderers import report_relpath
+from aite.service.functional_assets import ScenarioReadOnlyError
 from aite.storage import repo_session
 from aite.utils.logging import get_logger, setup_logging
 
@@ -921,3 +923,177 @@ def case_doc_rm(
         err_console.print(f"[red]unknown case:[/red] {ref}")
         raise SystemExit(1)
     console.print(f"[green]removed[/green] {row['case_no']}")
+
+
+# ============================================ 功能域资产（V1-PLAN §10.4/§10.5）
+@contextmanager
+def _fasset_errors():
+    """CLI 侧资产异常映射（与 routers/functional.py 的 HTTP 映射同口径）。"""
+    try:
+        yield
+    except ScenarioReadOnlyError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    except FileExistsError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+
+
+fscen_app = typer.Typer(help="评估场景管理（功能域，builtin+用户根合并）")
+app.add_typer(fscen_app, name="fscenario")
+fscript_app = typer.Typer(help="功能脚本（用例原子）管理")
+app.add_typer(fscript_app, name="fscript")
+ftag_app = typer.Typer(help="维度标签库（功能域共享）")
+app.add_typer(ftag_app, name="ftag")
+
+
+@fscen_app.command("list")
+def fscenario_list(source: str = typer.Option(None, "--source",
+                                              help="builtin / user")) -> None:
+    """列出评估场景（含能力覆盖与用例数）。"""
+    from aite.service import functional_assets as assets
+
+    with _fasset_errors():
+        items = assets.scan_scenarios(source or None)
+    table = Table(title=f"functional scenarios ({len(items)})")
+    for col in ("id", "display_name", "dimension", "source", "forms",
+                "scripts", "cases", "coverage"):
+        table.add_column(col, overflow="fold")
+    for i in items:
+        table.add_row(i["id"], i["display_name"], i["dimension"] or "-",
+                      i["source"], i["forms"], str(i["scripts"]),
+                      str(i["cases"]),
+                      json.dumps(i["coverage"], ensure_ascii=False))
+    console.print(table)
+
+
+@fscen_app.command("create")
+def fscenario_create(
+    scenario_id: str = typer.Argument(..., help="场景 id（小写字母开头）"),
+    name: str = typer.Option("", "--name", help="显示名（缺省 = id）"),
+    dimension: str = typer.Option("", "--dimension", help="维度标签（须在标签库内）"),
+    description: str = typer.Option("", "--description"),
+) -> None:
+    """新建评估场景（写 manifest；创建即注册）。"""
+    from aite.service import functional_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.create_scenario(repo, scenario_id, name,
+                                                dimension, description)
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    console.print(f"[green]created[/green] {row['id']}（{row['display_name']}，"
+                  f"dimension={row['dimension'] or '-'}）")
+
+
+@fscript_app.command("list")
+def fscript_list(scenario: str = typer.Option(None, "--scenario")) -> None:
+    """列出功能脚本（用例原子，跨场景）。"""
+    from aite.service import functional_assets as assets
+
+    items = assets.list_scripts(scenario or None)
+    table = Table(title=f"functional scripts ({len(items)})")
+    for col in ("id", "name", "scenario", "case_type", "row_count", "source",
+                "external_ref"):
+        table.add_column(col, overflow="fold")
+    for i in items:
+        table.add_row(i["id"], i["name"], i.get("scenario", "-"),
+                      i.get("case_type", i.get("dimension", "-")),
+                      str(i.get("row_count", 0)), i.get("source", "-"),
+                      i.get("external_ref") or "-")
+    console.print(table)
+
+
+@fscript_app.command("show")
+def fscript_show(script_id: str = typer.Argument(...)) -> None:
+    """查看脚本：登记 + 全部数据行。"""
+    from aite.service import functional_assets as assets
+
+    with _fasset_errors():
+        row = assets.get_script(script_id)
+    console.print(f"[bold]{row['name']}[/bold]（{row['id']}）@ {row['scenario']} "
+                  f"· {row['case_type']} · {row['source']}"
+                  + (f" · 外部用例 {row['external_ref']}" if row["external_ref"] else ""))
+    for r in row["rows"]:
+        console.print(f"  - [dim]{r['id']}[/dim] {r.get('desc', '')} "
+                      f"expect={json.dumps(r.get('expect'), ensure_ascii=False)}")
+
+
+@fscript_app.command("import")
+def fscript_import(
+    script_id: str = typer.Argument(...),
+    scenario: str = typer.Option(..., "--scenario", help="目标场景 id"),
+    name: str = typer.Option(..., "--name", help="脚本名（测试意图）"),
+    file: Path = typer.Option(None, "--file", help="cases.jsonl 文件（与 --dataset 二选一）"),
+    dataset: str = typer.Option(None, "--dataset", help="functional 型数据集名"),
+    case_type: str = typer.Option("基础", "--case-type"),
+    external_ref: str = typer.Option("", "--external-ref", help="外部平台用例编号"),
+) -> None:
+    """导入生成脚本：jsonl 文件 / 数据集整体导入（1 导入 = 1 脚本 N 行）。"""
+    from aite.service import functional_assets as assets
+
+    if bool(file) == bool(dataset):
+        err_console.print("[red]--file 与 --dataset 恰好提供其一[/red]")
+        raise SystemExit(1)
+    jsonl = file.read_text(encoding="utf-8") if file else ""
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.import_script(
+                repo, scenario_id=scenario, script_id=script_id, name=name,
+                case_type=case_type, external_ref=external_ref,
+                jsonl=jsonl, dataset=dataset or "")
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    console.print(f"[green]imported[/green] {row['id']}（{row['row_count']} 行）"
+                  f" -> {row['scenario']}")
+
+
+@fscript_app.command("delete")
+def fscript_delete(script_id: str = typer.Argument(...),
+                   yes: bool = typer.Option(False, "--yes")) -> None:
+    """删除脚本（登记 + 行文件 + 重派生 cases.jsonl）。"""
+    from aite.service import functional_assets as assets
+
+    if not yes and not typer.confirm(f"删除脚本 {script_id}?"):
+        raise typer.Abort()
+    with _fasset_errors():
+        row = assets.delete_script(script_id)
+    console.print(f"[green]deleted[/green] {row['id']}（{row['scenario']}）")
+
+
+@ftag_app.command("list")
+def ftag_list() -> None:
+    """列出维度标签库（内置 + 自定义）。"""
+    from aite.service import functional_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.list_dim_tags(repo)
+
+    items = asyncio.run(_go())
+    for t in items:
+        console.print(f"{t['name']}  [dim]({t['source']})[/dim]")
+
+
+@ftag_app.command("add")
+def ftag_add(name: str = typer.Argument(...)) -> None:
+    """新增维度标签（入库后所有场景可复用）。"""
+    from aite.service import functional_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.create_dim_tag(repo, name)
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    console.print(f"[green]added[/green] {row['name']}")
