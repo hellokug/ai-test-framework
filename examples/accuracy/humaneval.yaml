@@ -18,6 +18,11 @@ tools:
   extra_args:
     eval_batch_size: 10
     timeout_s: 14400
+    dataset_args:
+      # 判分=spawn 子进程本地跑单测，子进程要重新 import evalscope（本机实测
+      # ~9s），默认 review_timeout=4s 在 Windows 上必超时 → 假 0 分（全部
+      # timed out，2026-10-01 实弹）；Linux fork 无此问题，60s 两边都稳
+      humaneval: {review_timeout: 60}
     generation_config:
       timeout: 900
       max_tokens: 8192

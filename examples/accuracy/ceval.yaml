@@ -17,9 +17,7 @@ tools:
   resume: true
   extra_args:
     eval_batch_size: 10
-    timeout_s: 14400
-    dataset_args:
-      ceval: {subset_list: [computer_network]}   # 52 科抽 1 科冒烟；真评删除此段
+    timeout_s: 14400 # 52 科抽 1 科冒烟；真评删除此段
     generation_config:
       timeout: 900
       max_tokens: 4096
