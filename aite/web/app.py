@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -27,6 +31,30 @@ from aite.web.events import EventBus
 logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# 422 日志脱敏：键名子串命中即打码（宁滥勿缺，同 functional/harness 思路）
+_SENSITIVE_BODY_PARTS = ("api_key", "apikey", "token", "secret",
+                         "password", "authorization")
+_BODY_LOG_LIMIT = 800
+
+
+def _mask_body(value: Any) -> Any:
+    """递归打码 JSON body 中的敏感键值（键名保留供人识别）。"""
+    if isinstance(value, dict):
+        return {k: ("***" if any(s in str(k).lower() for s in _SENSITIVE_BODY_PARTS)
+                    else _mask_body(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_body(item) for item in value]
+    return value
+
+
+def _body_repr(body: Any, limit: int = _BODY_LOG_LIMIT) -> str:
+    """body 日志摘要：脱敏 → 序列化 → 截断；坏 JSON / 二进制保底 repr。"""
+    try:
+        text = json.dumps(_mask_body(body), ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        text = repr(body)
+    return text if len(text) <= limit else f"{text[:limit]}…(共{len(text)}字符)"
 
 __all__ = ["create_app", "AppState", "get_state"]
 
@@ -127,6 +155,19 @@ def create_app(storage_url: str = config.DEFAULT_DB_URL,
         @app.get("/", include_in_schema=False)
         async def index():
             return FileResponse(STATIC_DIR / "index.html")
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError):
+        """422 落服务端日志：access 行只有状态码，字段级原因仅响应体可见，
+        事后无从回溯；响应体保持 FastAPI 原格式，前端展示不变。"""
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in err.get('loc', []))} "
+            f"{err.get('type')}: {err.get('msg')}" for err in exc.errors())
+        logger.warning("422 %s %s：%s；收到 body=%s",
+                       request.method, request.url.path, detail,
+                       _body_repr(exc.body))
+        return JSONResponse(status_code=422,
+                            content={"detail": jsonable_encoder(exc.errors())})
 
     @app.exception_handler(Exception)
     async def unhandled(_request: Request, exc: Exception):  # pragma: no cover

@@ -260,3 +260,9 @@ _schema_check_locust_raw/
 # 运行时产物与本地环境（原则：不提交运行时产物）
 outputs/
 .venv-evalscope/
+
+# aite serve 落盘日志（aite.log 业务 / uvicorn.log 服务器，各 5MBx3 轮转）
+logs/
+
+# 本地临时验证目录（隔离实例/冒烟脚本）
+.tmp/
