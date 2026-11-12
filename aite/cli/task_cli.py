@@ -201,22 +201,45 @@ def _register_action_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
         console.print(f"[yellow]stopped[/yellow] {task['id']} "
                       f"status={task['status']}")
 
+
+def _register_spawn_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
     @app.command("retry")
     def retry(task_id: str = typer.Argument(...)) -> None:
-        """重试终态任务：创建新任务（retry_of 指向原任务）。"""
+        """重试终态任务：同配置再跑一轮（同一任务，追加执行历史轮次）。"""
+
+        async def _go() -> dict | None:
+            async with repo_session(config.db_url_from_env()) as repo:
+                await kit.retry(repo, task_id)
+                return await kit.wait(repo, task_id)
+
         try:
-            task = _run_with_repo(lambda repo: kit.retry(repo, task_id))
+            task = asyncio.run(_go())
         except (TaskNotFoundError, TaskStateError) as exc:
             _fail(exc)
             return
-        console.print(f"[green]retry created[/green] {task['id']} "
-                      f"(retry_of={task['retry_of']}, "
-                      f"count={task['retry_count']})")
+        if task is None:
+            _fail(TaskNotFoundError(task_id))
+            return
+        rounds = len(task.get("history") or [])
+        console.print(f"[green]retry round=#{rounds}[/green]")
+        _print_verdict(task)
+
+    @app.command("dup")
+    def dup(task_id: str = typer.Argument(...)) -> None:
+        """复制任务：同 spec 新建 pending 任务（任意状态，不带 retry 链）。"""
+        try:
+            task = _run_with_repo(lambda repo: kit.duplicate(repo, task_id))
+        except TaskNotFoundError as exc:
+            _fail(exc)
+            return
+        console.print(f"[green]duplicate created[/green] {task['id']} "
+                      f"name={task['name']} status={task['status']}")
 
 
 def build_task_cli(kit: DomainTaskKit) -> typer.Typer:
-    """按域装配任务管理子应用：create / list / get / rm / run / stop / retry。"""
+    """按域装配任务管理子应用：create / list / get / rm / run / stop / retry / dup。"""
     app = typer.Typer(help=f"{kit.domain} 域任务管理", no_args_is_help=True)
     _register_inspect_commands(app, kit)
     _register_action_commands(app, kit)
+    _register_spawn_commands(app, kit)
     return app

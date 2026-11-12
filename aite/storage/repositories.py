@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Collection
 from datetime import timedelta
 from typing import Any
 
@@ -247,6 +248,7 @@ class SqlAlchemyRepository(Repository):
                 item = self._result_dict(res)
                 item["input"] = _json_safe(case.input) if case else None
                 item["expected"] = _json_safe(case.expected) if case else None
+                item["metadata"] = (case.metadata_ or {}) if case else {}   # 用例 id/类型/等级（回填对表）
                 items.append(item)
             return items
 
@@ -264,7 +266,11 @@ class SqlAlchemyRepository(Repository):
     async def save_tool_case_record(self, run_id: str, suite_id: str,
                                     record: dict[str, Any]) -> int:
         """工具域用例原子落库：test_case 快照（复用按 external_key）→
-        case_result（原始输出/错误）→ pass 指标行。单事务。"""
+        case_result（原始输出/错误）→ pass 指标行。单事务。
+
+        行级 dataset 统一为场景名：pytest 适配器只带 ``scenario`` 键，
+        显式 ``dataset`` 优先；前端用例明细据此回跳脚本行。"""
+        dataset = record.get("dataset") or record.get("scenario")
         async with self.db.sessions() as session:
             case_row = (await session.execute(
                 select(TestCaseRow).where(
@@ -276,16 +282,19 @@ class SqlAlchemyRepository(Repository):
                     suite_id=suite_id, external_key=record["external_key"],
                     input=_json_safe(record.get("messages")),
                     expected=_json_safe(record.get("expect")),
-                    dataset=record.get("dataset"))
+                    metadata_=_json_safe(record.get("meta") or {}),
+                    dataset=dataset)
                 session.add(case_row)
             else:
                 case_row.input = _json_safe(record.get("messages"))
                 case_row.expected = _json_safe(record.get("expect"))
+                case_row.metadata_ = _json_safe(record.get("meta") or {})
+                case_row.dataset = dataset
             await session.flush()
             result_row = TestCaseResultRow(
                 run_id=run_id, case_id=int(case_row.id),
                 external_key=record["external_key"],
-                dataset=record.get("dataset"),
+                dataset=dataset,
                 output=_json_safe(record.get("response")),
                 error=record.get("error"),
                 raw=_json_safe({"expect": record.get("expect"),
@@ -413,29 +422,25 @@ class SqlAlchemyRepository(Repository):
             return True
 
     # ------------------------------------------------------- model versions（§10.6）
-    async def list_model_versions(self, model: str | None = None) -> list[dict]:
+    async def list_model_versions(self) -> list[dict]:
         async with self.db.sessions() as session:
-            stmt = select(ModelVersionRow).order_by(ModelVersionRow.model,
-                                                    ModelVersionRow.created_at.desc())
-            if model:
-                stmt = stmt.where(ModelVersionRow.model == model)
+            stmt = select(ModelVersionRow).order_by(
+                ModelVersionRow.created_at.desc())
             rows = (await session.execute(stmt)).scalars().all()
             return [{"id": str(r.id), "model": r.model, "version": r.version,
                      "description": r.description,
                      "created_at": aware(r.created_at).isoformat()} for r in rows]
 
     async def create_model_version(self, data: dict[str, Any]) -> dict:
-        """登记版本：(model, version) 唯一，重复显式报错（FileExistsError→409）。"""
+        """登记版本：版本号唯一（与模型无关），重复显式报错（FileExistsError→409）。"""
         async with self.db.sessions() as session:
             dup = (await session.execute(
                 select(ModelVersionRow).where(
-                    ModelVersionRow.model == data["model"],
                     ModelVersionRow.version == data["version"]),
             )).scalar_one_or_none()
             if dup is not None:
-                raise FileExistsError(
-                    f"{data['model']} 的版本 {data['version']} 已登记")
-            row = ModelVersionRow(id=new_id(), model=data["model"],
+                raise FileExistsError(f"版本 {data['version']} 已登记")
+            row = ModelVersionRow(id=new_id(), model=data.get("model", ""),
                                   version=data["version"],
                                   description=data.get("description") or "")
             session.add(row)
@@ -754,18 +759,22 @@ class SqlAlchemyRepository(Repository):
         return await self.get_domain_task(table, task_id)
 
     async def update_domain_task(self, table: type[Any], task_id: str,
-                                 expect_status: str | None = None, **fields: Any) -> dict | None:
+                                 expect_status: str | Collection[str] | None = None,
+                                 **fields: Any) -> dict | None:
         async with self.db.sessions() as session:
             row = await session.get(table, task_id)
             if row is None:
                 return None
-            if expect_status is not None and row.status != expect_status:
-                return None
+            if expect_status is not None:
+                allowed = ({expect_status} if isinstance(expect_status, str)
+                           else set(expect_status))
+                if row.status not in allowed:
+                    return None
             for key, value in fields.items():
                 if key not in ("name", "spec", "status", "result", "error",
-                               "started_at", "finished_at"):
+                               "started_at", "finished_at", "history"):
                     raise ValueError(f"domain task 字段不可更新: {key}")
-                if key in ("spec", "result"):
+                if key in ("spec", "result", "history"):
                     value = _json_safe(value)
                 setattr(row, key, value)
             if fields.get("status") in TASK_TERMINAL and "finished_at" not in fields:
@@ -818,6 +827,7 @@ class SqlAlchemyRepository(Repository):
         return {
             "id": str(row.id), "name": row.name, "status": row.status,
             "spec": row.spec, "result": row.result, "error": row.error,
+            "history": row.history,
             "retry_of": str(row.retry_of) if row.retry_of else None,
             "retry_count": row.retry_count,
             "created_at": aware(row.created_at).isoformat(),

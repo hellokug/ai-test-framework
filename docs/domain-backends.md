@@ -31,16 +31,21 @@
 |---|---|---|
 | `POST /{D}/tasks` | 创建任务（`status=pending`，不运行） | body：`{name?, spec}`，spec 为域自定义（§6） |
 | `GET /{D}/tasks` | 列表 | query：`status`、`retry_of`、`limit`（默认 50） |
-| `GET /{D}/tasks/{id}` | 详情 | 404 不存在 |
-| `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅 `pending`；其余状态 409 |
+| `GET /{D}/tasks/{id}` | 详情（含 `history` 执行历史） | 404 不存在 |
+| `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅非运行中（`pending`/终态）；`running\|stopping` 409 |
 | `DELETE /{D}/tasks/{id}` | 删除 | 仅终态；非终态 409 |
-| `POST /{D}/tasks/{id}/run` | 运行 | 仅 `pending`；202 返回任务快照，异步执行 |
+| `POST /{D}/tasks/{id}/run` | 运行 | `pending` 首发 / 终态重跑；202 返回任务快照，异步执行 |
 | `POST /{D}/tasks/{id}/stop` | 停止 | 仅 `running`（幂等：`stopping` 重复调用返回当前态） |
-| `POST /{D}/tasks/{id}/retry` | 重试 | 仅终态；**创建新任务**（复制 spec，`retry_of=原id`，`retry_count+1`），201 返回新任务 |
+| `POST /{D}/tasks/{id}/retry` | 重试 | 仅终态；**同一任务**同配置再跑一轮（追加执行历史轮次），202 返回任务快照 |
+| `POST /{D}/tasks/{id}/duplicate` | 复制 | 任意状态；**创建新任务**（独立分支变体：复制 spec，`pending` 待运行，名字加「· 副本」），201 返回新任务 |
 | `GET /{D}/tasks/{id}/result` | 结果（域形态，§6） | 非终态 409 |
 | `GET /{D}/tasks/{id}/stream` | SSE 进度/终态 | 频道 `{D}:tasks:{id}`（§5） |
 
-重试不改原任务记录（审计可追，符合原则 8 状态机闭合）。
+任务 = 一个逻辑实验，执行历史是它的从属记录（owner 2026-11-12 拍板）：重试/重跑都发生
+在**同一个任务**上，每轮在任务行 `history` 追加一条（`trigger` + 当时 spec 快照 + 状态/
+结果概要 + `run_id` + 起止时间），审计口径 = 每轮结果对应每轮配置。旧版 `retry_of` 链
+字段保留只读（兼容历史数据，新写入不再产生）。复制 = 独立分支变体（新任务，与原任务
+无历史关系）。
 
 ## 3. 状态机（四域统一）
 
@@ -51,7 +56,8 @@ pending ──run──▶ running ─────────▶ succeeded
                   ▼
               stopping ──────────▶ cancelled
 running|stopping ──startup 扫描──▶ stale（进程死亡残留）
-终态 ──retry──▶ 新 pending 任务
+终态 ──retry──▶ 新 pending 任务（retry_of 链）
+任意态 ──duplicate──▶ 新 pending 任务（无链，名字加「· 副本」）
 ```
 
 - 终态集：`succeeded / failed / cancelled / stale`。
@@ -93,11 +99,12 @@ class DomainTaskKit:
                    retry_of: str | None = None, limit: int = 50) -> list[dict]
     async def get(self, repo, task_id: str) -> dict | None
     async def update(self, repo, task_id: str, *, name: str | None = None,
-                     spec: dict | None = None) -> dict          # 仅 pending
+                     spec: dict | None = None) -> dict          # 仅非运行中
     async def delete(self, repo, task_id: str) -> None          # 仅终态
-    async def run(self, repo, task_id: str) -> dict             # pending→running + 派发
+    async def run(self, repo, task_id: str, *, trigger: str = "run") -> dict
     async def stop(self, repo, task_id: str) -> dict            # running→stopping→cancelled
-    async def retry(self, repo, task_id: str) -> dict           # 终态→新任务
+    async def retry(self, repo, task_id: str) -> dict           # 终态→同任务重跑一轮
+    async def duplicate(self, repo, task_id: str) -> dict       # 任意态→独立分支变体新任务
     async def mark_stale(self, repo) -> int                     # startup 调用
     def channel(self, task_id: str) -> str                      # f"{domain}:tasks:{task_id}"
 ```
@@ -162,7 +169,7 @@ error_cases, reports}`（executor 见 `service/suite_task.py`，明细在公共 
 ## 7. CLI 双形态（原则：接口新增一律 CLI + Python API）
 
 `aite/cli/task_cli.py` 提供 `build_task_cli(kit) -> typer.Typer` 工厂，生成同形
-七命令：`create / list / get / rm / run / stop / retry`（result 并入 get 详情
+八命令：`create / list / get / rm / run / stop / retry / dup`（result 并入 get 详情
 展示）。`cli/main.py` 经 `_mount_domain_tasks` 挂载，命令为三层：
 **`aite {域} tasks <命令>`**（域组下挂 tasks，给域内其他命令留空间）：
 
@@ -171,6 +178,7 @@ aite perf tasks create --spec perf-suite.yaml --name 720s-long   # spec=suite YA
 aite perf tasks run <id>        # 运行并等待终态（exit 0=succeeded，CI 友好）
 aite perf tasks stop <id>       # 协作式停止；60s 兜底强转 cancelled
 aite perf tasks retry <id>      # 终态→新任务（retry_of 链）
+aite perf tasks dup <id>        # 任意态→同 spec 新 pending 任务（名字加「· 副本」）
 aite perf tasks list / get / rm <id>
 ```
 
@@ -276,7 +284,7 @@ reliability 内联（不落 run 存储）：
 | **内容语义** | 刺激 + 期望行为（答案不存，断言代替） | 答案必须正确（输出内容对照校验） | **内容语义无关**，分布特征是本体 |
 | **来源/生命周期** | 人工编写（加用例只加行） | 开源导入（HF）+ 私有领域构建 + 离线化 | **生成器产物**（语料池+参数+seed，逐字节可复现） |
 | **校验时机/器** | 导入时 harness.Case 校验 | 导入时 schema+字段映射校验 | 生成时参数校验 + stats.json |
-| **现状** | 只在包内 scenarios，**未入数据集管理** | `datasets/` 体系完整（builtin/hf_hub/local/userstore） | `perf_dataset.py` 生成器完整，产物散在 perfdata 目录 |
+| **现状** | 托管根 data/functional/scenarios（用户自管），**未入数据集管理** | `datasets/` 体系完整（builtin/hf_hub/local/userstore） | `perf_dataset.py` 生成器完整，产物散在 perfdata 目录 |
 
 结论：**三类区分开（schema/校验器/生命周期不同），共用一个管理外壳**（目录/注册表/引用/版本）。
 可靠性**不设自有数据集**：引用性能型做背景流量，叠加故障场景（weapons/faults）与探针。
@@ -285,7 +293,7 @@ reliability 内联（不落 run 存储）：
 
 | 域 | 输入（spec 组成） | 执行语义 | 输出/判定语义 |
 |---|---|---|---|
-| functional | 功能型数据集引用（或内置场景名） | 逐 case 请求 → 断言 | **二元判定**：逐 case pass/fail → pass_rate vs 阈值 |
+| functional | 功能型数据集引用（或托管场景名） | 逐 case 请求 → 断言 | **二元判定**：逐 case pass/fail → pass_rate vs 阈值 |
 | accuracy | 精度型数据集引用 + 指标阈值 + **基线引用** | 请求 → **对照标准答案评分** | **分数 + 劣化判定**：绝对阈值 + vs 基线 delta（新能力） |
 | perf | 性能型数据集引用 + 负载模型（mode/duration/并发） | 压测流量 | **性能指标 vs SLA**：方向性阈值（TTFT/TPOT/QPS/error_rate） |
 | reliability | 性能型数据集引用（背景流量）+ 故障场景 + 探针配置 | **复合**：背景流量 → 注入 → 观测 → 恢复 | **RTO 判定**：注入窗 fail → 恢复后首个 pass 的时间；探针通过率 |
@@ -316,8 +324,8 @@ reliability 内联（不落 run 存储）：
 3. 可靠性 spec 的背景流量：内嵌 perf 参数段 vs 直接引用 perf 数据集 id？（建议：
    引用数据集 id + 内嵌负载参数，两者都要——流量形态与语料分布是两个自变量）
 4. 目录存储：统一 catalog（type 列）+ 分类型文件区？（建议：是，一张目录表）
-5. 兼容：suite `tools.datasets`（场景名语义）保留为内置场景快捷方式，受管数据集
-   走新引用？（建议：是，内置场景名是合法的"隐式功能数据集"）
+5. 兼容：suite `tools.datasets`（场景名语义）保留为托管场景快捷方式，受管数据集
+   走新引用？（建议：是，托管场景名是合法的"隐式功能数据集"）
 
 > **2026-09-20 用户确认：五点均按建议执行。**落地契约见 §12。
 
@@ -358,11 +366,18 @@ aite dataset list [--type functional|accuracy|perf]   # catalog 权威，builtin
 aite dataset import-functional <cases.jsonl> --name n # 校验→落盘→登记
 aite dataset show <id|name> / rm <id>
 aite dataset add-hf …（已有 → 登记为 accuracy 型）
+aite dataset settings / settings-set <k> <v>          # 路径与在线源设置（dataset_settings.json）
+aite dataset upload <file> --type t --name n          # 上传（校验→落位→登记）
+aite dataset download <ref> / pull-url <name>         # 下载 / 远程拉取导入（OBS 等直链）
 perf 生成入口 → 自动登记（generated 型）
 ```
 
 REST（D3）：`GET /datasets?type=`、`GET /datasets/{id}`、`DELETE /datasets/{id}`、
-按类型摄取端点。
+按类型摄取端点；文件面：`POST /datasets/upload`、`GET /datasets/{ref}/download`、
+`POST /datasets/hf/import`、`POST /datasets/remote/import`、
+`GET·PUT /datasets/settings`、`GET /datasets/online/status`。
+路径/在线源设置收口 `datasets/settings.py`（环境变量 > 设置文件 > 默认；
+datasets_dir/cache_dir/hf_endpoint/remote_url 四键）。
 
 ### 12.4 任务 spec 引用（DatasetConfig 增 `ref` 字段）
 
@@ -370,7 +385,7 @@ REST（D3）：`GET /datasets?type=`、`GET /datasets/{id}`、`DELETE /datasets/
 datasets:
   - ref: gsm8k-v1          # catalog 引用：解析出 type/path/fields/sample
   - type: builtin
-    id: api_limits          # 内置场景名 = 隐式功能数据集（决策 5，保留快捷方式）
+    id: <托管场景名>        # 场景名 = 隐式功能数据集（决策 5，保留快捷方式）
 ```
 
 - loader 解析 `ref` → 查 catalog → 按 type 装配（functional→场景目录进 pytest 适配器、
@@ -820,8 +835,7 @@ CLI:  aite case-doc add/list/show/rm；aite case-doc link <id> <脚本绑定>
 ### 16.1 场景与脚本目录契约
 
 ```
-builtin:  aite/functional/scenarios/<场景>/          # 包内只读
-user:     data/functional/scenarios/<场景>/          # 用户根（config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR）
+managed:  data/functional/scenarios/<场景>/          # 托管根（config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR，场景全部用户自管）
             manifest.json     # {display_name, dimension, description}
             scripts.json      # 受管脚本登记 [{id, name, case_type, external_ref, source}]
             scripts/<sid>.jsonl  # 脚本数据行（harness.Case 同构）
@@ -829,16 +843,16 @@ user:     data/functional/scenarios/<场景>/          # 用户根（config.DEFA
 ```
 
 首次写场景时无主 cases.jsonl 自动收编为脚本 `legacy-cases`（case_type=迁移），
-收编逐行过 harness.Case（坏行显式报错）。builtin 场景只读（写 → 409）。
+收编逐行过 harness.Case（坏行显式报错）。
 维度标签库 = `dim_tag` 表（内置 3 + 自定义），场景 manifest.dimension 引用标签名。
 
 ### 16.2 端点
 
 ```
-GET  /api/v1/functional/scenarios?source=       # 合并清单（id/显示名/维度/形态/cases/能力覆盖）
+GET  /api/v1/functional/scenarios               # 托管清单（id/显示名/维度/形态/cases/能力覆盖）
 POST /api/v1/functional/scenarios               # {id, display_name?, dimension?, description?}
 GET  /api/v1/functional/scenarios/{id}          # 详情（含受管脚本登记）
-DELETE /api/v1/functional/scenarios/{id}        # 删用户场景（整目录；builtin→409；历史任务/归档持快照不受影响，2026-10-16）
+DELETE /api/v1/functional/scenarios/{id}?force= # 删场景：默认有脚本/用例拒删（409 提示数量）；force=true 级联整目录（历史任务/归档持快照不受影响）
 GET  /api/v1/functional/scripts?scenario=       # 跨场景脚本清单（含 row_index=[id,desc] 供任务树用例数据源）
 POST /api/v1/functional/scripts                 # {scenario_id, script_id, name, case_type, external_ref?, rows[]}
 GET/PATCH/DELETE /api/v1/functional/scripts/{script_id}
@@ -878,3 +892,49 @@ GET  /api/v1/functional/quality/board?model=&target=&baseline=
 
 CLI 双形态：`aite fscenario list/create`、`aite fscript list/show/import/delete`、
 `aite ftag list/add`。
+
+## 17. 精度资产层：评估场景 / 脚本（2026-11-08 实装）
+
+> 与功能域（§16）同构的场景/脚本两层；实现 = `service/accuracy_assets.py` +
+> `web/routers/accuracy.py`。脚本 = 固化的域任务 spec（suite raw 同构，与
+> `POST /accuracy/tasks` 的 spec 同形）+ 中文名称；**场景与脚本全部用户自管，
+> 无预置**（原 examples/accuracy 预置脚本已全部删除，研发不随框架发脚本）。
+
+### 17.1 场景与脚本目录契约
+
+```
+managed:  data/accuracy/scenarios/<场景>/      # 托管根（config.DEFAULT_ACCURACY_SCENARIOS_DIR）
+            manifest.json                      # {display_name, dimension, description}
+            scripts/<sid>.yaml                 # 脚本 doc = {id, name, description, spec,
+                                               #   created_at, updated_at}
+```
+
+命名约定：id = 英文编号（文件名/接口寻址，全平台唯一），name = 中文名称
+（脚本库卡片标题）。dimension 引用共享维度标签库（dim_tag 表，与功能域同一
+套，`/functional/dim-tags` 维护）。spec 保存经 resolve_suite 真实校验
+（工具域轻校验 / 自研域 SuiteConfig 强校验）+ 数据集非空——校验跑在深拷贝上
+（apply_common 会就地展开 target.profile 并并入 common 工具缺省，校验原件会把
+展开结果与本机 python_exe 固化进脚本）；运行参数（目标模型覆盖/版本/执行方式）
+不沉淀，发起任务时覆盖。历史任务持创建时 spec 快照，
+编辑/删除脚本不影响已落库任务。
+
+### 17.2 端点与清单口径
+
+```
+GET  /api/v1/accuracy/scenarios                # 场景清单（id/显示名/维度/脚本数/条数合计）
+POST /api/v1/accuracy/scenarios                # {id, display_name?, dimension?, description?}
+GET  /api/v1/accuracy/scenarios/{id}           # 详情（含瘦身口径 script_entries）
+DELETE /api/v1/accuracy/scenarios/{id}?force=  # 默认有脚本拒删（409 提示数量）；force=true 级联整目录
+GET  /api/v1/accuracy/scripts?scenario=        # 清单瘦身口径：id/name/场景/datasets/case_count/updated_at
+                                               #   （无 description/spec——详情接口才有）
+POST /api/v1/accuracy/scripts                  # {scenario_id, id, name?, description?, spec}
+GET/PATCH/DELETE /api/v1/accuracy/scripts/{script_id}
+```
+
+**条数口径**（`case_count`）：数据集规模合计，尽力落定——自研域可本地算
+（catalog 登记 stats → builtin 打包样本行数 → 本地文件行数）；工具域
+（engine=evalscope）tools.datasets 是 evalscope 自己的基准名，跑上游全量，
+本地不可知 → None（前端显示 —）；混合引用部分不可落定 → None（不虚报）。
+
+CLI 双形态：`aite ascenario list/create/delete`、`aite ascript
+list/show/create(--file spec.yaml)/delete`。错误语义 404/409/422 与功能域同口径。

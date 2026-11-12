@@ -74,7 +74,7 @@ def build_domain_tasks_router(domain: str) -> APIRouter:
     @router.patch(f"{base}/{{task_id}}")
     async def patch_task(task_id: str, body: TaskUpdateIn,
                          state: Any = Depends(get_state)):
-        # kit.update 对「不存在」与「非 pending」同返 409；契约要求 404 先行区分
+        # kit.update 对不存在与运行中同返 409；契约要求 404 先行区分
         if await _call(_kit(state, domain).get, state.repo, task_id) is None:
             raise HTTPException(404, f"task not found: {task_id}")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -88,16 +88,23 @@ def build_domain_tasks_router(domain: str) -> APIRouter:
 
     @router.post(f"{base}/{{task_id}}/run", status_code=202)
     async def run_task(task_id: str, state: Any = Depends(get_state)):
-        """异步执行：立即返回任务快照（running 态），进度走 SSE。"""
+        """异步执行：pending 首发 / 终态重跑（同一任务追加历史轮次），
+        立即返回任务快照（running 态），进度走 SSE。"""
         return await _call(_kit(state, domain).run, state.repo, task_id)
 
     @router.post(f"{base}/{{task_id}}/stop")
     async def stop_task(task_id: str, state: Any = Depends(get_state)):
         return await _call(_kit(state, domain).stop, state.repo, task_id)
 
-    @router.post(f"{base}/{{task_id}}/retry", status_code=201)
+    @router.post(f"{base}/{{task_id}}/retry", status_code=202)
     async def retry_task(task_id: str, state: Any = Depends(get_state)):
+        """重试 = 终态任务同配置再跑一轮（同一任务，追加执行历史轮次）。"""
         return await _call(_kit(state, domain).retry, state.repo, task_id)
+
+    @router.post(f"{base}/{{task_id}}/duplicate", status_code=201)
+    async def duplicate_task(task_id: str, state: Any = Depends(get_state)):
+        """复制 = 同 spec 新建 pending 任务（任意状态可用，不带 retry 链）。"""
+        return await _call(_kit(state, domain).duplicate, state.repo, task_id)
 
     @router.get(f"{base}/{{task_id}}/result")
     async def get_result(task_id: str, state: Any = Depends(get_state)):

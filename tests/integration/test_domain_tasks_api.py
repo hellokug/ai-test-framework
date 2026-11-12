@@ -1,7 +1,7 @@
 """四域任务 REST 集成测试（docs/domain-backends.md §2 契约的 Web 切片）。
 
-用必失败的 spec 驱动状态机（resolve/校验 fail-fast）验证 run→failed→retry 链；
-CRUD 与守卫语义（pending 不可删 / 非终态无 result / stop 仅 running）逐条对契约。
+用必失败的 spec 驱动状态机（resolve/校验 fail-fast）验证 run→failed→同任务重跑；
+执行历史逐轮累积（retry 不再新建任务）；CRUD 与守卫语义逐条对契约。
 """
 
 import time
@@ -73,8 +73,9 @@ class TestDomainTasksApi:
         assert client.post("/api/v1/perf/tasks/nope/run").status_code == 404
 
     @pytest.mark.parametrize("domain", ["functional", "accuracy", "perf"])
-    def test_run_fail_fast_then_retry(self, client, domain):
-        """无效 suite spec（缺 datasets）fail-fast → failed → result/retry 链。"""
+    def test_run_fail_fast_then_rerun(self, client, domain):
+        """无效 suite spec（缺 datasets）fail-fast → failed；终态可改配置/重跑
+        同一任务，执行历史逐轮累积（retry 不再新建任务）。"""
         task = self._create(client, domain, {"engine": "pytest"}, name="failing")
         run = client.post(f"/api/v1/{domain}/tasks/{task['id']}/run")
         assert run.status_code == 202
@@ -87,20 +88,64 @@ class TestDomainTasksApi:
         assert result.status_code == 200
         assert result.json()["status"] == "failed"
 
-        # failed 后不允许再 run（仅 pending）
-        assert client.post(f"/api/v1/{domain}/tasks/{task['id']}/run").status_code == 409
+        # 终态可改配置（仅运行中禁止）——「改参再跑」的前提
+        patched = client.patch(f"/api/v1/{domain}/tasks/{task['id']}",
+                               json={"name": "failing-2"})
+        assert patched.status_code == 200
 
+        # 终态可直接重跑（同一任务，不再新建）
+        rerun = client.post(f"/api/v1/{domain}/tasks/{task['id']}/run")
+        assert rerun.status_code == 202
+        assert rerun.json()["id"] == task["id"]
+        self._wait_status(client, domain, task["id"], {"failed"})
+
+        # retry = 同任务再跑一轮（202 返回同一任务快照）
         retry = client.post(f"/api/v1/{domain}/tasks/{task['id']}/retry")
-        assert retry.status_code == 201
-        new_task = retry.json()
-        assert new_task["id"] != task["id"]
-        assert new_task["retry_of"] == task["id"]
-        assert new_task["retry_count"] == 1
-        assert new_task["status"] == "pending"
-        # retry 链可查
-        listing = client.get(f"/api/v1/{domain}/tasks",
-                             params={"retry_of": task["id"]}).json()
+        assert retry.status_code == 202
+        same = retry.json()
+        assert same["id"] == task["id"]
+        assert same["retry_of"] is None and same["retry_count"] == 0
+        self._wait_status(client, domain, task["id"], {"failed"})
+
+        # 执行历史：3 轮逐轮累积，每轮带 trigger/当时 spec 快照/起止时间
+        detail = client.get(f"/api/v1/{domain}/tasks/{task['id']}").json()
+        hist = detail["history"]
+        assert [h["n"] for h in hist] == [1, 2, 3]
+        assert [h["trigger"] for h in hist] == ["run", "run", "retry"]
+        assert all(h["status"] == "failed" for h in hist)
+        assert all(h["spec"] == task["spec"] for h in hist)
+        assert all(h["started_at"] and h["finished_at"] for h in hist)
+        # 任务不裂变：该域列表仍只有这一个任务
+        listing = client.get(f"/api/v1/{domain}/tasks").json()
         assert listing["count"] == 1
+        assert listing["items"][0]["id"] == task["id"]
+
+        # 终态任务亦可复制（独立分支变体：新建任务、无历史链）
+        dup = client.post(f"/api/v1/{domain}/tasks/{task['id']}/duplicate")
+        assert dup.status_code == 201
+        assert dup.json()["status"] == "pending"
+        assert dup.json()["retry_of"] is None
+        assert dup.json()["history"] is None
+
+    @pytest.mark.parametrize("domain", ["functional", "accuracy", "perf"])
+    def test_duplicate_copies_spec_as_pending(self, client, domain):
+        """复制 = 同 spec 新 pending 任务、名字加「· 副本」、无 retry 链，原任务不动。"""
+        task = self._create(client, domain, {"engine": "pytest"}, name="src")
+        dup = client.post(f"/api/v1/{domain}/tasks/{task['id']}/duplicate")
+        assert dup.status_code == 201
+        new_task = dup.json()
+        assert new_task["id"] != task["id"]
+        assert new_task["status"] == "pending"
+        assert new_task["spec"] == task["spec"]
+        assert new_task["name"] == "src · 副本"
+        assert new_task["retry_of"] is None
+        assert new_task["retry_count"] == 0
+        # 原任务不受影响（pending、spec/name 原样）
+        original = client.get(f"/api/v1/{domain}/tasks/{task['id']}").json()
+        assert original["status"] == "pending"
+        assert original["name"] == "src"
+        assert original["spec"] == task["spec"]
+        assert client.post(f"/api/v1/{domain}/tasks/nope/duplicate").status_code == 404
 
     def test_reliability_invalid_spec_fails(self, client):
         """观测 spec 缺 target → 校验 fail-fast → failed。"""

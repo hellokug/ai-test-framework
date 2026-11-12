@@ -235,6 +235,9 @@ class TaskLifecycleMixin:
     error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     retry_of: Mapped[str | None] = mapped_column(GUID(), nullable=True, index=True)
     retry_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+    # 执行历史（每轮一条：trigger/当时 spec 快照/status/结果概要/run_id/起止时间）。
+    # retry 语义改「同一任务重跑」后轮次在此累积；旧 retry_of 链保留兼容只读。
+    history: Mapped[list | None] = mapped_column(sa.JSON(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
@@ -375,18 +378,19 @@ class VersionResultRow(Base):
 
 
 class ModelVersionRow(Base):
-    """全局版本登记（V1-PLAN §10.6）：被测系统/模型的版本注册表，跨域共享。
+    """全局版本登记（V1-PLAN §10.6）：被测版本号注册表，跨域共享，与模型无关。
 
     「公共 · 版本管理」的数据源：精度/功能等域任务发起时的「被测版本」从这里
-    选择（按模型过滤），同一模型逐版本执行的结果才可做版本间对比。与
-    version_result（域 × 版本 × 模型的结果归档）是两层：登记先行，归档随后。
+    选择，版本与目标模型在发起处自由组合；同一脚本逐版本执行的结果才可做
+    版本间对比。与 version_result（域 × 版本 × 模型的结果归档）是两层：
+    登记先行，归档随后。model 为遗留列（早期登记挂模型，新登记恒为空串）。
     """
 
     __tablename__ = "model_version"
-    __table_args__ = (sa.UniqueConstraint("model", "version"),)
+    __table_args__ = (sa.UniqueConstraint("version"),)
 
     id: Mapped[str] = mapped_column(GUID(), primary_key=True, default=new_id)
-    model: Mapped[str] = mapped_column(sa.String(255), index=True)
+    model: Mapped[str] = mapped_column(sa.String(255), default="")
     version: Mapped[str] = mapped_column(sa.String(64))
     description: Mapped[str] = mapped_column(sa.Text(), default="")
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)

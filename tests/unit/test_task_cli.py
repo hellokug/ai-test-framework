@@ -1,7 +1,7 @@
-"""域任务 CLI 冒烟：挂载后的同形七命令走真实 DB（tmp sqlite）端到端。
+"""域任务 CLI 冒烟：挂载后的同形八命令走真实 DB（tmp sqlite）端到端。
 
 四域装配（build_*_task_kit）与 task_cli 工厂组合后的用户可见行为：
-create / list / get / rm / run / stop / retry。执行器可控（FlakyExecutor），
+create / list / get / rm / run / stop / retry / dup。执行器可控（FlakyExecutor），
 不触达真实模型端点。
 """
 
@@ -56,20 +56,33 @@ def test_run_success_prints_result(cli):
     assert "succeeded" in result.output and '"ok"' in result.output
 
 
-def test_run_failure_then_retry_chain(cli):
+def test_run_failure_then_retry(cli):
     task_id = _create(cli, '{"fail": 1}')
     failed = runner.invoke(cli, ["run", task_id])
     assert failed.exit_code == 1                      # CI 友好：非 succeeded 退出 1
     assert "failed" in failed.output and "boom" in failed.output
 
     retried = runner.invoke(cli, ["retry", task_id])
-    assert retried.exit_code == 0, retried.output
-    new_id = retried.output.split()[2]                # "retry created <uuid> (...)"
-    detail = runner.invoke(cli, ["get", new_id])
-    assert "retry_count: 1" in detail.output
+    assert retried.exit_code == 1                     # 同配置重跑，仍失败（fail spec）
+    assert "round=#2" in retried.output and "failed" in retried.output
+    # 同一任务：详情里执行历史已累积两轮（trigger 含 retry）
+    detail = runner.invoke(cli, ["get", task_id])
+    assert detail.exit_code == 0 and "retry" in detail.output
 
-    filtered = runner.invoke(cli, ["list", "--retry-of", task_id])
-    assert filtered.exit_code == 0 and "(1 shown)" in filtered.output
+
+def test_dup_copies_spec_without_retry_chain(cli):
+    """dup 任意状态可复制：同 spec 新 pending 任务、名字加「· 副本」、无 retry 链。"""
+    task_id = _create(cli, '{"a": 1}')
+    copied = runner.invoke(cli, ["dup", task_id])
+    assert copied.exit_code == 0, copied.output
+    new_id = copied.output.split()[2]                 # "duplicate created <uuid> ..."
+    detail = runner.invoke(cli, ["get", new_id])
+    assert detail.exit_code == 0
+    assert "pending" in detail.output and "t1 · 副本" in detail.output \
+        and '"a"' in detail.output and "retry_count: 0" in detail.output
+    # 不存在的任务 → TaskNotFoundError（exit 1）
+    missing = runner.invoke(cli, ["dup", "nope"])
+    assert missing.exit_code == 1                     # TaskNotFoundError
 
 
 def test_stop_guard_and_rm_terminal_only(cli):

@@ -199,21 +199,28 @@ async def test_stop_timeout_forces_cancel(repo):
 
 
 # --------------------------------------------------------------------- retry
-async def test_retry_creates_chained_task(repo):
+async def test_retry_reruns_same_task(repo):
     kit = make_kit(FakeExecutor(error="boom"))
     first = await kit.create(repo, {"suite": "s"}, name="r1")
     await kit.run(repo, first["id"])
     await kit.wait(repo, first["id"])
     second = await kit.retry(repo, first["id"])
-    assert second["id"] != first["id"]
-    assert second["status"] == TASK_PENDING
-    assert second["retry_of"] == first["id"] and second["retry_count"] == 1
+    assert second["id"] == first["id"]              # 同一任务重跑，不再新建
+    assert second["status"] == TASK_RUNNING
+    assert second["retry_of"] is None and second["retry_count"] == 0
     assert second["spec"] == first["spec"] and second["name"] == "r1"
-    # 链式：再败再试，计数递增
-    await kit.run(repo, second["id"])
-    await kit.wait(repo, second["id"])
-    third = await kit.retry(repo, second["id"])
-    assert third["retry_of"] == second["id"] and third["retry_count"] == 2
+    await kit.wait(repo, first["id"])
+    third = await kit.retry(repo, first["id"])
+    assert third["id"] == first["id"]
+    await kit.wait(repo, first["id"])
+    # 执行历史逐轮累积：trigger 逐轮留档，spec 快照对应每轮配置
+    final = await kit.get(repo, first["id"])
+    hist = final["history"]
+    assert [h["n"] for h in hist] == [1, 2, 3]
+    assert [h["trigger"] for h in hist] == ["run", "retry", "retry"]
+    assert all(h["status"] == TASK_FAILED for h in hist)
+    assert all(h["spec"] == {"suite": "s"} for h in hist)
+    assert all(h["started_at"] and h["finished_at"] for h in hist)
 
 
 async def test_retry_requires_terminal(repo):
@@ -258,7 +265,11 @@ async def test_list_filters_by_status_and_retry(repo):
     first = await kit.create(repo, {"a": 1})
     await kit.run(repo, first["id"])
     await kit.wait(repo, first["id"])
-    second = await kit.retry(repo, first["id"])
+    await kit.retry(repo, first["id"])
+    await kit.wait(repo, first["id"])
+    # 重跑不裂变：列表仍只有一个任务，状态为最新终态
+    tasks = await kit.list(repo)
+    assert [t["id"] for t in tasks] == [first["id"]]
     assert len(await kit.list(repo, status=TASK_FAILED)) == 1
-    assert [t["id"] for t in await kit.list(repo, retry_of=first["id"])] == [second["id"]]
-    assert len(await kit.list(repo)) == 2
+    # retry_of 过滤保留（读旧链数据）：新语义不再写入 → 空
+    assert await kit.list(repo, retry_of=first["id"]) == []

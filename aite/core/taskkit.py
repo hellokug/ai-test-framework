@@ -56,10 +56,11 @@ class TaskRunContext:
     cancel_event 供协作式停止。"""
 
     def __init__(self, kit: DomainTaskKit, task_id: str, spec: dict,
-                 repo: Any) -> None:
+                 repo: Any, history: list[dict] | None = None) -> None:
         self.task_id = task_id
         self.spec = spec
         self.repo = repo
+        self.history = history or []   # 本轮开启的执行历史（终态收口用）
         self.cancel_event = asyncio.Event()
         self._kit = kit
 
@@ -127,15 +128,17 @@ class DomainTaskKit:
 
     async def update(self, repo: Any, task_id: str, *, name: str | None = None,
                      spec: dict | None = None) -> dict:
+        """改 name/spec：非运行中即可改（pending 改首发配置，终态改完可重跑）。"""
         fields: dict[str, Any] = {}
         if name is not None:
             fields["name"] = name
         if spec is not None:
             fields["spec"] = spec
-        updated = await repo.update_domain_task(self.table, task_id,
-                                                expect_status=TASK_PENDING, **fields)
+        updated = await repo.update_domain_task(
+            self.table, task_id,
+            expect_status=(TASK_PENDING, *TASK_TERMINAL), **fields)
         if updated is None:
-            raise TaskStateError("update 仅限 pending 任务（或任务不存在）")
+            raise TaskStateError("update 仅限非运行中任务（运行中/停止中不可改）")
         return updated
 
     async def delete(self, repo: Any, task_id: str) -> None:
@@ -145,14 +148,47 @@ class DomainTaskKit:
         await repo.delete_domain_task(self.table, task_id)
 
     # -------------------------------------------------------- run/stop/retry
-    async def run(self, repo: Any, task_id: str) -> dict:
-        await self._require(repo, task_id)
+    @staticmethod
+    def _open_round(current: dict, trigger: str) -> list[dict]:
+        """开新一轮执行历史：快照当时 spec（审计：每轮结果对应每轮配置）。"""
+        history = [dict(r) for r in (current.get("history") or [])]
+        history.append({"n": len(history) + 1, "trigger": trigger,
+                        "spec": dict(current.get("spec") or {}),
+                        "status": TASK_RUNNING,
+                        "started_at": utcnow().isoformat()})
+        return history
+
+    @staticmethod
+    def _close_round(history: list[dict] | None, status: str,
+                     result: dict | None = None,
+                     error: str | None = None) -> dict | None:
+        """收最后一轮（状态机保证单任务同时只有一个在途运行，无并发写）。"""
+        if not history:
+            return None                     # 旧数据无历史列，维持原样
+        rounds = [dict(r) for r in history]
+        last = rounds[-1]
+        last["status"] = status
+        last["finished_at"] = utcnow().isoformat()
+        if error:
+            last["error"] = error[:2000]
+        if result:
+            for key in ("run_id", "pass_rate", "total_cases", "evaluated_cases"):
+                if result.get(key) is not None:
+                    last[key] = result[key]
+        return rounds
+
+    async def run(self, repo: Any, task_id: str, *, trigger: str = "run") -> dict:
+        """运行：pending 可首发、终态可重跑（同一任务，追加执行历史轮次）。"""
+        current = await self._require(repo, task_id)
         started = await repo.update_domain_task(
-            self.table, task_id, expect_status=TASK_PENDING,
-            status=TASK_RUNNING, started_at=utcnow())
+            self.table, task_id, expect_status=(TASK_PENDING, *TASK_TERMINAL),
+            status=TASK_RUNNING, started_at=utcnow(),
+            result=None, error=None, finished_at=None,
+            history=self._open_round(current, trigger))
         if started is None:
-            raise TaskStateError("run 仅限 pending 任务（或任务不存在）")
-        ctx = TaskRunContext(self, task_id, dict(started["spec"]), repo)
+            raise TaskStateError("run 仅限 pending 或终态任务（运行中不可重复发起）")
+        ctx = TaskRunContext(self, task_id, dict(started["spec"]), repo,
+                             started.get("history"))
         self._contexts[task_id] = ctx
         self._handles[task_id] = asyncio.create_task(self._drive(repo, ctx))
         self._watchers[task_id] = asyncio.create_task(self._watch_stop(repo, ctx))
@@ -228,6 +264,11 @@ class DomainTaskKit:
         fields: dict[str, Any] = {"status": TASK_CANCELLED, "finished_at": utcnow()}
         if error:
             fields["error"] = error
+        current = await repo.get_domain_task(self.table, task_id)
+        closed = self._close_round((current or {}).get("history"),
+                                   TASK_CANCELLED, error=error)
+        if closed:
+            fields["history"] = closed
         finished = await repo.update_domain_task(
             self.table, task_id, expect_status=TASK_STOPPING, **fields)
         if finished is not None:
@@ -235,13 +276,27 @@ class DomainTaskKit:
         self.bus.close(self.channel(task_id))
 
     async def retry(self, repo: Any, task_id: str) -> dict:
-        """重试 = 新任务实例（复制 spec，记 retry_of 链），不改原记录。"""
+        """重试 = 终态任务同配置再跑一轮（同一任务，追加执行历史轮次）。
+
+        不再新建同级任务（owner 2026-11-12 拍板）：一个任务的多次执行是它的
+        历史，不是多个任务。改参重跑走 PATCH（终态可改）+ run；旧 retry_of
+        链字段保留，仅用于读取历史数据。
+        """
         current = await self._require(repo, task_id)
         if current["status"] not in TASK_TERMINAL:
             raise TaskStateError(f"retry 仅限终态任务，当前 {current['status']}")
-        return await repo.create_domain_task(
-            self.table, dict(current["spec"]), name=current["name"],
-            retry_of=task_id, retry_count=current["retry_count"] + 1)
+        return await self.run(repo, task_id, trigger="retry")
+
+    async def duplicate(self, repo: Any, task_id: str) -> dict:
+        """复制 = 开分支变体：同 spec 新建 pending 任务（任意状态可用）。
+
+        与 retry 的分工：retry 是同一任务的历史轮次；复制是独立的新任务
+        （可 PATCH 改 spec 后再 run），名字加「· 副本」后缀便于列表区分。
+        """
+        current = await self._require(repo, task_id)
+        name = f"{current['name']} · 副本" if current["name"] else "副本任务"
+        return await repo.create_domain_task(self.table, dict(current["spec"]),
+                                             name=name)
 
     async def wait(self, repo: Any, task_id: str) -> dict | None:
         """等待在途执行协程（及跨进程停止桥）结束并返回最新任务态（CLI 同步形态用）。"""
@@ -275,7 +330,9 @@ class DomainTaskKit:
             result = await self.executor.execute(ctx)
             updated = await repo.update_domain_task(
                 self.table, task_id, expect_status=TASK_RUNNING,
-                status=TASK_SUCCEEDED, result=result, finished_at=utcnow())
+                status=TASK_SUCCEEDED, result=result, finished_at=utcnow(),
+                history=self._close_round(ctx.history, TASK_SUCCEEDED,
+                                          result=result))
             if updated is not None:     # None：状态权已易主（stop/stale），不覆盖
                 self._publish(task_id, {"type": "succeeded", "result": result})
                 self.bus.close(self.channel(task_id))
@@ -285,7 +342,8 @@ class DomainTaskKit:
         except Exception as exc:
             await repo.update_domain_task(
                 self.table, task_id, expect_status=TASK_RUNNING,
-                status=TASK_FAILED, error=str(exc)[:2000], finished_at=utcnow())
+                status=TASK_FAILED, error=str(exc)[:2000], finished_at=utcnow(),
+                history=self._close_round(ctx.history, TASK_FAILED, error=str(exc)))
             self._publish(task_id, {"type": "failed", "error": str(exc)})
             self.bus.close(self.channel(task_id))
         finally:

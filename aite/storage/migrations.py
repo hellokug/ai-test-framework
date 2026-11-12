@@ -18,6 +18,11 @@ logger = logging.getLogger("aite.storage.migrations")
 # (table, column, ddl-fragment)
 _PENDING_COLUMNS: list[tuple[str, sa.Column]] = [
     ("test_run", sa.Column("details", sa.JSON(), nullable=True)),
+    # 执行历史列（四域任务表同构，TaskLifecycleMixin.history，2026-11-12）
+    ("functional_task", sa.Column("history", sa.JSON(), nullable=True)),
+    ("accuracy_task", sa.Column("history", sa.JSON(), nullable=True)),
+    ("perf_task", sa.Column("history", sa.JSON(), nullable=True)),
+    ("reliability_task", sa.Column("history", sa.JSON(), nullable=True)),
 ]
 
 
