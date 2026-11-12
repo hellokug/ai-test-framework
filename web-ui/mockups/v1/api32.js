@@ -24,6 +24,7 @@ const FAPI = {
   get(p) { return this.req("GET", p); },
   post(p, b) { return this.req("POST", p, b ?? {}); },
   patch(p, b) { return this.req("PATCH", p, b); },
+  put(p, b) { return this.req("PUT", p, b); },
   del(p) { return this.req("DELETE", p); },
 };
 
@@ -63,14 +64,39 @@ function fapiVerdictBadge(v) {
   const cls = { 达标: "passed", 劣化: "failed" };
   return `<span class="badge ${cls[v] || ""}"><i></i>${v}</span>`;
 }
+function fapiDist(d) {
+  return Object.entries(d || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
+}
 function fapiShortTime(iso) { return (iso || "").slice(5, 16).replace("T", " "); }
 
 /* ---------------------------------------------------------- 脚本库（live） */
+/* 导航徽章（v1.js setNavCount）+ 任务列表统计卡共用的真实计数 */
+const NAV_COUNTS = {};
+function fapiSetNavCount(pageId, n) {
+  if (n === undefined || n === null) return;
+  NAV_COUNTS[pageId] = n;
+  setNavCount(pageId, n);
+  fapiRenderRunsStats();
+}
+
+/* 任务列表页统计卡 = 真实计数（静态演示值口径已失效：内置场景已移除、比率无实时聚合） */
+function fapiRenderRunsStats() {
+  const stats = document.querySelector('main.page-host [data-page="runs"] .stats');
+  if (!stats || NAV_COUNTS.runs === undefined
+      || NAV_COUNTS.scenarios === undefined) return;
+  stats.innerHTML = `
+    <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">${NAV_COUNTS.runs}</div></div>
+    <div class="stat"><div class="label"><i style="background:var(--ok)"></i>运行中</div><div class="value">${NAV_COUNTS.running ?? 0}</div></div>
+    <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>评估场景</div><div class="value">${NAV_COUNTS.scenarios}</div></div>
+    <div class="stat"><div class="label"><i style="background:var(--bad)"></i>版本结果</div><div class="value">${NAV_COUNTS.vresults ?? "—"}</div></div>`;
+}
+
 async function wireScripts() {
   const data = await FAPI.get("/functional/scripts");
+  fapiSetNavCount("scripts", data.count);
   CASE_SCRIPTS.splice(0, CASE_SCRIPTS.length, ...data.items.map(s => ({
     id: s.id, name: s.name, sc: s.scenario,
-    scLabel: s.scenario_name || s.scenario, type: s.case_type,
+    scLabel: s.scenario_name || s.scenario, type: fapiDist(s.row_types) || s.case_type,
     rows: s.row_count, rowDesc: "—",
     src: s.source === "import" ? "数据集导入" : "手工创建",
     srcNote: "", ext: s.external_ref || "", result: "none",
@@ -90,6 +116,8 @@ async function wireScripts() {
     (byScen[it.scenario] = byScen[it.scenario] || []).push(...idx.map(p => [p[0], p[1] || p[0]]));
   }
   for (const [sc, cases] of Object.entries(byScen)) {
+    const liveIds = new Set(cases.map(c => sc + "." + c[0]));
+    for (const id of [...ftSel]) if (id.startsWith(sc + ".") && !liveIds.has(id)) ftSel.delete(id);   // 出清该场景已删脚本行/已删场景的残留勾选（否则合计虚高）
     FT_CASES[sc] = cases;
     const sm = sceneById(sc);
     if (sm) sm[3] = cases.length;   // 场景行「N 例」计数同步（否则同页会话内建脚本后仍显示旧值 0）
@@ -136,17 +164,31 @@ function fapiSceneCard(s) {
     <div class="rid mono" style="margin:2px 0 6px">${s.id}</div><p>${s.description || "（无说明）"}</p>
     <div class="meta"><span class="tag">${s.dimension || "未分类"}</span>
     <span class="tag">${s.cases} 例</span><span class="tag">${cover}</span>
+    ${fapiDist(s.levels) ? `<span class="tag">${fapiDist(s.levels)}</span>` : ""}
     <span class="tag" style="color:var(--ac)">${form}</span>
-    ${s.source === "builtin" ? '<span class="tag">内置只读</span>' : ""}</div>
+    </div>
     <div class="meta" style="margin-top:10px;display:flex;gap:6px">
-      ${s.source === "user" ? `<button class="btn sm primary" data-mgr="${s.id}">管理脚本</button>
+      <button class="btn sm primary" data-mgr="${s.id}">管理脚本</button>
       <button class="btn sm" data-new="${s.id}">＋ 脚本</button>
-      <button class="btn sm" data-del="${s.id}">删除</button>` : '<span class="tag">随框架发布</span>'}
+      <button class="btn sm" data-del="${s.id}">删除</button>
       <button class="btn sm" data-open-drawer="newRunModal">过滤跑 →</button></div></div>`;
+}
+
+/* 预设标签（全量/冒烟/API/Agent）在页面加载时按演示 SCENES 生成，live 化后不重建的话
+   点「全量」会把演示场景 id 灌回勾选集（合计虚高的同一根因），按真实场景按维度重算 */
+function fapiRebuildFtPresets() {
+  const dimScenes = kw => SCENES
+    .filter(s => ((s[1] || "") + " " + (s[4] || "")).toLowerCase().includes(kw))
+    .map(s => s[0]);
+  FT_PRESETS.full = SCENES.map(s => s[0]);
+  FT_PRESETS.smoke = FT_PRESETS.full.slice(0, 4);
+  FT_PRESETS.api = dimScenes("api");
+  FT_PRESETS.agent = [...new Set([...dimScenes("agent"), ...dimScenes("工具")])];
 }
 
 async function wireScenarios() {
   const data = await FAPI.get("/functional/scenarios");
+  fapiSetNavCount("scenarios", data.count);
   SCENES.length = 0;
   for (const i of data.items) {
     SCENES.push([i.id, i.display_name, i.description || "", i.cases,
@@ -168,22 +210,35 @@ async function wireScenarios() {
         const ok = confirm(`删除场景 ${sid}？（整目录：脚本登记+行文件+派生 cases.jsonl；历史任务与版本归档持快照不受影响）`);
         if (!ok) return;
         try { await FAPI.del(`/functional/scenarios/${sid}`); }
-        catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+        catch (err) {
+          // 409 = 场景下仍有脚本/用例：二次确认后级联删除（force）
+          if (!/仍有.*用例/.test(err.message) || !confirm(
+              `${err.message}\n\n级联删除将连同全部脚本与用例一并移除，不可恢复。确定？`)) {
+            fapiToast(`已取消删除 ${sid}`, true); return;
+          }
+          try { await FAPI.del(`/functional/scenarios/${sid}?force=true`); }
+          catch (err2) { fapiToast(`删除失败：${err2.message}`, true); return; }
+        }
         fapiToast(`已删除场景 ${sid}`);
         await wireScenarios();
       }
     });
   }
-  // 场景树/创建抽屉的真实化：用户场景补空 FT_CASES 条目 + 重置勾选集
+  // 场景树/创建抽屉的真实化：先出清不在册场景的 FT_CASES 残留（演示数据/已删场景，
+  // 它们不渲染但会被勾选集合计，导致「合计 N 例」虚高），再补空条目 + 重置勾选集
+  const liveScenes = new Set(data.items.map(i => i.id));
+  for (const k of Object.keys(FT_CASES)) if (!liveScenes.has(k)) delete FT_CASES[k];
+  for (const k of [...ftExpanded]) if (!liveScenes.has(k)) ftExpanded.delete(k);
   for (const i of data.items) if (!FT_CASES[i.id]) FT_CASES[i.id] = [];
   ftSel = new Set(Object.keys(FT_CASES).flatMap(sc => ftAllCases(sc)));
+  fapiRebuildFtPresets();
   // 创建任务抽屉的场景树同步真实化
   if (typeof renderFtPick === "function") renderFtPick();
-  // 新建脚本 / 导入抽屉的场景下拉 → 用户场景（builtin 只读不可建脚本）
-  const userItems = data.items.filter(i => i.source === "user");
+  // 新建脚本 / 导入抽屉的场景下拉 → 全部托管场景（场景全部用户自管）
+  const userItems = data.items;
   const opts = '<option value="">请选择评估场景…</option>' +
     userItems.map(i => `<option value="${i.id}">${i.id} · ${i.display_name}</option>`).join("");
-  const nsSel = document.querySelector("#newScriptDrawer .drawer-body select.in");
+  const nsSel = document.getElementById("nsScen");
   if (nsSel) nsSel.innerHTML = opts;
   const impSel = document.querySelector("#importScriptDrawer .form-sec select.in");
   if (impSel) impSel.innerHTML = opts;
@@ -199,13 +254,14 @@ async function openScriptMgr(scenarioId) {
     <th style="text-align:right">操作</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(s => `<tr>
       <td class="rname"><b>${s.name}</b><div class="rid">${s.id}</div></td>
-      <td><span class="tag">${s.case_type}</span></td><td class="num">${s.row_count}</td>
+      <td><span class="tag">${fapiDist(s.row_types) || s.case_type}</span></td><td class="num">${s.row_count}</td>
       <td class="dim">${s.source}</td><td class="mono dim">${s.external_ref || "—"}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn sm" data-edit="${s.id}">编辑</button>
         <button class="btn sm" data-del="${s.id}">删除</button></td></tr>`).join("")
       : '<tr><td colspan="6" class="ds-empty">场景内暂无脚本 —— 「＋ 从 0 新建脚本」或「从数据集导入」</td></tr>'}</tbody>`;
   const d = document.getElementById("scriptMgrDrawer");
+  d.dataset.scenario = scenarioId;
   d.hidden = false;
   if (!tbl.dataset.liveBound) {
     tbl.dataset.liveBound = "1";
@@ -244,10 +300,22 @@ function bindLiveForm() {
   ns.querySelector(".drawer-foot .btn.primary").addEventListener("click", async () => {
     try {
       await submitNewScript(ns);
-    } catch (err) { fapiToast(`保存失败：${err.message}`, true); }
+    } catch (err) {
+      if (nsCheckingRow) nsRevealRow(nsCheckingRow);   // 出错行可能处于折叠态：展开定位到它
+      fapiToast(`保存失败：${err.message}`, true);
+    }
   });
 
   const imp = document.getElementById("importScriptDrawer");
+  // 场景「管理脚本」内点导入 → 预选并锁定当前场景（与新建脚本同口径）
+  document.querySelectorAll('[data-open-drawer="importScriptDrawer"]').forEach(b =>
+    b.addEventListener("click", () => setTimeout(() => {
+      const sel = imp.querySelector(".form-sec select.in");
+      const scen = b.closest("#scriptMgrDrawer")?.dataset.scenario;
+      if (!sel) return;
+      sel.disabled = false;
+      if (scen) { sel.value = scen; sel.disabled = sel.value === scen; }
+    }, 0)));
   imp.querySelector(".drawer-foot .btn.primary").addEventListener("click", async () => {
     try {
       const inputs = imp.querySelectorAll(".drawer-body input.in");
@@ -267,52 +335,41 @@ function bindLiveForm() {
   });
 }
 
+let nsCheckingRow = null;   // submitNewScript 正在校验的行卡；全部通过后清空
+
 function submitNewScript(ns) {
-  const body = ns.querySelector(".drawer-body");
-  const inputs = body.querySelectorAll("input.in");
   const editSid = ns.dataset.editSid || null;   // 编辑模式：PATCH，场景/脚本 id 不可改
   const scenSel = document.getElementById("nsScen");
-  const payload = {
-    name: inputs[0].value.trim(),
-    external_ref: inputs[2].value.trim(),
-    case_type: document.getElementById("nsCaseType")?.querySelector(".chip.on")?.textContent.trim() || "基础",
-    rows: [],
-  };
+  const payload = { name: document.getElementById("nsName").value.trim(), rows: [] };
+  nsCheckingRow = null;
   if (editSid) {
     payload.script_id = editSid;
   } else {
-    payload.scenario_id = (scenSel?.value || "").split(" ·")[0].trim();
-    payload.script_id = inputs[1].value.trim();
+    payload.scenario_id = (scenSel?.value || "").trim();
+    payload.script_id = document.getElementById("nsSid").value.trim();
     if (!payload.scenario_id) throw new Error("请先选择评估场景（先场景后用例）");
-    if (!payload.script_id) throw new Error("请填写脚本 id");
+    if (!payload.script_id) throw new Error("请填写脚本 id（英文编号）");
   }
+  if (!payload.name) throw new Error("请填写脚本名称（中文名称）");
   ns.querySelectorAll("#nsRows .card").forEach(card => {
-    const title = card.querySelector(".seg-title")?.textContent.trim() || "变体";
-    const carrier = card.querySelector(".ns-carrier")?.value || "messages";
-    const content = card.querySelector("textarea").value.trim();
-    let conv = [];
-    if (carrier !== "none") {
-      try { conv = JSON.parse(content || "[]"); }
-      catch (e) { throw new Error(`${title}：content 须为合法 JSON 数组`); }
-      if (!Array.isArray(conv)) throw new Error(`${title}：content 须为 JSON 数组`);
-    }
-    // 「行 N[ · 变体说明]」→ 变体说明；无说明回退「变体 k」（harness desc 必填）
-    const desc = title.replace(/^行\s*\d+/, "").replace(/^[\s·]+/, "").trim()
-      || `变体 ${payload.rows.length + 1}`;
-    // 承载：messages=标准；input=对话进自定义字段；none=纯参数校验（引擎 _omit_messages 省略）
-    const row = { desc, messages: carrier === "messages" ? conv : [] };
-    let collected;
-    try { collected = nsCollectParams(card, desc); }
-    catch (e) { throw new Error(e.message); }
-    row.params = collected.raw !== undefined ? { _raw_body: collected.raw } : collected.base;
-    if (carrier === "input") row.params = { ...(row.params || {}), input: conv, _omit_messages: true };
-    else if (carrier === "none") row.params = { ...(row.params || {}), _omit_messages: true };
-    const toolsRaw = card.querySelector(".ns-tools")?.value.trim() ?? "";
-    if (toolsRaw) {
-      const tools = JSON.parse(toolsRaw);   // 非法 JSON 抛错由外层 toast 显式报出
-      if (!Array.isArray(tools)) throw new Error(`${desc}：tools 须为 JSON 数组（OpenAI tools 格式）`);
-      row.tools = tools;
-    }
+    nsCheckingRow = card;
+    const title = card.querySelector(".ns-row-no")?.textContent.trim() || "行";
+    const desc = card.querySelector(".ns-desc").value.trim() || `变体 ${payload.rows.length + 1}`;
+    const reqText = card.querySelector(".ns-req").value.trim();
+    if (!reqText) throw new Error(`${title}：request 不能为空（点「填入模板」开始）`);
+    let req;
+    try { req = JSON.parse(reqText); }
+    catch (e) { throw new Error(`${title}：request 不是合法 JSON：${e.message}`); }
+    if (!req || typeof req !== "object" || Array.isArray(req)) throw new Error(`${title}：request 须为 JSON 对象`);
+    const row = { desc, ...nsSplitRequest(req) };
+    const rid = card.querySelector(".ns-rid").value.trim();
+    const cid = card.querySelector(".ns-cid").value.trim();
+    const type = card.querySelector(".ns-type").value;
+    const level = card.querySelector(".ns-level").value;
+    if (rid) row.id = rid;
+    if (cid) row.case_id = cid;
+    if (type) row.type = type;
+    if (level) row.level = level;
     const expect = {};
     const assertRows = [...card.querySelectorAll(".ns-asserts > div")];
     const loose = s => { try { return JSON.parse(s); } catch (e) { return s; } };
@@ -452,12 +509,13 @@ function submitNewScript(ns) {
     if (Object.keys(vars).length) row.vars = vars;
     payload.rows.push(row);
   });
+  nsCheckingRow = null;
   const afterSave = async row => {
     ns.hidden = true;
     delete ns.dataset.editSid;
-    const scenSel = document.getElementById("nsScen");
     if (scenSel) scenSel.disabled = false;
-    inputs[1].disabled = false;
+    document.getElementById("nsScenLock").hidden = true;
+    document.getElementById("nsSid").disabled = false;
     ns.querySelector(".drawer-foot .btn.primary").textContent = "保存脚本（真实校验）";
     fapiToast(editSid ? `已更新脚本 ${row.id}（${row.row_count} 行，cases.jsonl 已重派生）`
                       : `已创建脚本 ${row.id}（${row.row_count} 行，cases.jsonl 已重派生）`);
@@ -567,77 +625,12 @@ function nsFillVars(card, vars) {
 }
 /* 行数据 → 行卡控件回填（openEditScript 与「从 jsonl 导入行」共用） */
 function nsFillRowFromData(card, row) {
-  const customDesc = row.desc && !/^行\s*\d+$/.test(row.desc) ? ` · ${row.desc}` : "";
-  if (customDesc) card.querySelector(".seg-title").textContent += customDesc;
-  const p = { ...(row.params || {}) };
-  let carrier = "messages", conv = row.messages ?? [];
-  if (p._omit_messages) {
-    if (p.input !== undefined) { carrier = "input"; conv = p.input; }
-    else carrier = "none";
-  }
-  card.querySelector(".ns-carrier").value = carrier;
-  card.querySelector("textarea").value = carrier === "none" ? "" : JSON.stringify(conv);
-  // 常用键 → 结构化控件；其余（控制键/_raw_body/自定义键）→ JSON 框
-  const rest = { ...p };
-  delete rest._omit_messages;
-  if (carrier === "input") delete rest.input;
-  const setNum = (cls, key) => {
-    const el = card.querySelector(cls);
-    if (el && rest[key] !== undefined) { el.value = String(rest[key]); delete rest[key]; }
-  };
-  setNum(".ns-temp", "temperature");
-  setNum(".ns-topp", "top_p");
-  setNum(".ns-maxt", "max_tokens");
-  if (rest.stop !== undefined) {
-    const s = rest.stop; delete rest.stop;
-    card.querySelector(".ns-stop").value = Array.isArray(s) ? s.join(",") : String(s);
-  }
-  if (rest.stream !== undefined) { card.querySelector(".ns-stream").value = String(rest.stream); delete rest.stream; }
-  if (rest.response_format && typeof rest.response_format === "object"
-      && ["text", "json_object"].includes(rest.response_format.type)) {
-    card.querySelector(".ns-respf").value = rest.response_format.type;
-    delete rest.response_format;
-  }
-  if (rest.thinking && typeof rest.thinking === "object") {
-    const t = rest.thinking;
-    if (t.type === "disabled") { card.querySelector(".ns-think").value = "disabled"; delete rest.thinking; }
-    else if (t.type === "enabled" && (t.reasoning_effort === undefined
-             || ["low", "high", "max", "none"].includes(t.reasoning_effort))) {
-      card.querySelector(".ns-think").value = t.reasoning_effort || "high";
-      delete rest.thinking;
-    }
-  }
-  if (rest.stream_options && typeof rest.stream_options === "object"
-      && rest.stream_options.include_usage === true) {
-    card.querySelector(".ns-sopt").value = "include_usage";
-    delete rest.stream_options;
-  }
-  if (rest.tool_choice !== undefined) {
-    const tcv = rest.tool_choice;
-    let matched = true;
-    if (tcv && typeof tcv === "object" && tcv.function?.name) {
-      card.querySelector(".ns-tchoice").value = "named";
-      const nameIn = card.querySelector(".ns-tcname");
-      nameIn.value = tcv.function.name;
-      nameIn.style.display = "";
-    } else if (["none", "auto", "required"].includes(tcv)) {
-      card.querySelector(".ns-tchoice").value = tcv;
-    } else matched = false;
-    if (matched) delete rest.tool_choice;
-  }
-  if (rest.logprobs !== undefined) { card.querySelector(".ns-logprobs").value = String(rest.logprobs); delete rest.logprobs; }
-  if (rest.top_logprobs !== undefined) { card.querySelector(".ns-tlp").value = String(rest.top_logprobs); delete rest.top_logprobs; }
-  if (rest.user_id !== undefined) { card.querySelector(".ns-uid").value = String(rest.user_id); delete rest.user_id; }
-  if (rest.frequency_penalty !== undefined) { card.querySelector(".ns-fp").value = String(rest.frequency_penalty); delete rest.frequency_penalty; }
-  if (rest.presence_penalty !== undefined) { card.querySelector(".ns-pp").value = String(rest.presence_penalty); delete rest.presence_penalty; }
-  if ("_raw_body" in rest) {
-    card.querySelector(".ns-rawbody").checked = true;
-    card.querySelector(".ns-params").value = String(rest._raw_body);
-    delete rest._raw_body;
-  } else if (Object.keys(rest).length) {
-    card.querySelector(".ns-params").value = JSON.stringify(rest);
-  }
-  if (row.tools) card.querySelector(".ns-tools").value = JSON.stringify(row.tools);
+  card.querySelector(".ns-rid").value = row.id || "";
+  card.querySelector(".ns-cid").value = row.case_id || "";
+  card.querySelector(".ns-type").value = row.type || "";
+  card.querySelector(".ns-level").value = row.level || "";
+  card.querySelector(".ns-desc").value = row.desc || "";
+  card.querySelector(".ns-req").value = JSON.stringify(nsMergeRequest(row), null, 2);
   nsFillExpect(card, row.expect || {});
   nsFillVars(card, row.vars);
 }
@@ -646,17 +639,12 @@ async function openEditScript(sid) {
   nsReset();                                  // 干净态再灌值（同时清编辑态标记）
   const t = await FAPI.get(`/functional/scripts/${sid}`);
   ns.dataset.editSid = sid;
-  const inputs = ns.querySelectorAll(".drawer-body input.in");
   const scenSel = document.getElementById("nsScen");
-  scenSel.value = `${t.scenario}`;
-  [...scenSel.options].forEach(o => { if (o.value.split(" ·")[0] === t.scenario) scenSel.value = o.value; });
+  scenSel.value = t.scenario;
   scenSel.disabled = true;                    // 编辑态：归属与脚本 id 不可改
-  inputs[1].value = sid; inputs[1].disabled = true;
-  inputs[0].value = t.name || "";
-  inputs[2].value = t.external_ref || "";
-  const typeChip = [...(document.getElementById("nsCaseType")?.querySelectorAll(".chip") || [])]
-    .find(c => c.textContent.trim() === (t.case_type || "基础"));
-  if (typeChip) typeChip.classList.add("on");
+  const sidIn = document.getElementById("nsSid");
+  sidIn.value = sid; sidIn.disabled = true;
+  document.getElementById("nsName").value = t.name || "";
   const rowsBox = document.getElementById("nsRows");
   rowsBox.innerHTML = ""; nsRowN = 0;
   for (const row of (t.rows || [])) {
@@ -664,8 +652,6 @@ async function openEditScript(sid) {
     rowsBox.insertAdjacentHTML("beforeend", nsRowHtml(nsRowN));
     const card = rowsBox.lastElementChild;
     bindChips(card);                             // 动态行卡补绑芯片/断言交互
-    const customDesc = row.desc && !/^行\s*\d+$/.test(row.desc) ? ` · ${row.desc}` : "";
-    card.querySelector(".seg-title").textContent = `行 ${nsRowN}${customDesc}`;
     nsFillRowFromData(card, row);
   }
   if (!rowsBox.children.length) {
@@ -674,22 +660,143 @@ async function openEditScript(sid) {
     bindChips(rowsBox);
     renderNsAsserts(rowsBox.firstElementChild);
   }
+  nsCollapseForReview();
   ns.querySelector(".drawer-foot .btn.primary").textContent = "保存修改（真实校验）";
   ns.hidden = false;
 }
 
 function openNewScript(scenarioId) {
   const ns = document.getElementById("newScriptDrawer");
-  if (typeof nsReset === "function") nsReset();   // 打开即干净态（nsReset 由页面内联脚本提供）
-  delete ns.dataset.editSid;                       // 从编辑态回到新建态
-  const scenSel = document.getElementById("nsScen");
-  if (scenSel) scenSel.disabled = false;
-  ns.querySelectorAll(".drawer-body input.in")[1].disabled = false;
+  if (typeof nsReset === "function") nsReset();   // 打开即干净态（同时解锁场景）
+  delete ns.dataset.editSid;
   ns.querySelector(".drawer-foot .btn.primary").textContent = "保存脚本（真实校验）";
-  const sel = scenSel || ns.querySelector("select.in");
-  sel.value = `${scenarioId}`;
-  [...sel.options].forEach(o => { if (o.value.split(" ·")[0] === scenarioId) sel.value = o.value; });
+  const sel = document.getElementById("nsScen");
+  if (scenarioId) {
+    sel.value = scenarioId;
+    sel.disabled = sel.value === scenarioId;      // 选中成功才锁（场景不存在则保持可选）
+    document.getElementById("nsScenLock").hidden = !sel.disabled;
+  }
   ns.hidden = false;
+}
+
+/* ---------------------------------------- 用例明细 → 脚本行编辑直达（编辑按钮） */
+async function editCaseRow(rowId, scenario) {
+  if (!rowId) { fapiToast("该用例缺少行 id，无法定位脚本行", true); return; }
+  if (!scenario) { fapiToast("该用例记录缺场景信息（旧版本运行），无法定位脚本行", true); return; }
+  const scen = String(scenario).replace(/^pytest:/, "");
+  try {
+    const list = await FAPI.get(`/functional/scripts?scenario=${encodeURIComponent(scen)}`);
+    for (const s of list.items) {
+      const t = await FAPI.get(`/functional/scripts/${s.id}`);
+      if ((t.rows || []).some(r => String(r.id) === String(rowId))) {
+        await openEditScript(s.id);              // 行卡已按行数据回填，可直接改
+        const card = [...document.querySelectorAll("#nsRows .card")]
+          .find(c => c.querySelector(".ns-rid")?.value === String(rowId));
+        if (card) {
+          nsRevealRow(card);
+          card.style.outline = "2px solid var(--ac2)";
+          setTimeout(() => { card.style.outline = ""; }, 2000);
+        }
+        return;
+      }
+    }
+    fapiToast(`行 ${rowId} 不在场景「${scen}」任何脚本中（可能已删除或改 id）`, true);
+  } catch (err) {
+    fapiToast(`定位脚本失败：${err.message}`, true);
+  }
+}
+if (!window.__caseRowBound) {                    // 明细列表：编辑直达 + 行头点击展开/收起
+  window.__caseRowBound = true;
+  document.addEventListener("click", e => {
+    const ed = e.target.closest("[data-case-edit]");
+    if (ed) { editCaseRow(ed.dataset.caseEdit, ed.dataset.caseScenario); return; }
+    const t = e.target.closest("[data-case-toggle]");
+    if (!t) return;
+    const head = t.closest(".case-item-head");
+    const body = head && head.parentElement.querySelector(".case-item-body");
+    if (!body) return;
+    body.hidden = !body.hidden;
+    const btn = head.querySelector("button[data-case-toggle]");
+    if (btn) btn.textContent = body.hidden ? "详情" : "收起";
+  });
+}
+
+/* ------------------------------------------------------------ 工具库 */
+window.FT_TOOLS = [];
+const TOOL_TEMPLATE = {
+  type: "function",
+  function: {
+    name: "get_weather",
+    description: "查询指定城市的天气",
+    parameters: {
+      type: "object",
+      properties: {
+        city: { type: "string", description: "城市名，如 北京" },
+        unit: { type: "string", enum: ["celsius", "fahrenheit"], description: "温度单位" },
+      },
+      required: ["city"],
+    },
+  },
+};
+async function wireTools() {
+  const data = await FAPI.get("/functional/tools");
+  window.FT_TOOLS = data.items;
+  setNavCount("tools", data.count);
+  document.querySelectorAll(".ns-tool-pick").forEach(sel => { sel.innerHTML = nsToolOptions(); });
+  const tbl = document.getElementById("toolsTbl");
+  if (!tbl) return;
+  tbl.innerHTML = `<thead><tr><th>工具名</th><th>说明</th><th>参数（* 必填）</th><th>被引用</th>
+    <th style="text-align:right">操作</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(t => {
+      const ps = t.schema.function.parameters || {};
+      const req = ps.required || [];
+      const props = Object.keys(ps.properties || {}).map(k => req.includes(k) ? k + "*" : k).join(", ");
+      return `<tr><td class="rname"><b class="mono">${t.name}</b></td>
+        <td class="dim">${t.description || "—"}</td><td class="mono dim">${props || "—"}</td>
+        <td>${t.used_by.length ? `${t.used_by.length} 个脚本` : '<span class="faint">未引用</span>'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn sm" data-tool-edit="${t.name}">编辑</button>
+          <button class="btn sm" data-tool-del="${t.name}">删除</button></td></tr>`;
+    }).join("") : '<tr><td colspan="5" class="ds-empty">工具库为空 —— 「＋ 新建工具」定义第一个 tool_calls 工具</td></tr>'}</tbody>`;
+}
+function openToolDrawer(name) {
+  const d = document.getElementById("toolDrawer");
+  const t = name ? window.FT_TOOLS.find(x => x.name === name) : null;
+  d.dataset.editName = t ? t.name : "";
+  document.getElementById("toolDrawerTitle").textContent = t ? `编辑工具 · ${t.name}` : "新建工具";
+  document.getElementById("toolJson").value = JSON.stringify(t ? t.schema : TOOL_TEMPLATE, null, 2);
+  d.hidden = false;
+}
+function bindToolsUi() {
+  if (!document.getElementById("toolsTbl")) return;
+  document.getElementById("toolNewBtn").addEventListener("click", () => openToolDrawer(null));
+  document.getElementById("toolTplBtn").addEventListener("click", () => {
+    document.getElementById("toolJson").value = JSON.stringify(TOOL_TEMPLATE, null, 2);
+  });
+  document.getElementById("toolsTbl").addEventListener("click", async e => {
+    const ed = e.target.closest("[data-tool-edit]");
+    if (ed) { openToolDrawer(ed.dataset.toolEdit); return; }
+    const del = e.target.closest("[data-tool-del]");
+    if (!del || !confirm(`删除工具 ${del.dataset.toolDel}？`)) return;
+    try { await FAPI.del(`/functional/tools/${del.dataset.toolDel}`); }
+    catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+    fapiToast(`已删除工具 ${del.dataset.toolDel}`);
+    await wireTools();
+  });
+  document.getElementById("toolSaveBtn").addEventListener("click", async () => {
+    const d = document.getElementById("toolDrawer");
+    let schema;
+    try { schema = JSON.parse(document.getElementById("toolJson").value); }
+    catch (err) { fapiToast(`工具定义不是合法 JSON：${err.message}`, true); return; }
+    const editName = d.dataset.editName;
+    try {
+      if (editName) await FAPI.put(`/functional/tools/${editName}`, schema);
+      else await FAPI.post("/functional/tools", schema);
+    } catch (err) { fapiToast(`保存失败：${err.message}`, true); return; }
+    d.hidden = true;
+    fapiToast(editName ? `已更新工具 ${editName}（引用它的场景已重新派生）` : `已新建工具 ${schema.function?.name}`);
+    await wireTools();
+  });
 }
 
 /* ------------------------------------------------------------ 任务列表 */
@@ -700,10 +807,12 @@ function rebuildRunsFromTasks(items) {
   RUN_TASK_IDS = items.map(t => t.id);
   RUNS.splice(0, RUNS.length, ...items.map(t => [
     t.name || "(未命名)",
-    `${t.id.slice(0, 8)} · ${t.spec?.version || "未标注版本"}`,
+    `${t.id.slice(0, 8)} · ${t.spec?.version || "未标注版本"}`
+      + (t.retry_of ? ` · 重试 #${t.retry_count} ← ${t.retry_of.slice(0, 8)}` : ""),
     t.spec?.target?.profile || "-",
     t.status,
-    t.result?.pass_rate !== undefined ? { rate: t.result.pass_rate, total: t.result.evaluated_cases } : null,
+    t.result?.pass_rate !== undefined
+      ? { rate: t.result.pass_rate, total: t.result.evaluated_cases, passed: t.result.passed_cases } : null,
     t.result ? String(t.result.total_cases) : "—",
     fapiShortTime(t.created_at),
     "-",
@@ -716,7 +825,8 @@ function rebuildRunsFromTasks(items) {
       if (!rows.length || !RUNS[i]) return;
       const total = rows.reduce((acc, r) => acc + (r.count || 0), 0);
       const rate = total ? rows.reduce((acc, r) => acc + (r.value || 0) * (r.count || 0), 0) / total : null;
-      RUNS[i][4] = { rate, total };
+      const passed = rows.reduce((acc, r) => acc + Math.round((r.value || 0) * (r.count || 0)), 0);
+      RUNS[i][4] = { rate, total, passed };
       const bar = document.getElementById("runsFilter");
       renderRuns(bar?.querySelector(".chip[data-status].on")?.dataset.status || "all",
                  bar?.querySelector("[data-owner]")?.value || "all",
@@ -733,6 +843,9 @@ function rebuildRunsFromTasks(items) {
 
 async function wireTasks() {
   const data = await FAPI.get("/functional/tasks");
+  fapiSetNavCount("runs", data.count);
+  NAV_COUNTS.running = (data.items || []).filter(t => t.status === "running").length;
+  fapiRenderRunsStats();
   rebuildRunsFromTasks(data.items);
 }
 
@@ -748,6 +861,9 @@ function startLivePolling() {
       const sig = data.items.map(t => `${t.id}:${t.status}`).join("|");
       if (sig === startLivePolling.lastSig) return;
       startLivePolling.lastSig = sig;
+      fapiSetNavCount("runs", data.count);
+      NAV_COUNTS.running = (data.items || []).filter(t => t.status === "running").length;
+      fapiRenderRunsStats();
       rebuildRunsFromTasks(data.items);
     } catch (e) { /* 静默：下一轮再试 */ }
   }, 5000);
@@ -764,19 +880,203 @@ function openRunDetail(idx) {
   showPage("detail");   // mock 模式走原静态详情
 }
 
-let showLiveTaskSeq = 0;
-async function fapiPresets() {
-  // 模型预制（/common/models）缓存——详情页 curl 组装用
-  if (window.__fapiPresets && window.__fapiPresets.length) return window.__fapiPresets;
+/* ---------- 任务操作：运行/停止/重试/复制/编辑（ref = 列表行下标或任务 id） ----------
+   run pending 首发/终态重跑、stop 仅 running；retry 仅终态 = 同一任务同配置
+   再跑一轮（不再新建任务）；copy 任意状态 = 独立分支变体（同 spec 新任务）。
+   两者都打开编辑抽屉（非运行中可改 spec，改完「保存并运行」）。终态集合与
+   后端 core.types TASK_TERMINAL 对齐；mock 模式点击只提示。 */
+async function fapiTaskAction(action, ref, ev) {
+  ev?.stopPropagation();
+  const byId = typeof ref === "string";
+  const tid = byId ? ref : RUN_TASK_IDS[ref];
+  if (!FAPI.live || !tid) {
+    fapiToast("该操作需 live 模式（后端启动后）可用", true);
+    return;
+  }
+  const onDetail = byId && sessionStorage.getItem("aite-live-last-task") === ref;
+  const refresh = async () => {
+    await wireTasks();
+    if (onDetail) {
+      const detail = document.querySelector('main.page-host [data-page="detail"]');
+      if (detail && !detail.hidden) await showLiveTask(tid);
+    }
+  };
   try {
-    const r = await fetch("/api/v1/common/models");
-    const items = ((await r.json()).items) || [];
-    if (items.length) window.__fapiPresets = items;
-    return items;
-  } catch (e) { return window.__fapiPresets || []; }
+    if (action === "run") {
+      await FAPI.post(`/functional/tasks/${tid}/run`);
+      fapiToast(`任务 ${tid.slice(0, 8)} 已发起运行`);
+    } else if (action === "stop") {
+      await FAPI.post(`/functional/tasks/${tid}/stop`);
+      fapiToast(`任务 ${tid.slice(0, 8)} 已停止`);
+    } else if (action === "retry") {
+      const rt = await FAPI.post(`/functional/tasks/${tid}/retry`);
+      fapiToast(`已重跑同一任务 ${rt.id.slice(0, 8)}（第 ${(rt.history || []).length} 轮，运行中）`);
+    } else if (action === "copy") {
+      const nt = await FAPI.post(`/functional/tasks/${tid}/duplicate`);
+      fapiToast(`已复制为「${nt.name}」（${nt.id.slice(0, 8)}，pending）`);
+      await openTaskEdit(nt.id);
+    } else if (action === "edit") {
+      await openTaskEdit(tid);
+    }
+    await refresh();
+  } catch (err) { fapiToast(`任务操作失败：${err.message}`, true); }
 }
 
-async function showLiveTask(taskId) {
+/* ---------- 任务编辑（pending 限定）：复制/重试生成的草稿改参再跑 ----------
+   保存 = PATCH /functional/tasks/{id}（后端守卫 pending，非 pending 409）；
+   spec 以原 spec 为底、表单字段覆盖，未识别键原样保留（CLI 造的 spec 不丢字段）。 */
+let teState = null;   // 当前编辑上下文 {taskId, spec, scenes}
+
+function teEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function teRenderScenes() {
+  const box = document.getElementById("teScenes");
+  if (!box || !teState) return;
+  box.innerHTML = teState.scenes.length ? teState.scenes.map(s =>
+    `<span class="chip on">${teEsc(s)} <span data-te-del="${teEsc(s)}" title="移除该场景" style="cursor:pointer;font-weight:700">✕</span></span>`).join("")
+    : '<span class="hint" style="margin:0;color:var(--bad)">未选任何场景 —— 至少保留一个才能保存</span>';
+}
+
+async function openTaskEdit(taskId) {
+  const drawer = document.getElementById("taskEditDrawer");
+  if (!drawer) return;
+  let t;
+  try { t = await FAPI.get(`/functional/tasks/${taskId}`); }
+  catch (err) { fapiToast(`载入任务失败：${err.message}`, true); return; }
+  if (t.status !== "pending") {
+    fapiToast(`仅 pending 任务可编辑（当前 ${t.status}）—— 重试/复制会生成 pending 新任务`, true);
+    return;
+  }
+  const spec = t.spec || {};
+  teState = { taskId, spec, scenes: [...((spec.tools || {}).datasets || [])] };
+  document.getElementById("teName").value = t.name || "";
+  document.getElementById("teVersion").value = spec.version || "";
+  document.getElementById("teTimeout").value = (spec.extra || {}).timeout ?? "";
+  document.getElementById("teCases").value = ((spec.tools || {}).cases || []).join("\n");
+  document.getElementById("teSpecView").textContent = JSON.stringify(spec, null, 2);
+  teRenderScenes();
+  // 候选懒拉：场景 / 版本（失败静默，手填不受影响）
+  try {
+    const scens = await FAPI.get("/functional/scenarios");
+    document.getElementById("teSceneList").innerHTML =
+      (scens.items || []).map(s => `<option value="${teEsc(s.id)}">`).join("");
+  } catch (e) { /* 无场景资产时留空 */ }
+  try {
+    const vers = await FAPI.get("/versions");
+    document.getElementById("teVerList").innerHTML =
+      (vers.items || []).map(v => `<option value="${teEsc(v.version)}">`).join("");
+  } catch (e) { /* 手填版本不受影响 */ }
+  // 目标模型：profile / 端点命中登记项则选中，否则落自定义面板回填
+  const sel = document.getElementById("teModelSel");
+  const target = spec.target || {};
+  const hit = MODEL_SOURCES.find(s => target.profile && s.target.profile === target.profile)
+    || MODEL_SOURCES.find(s => target.type === "openai_compatible"
+      && s.target.base_url === (target.base_url || "") && s.target.model === (target.model || ""));
+  sel.innerHTML = MODEL_SOURCES.map(s => `<option value="${s.key}">${s.label}</option>`).join("")
+    + '<option value="__custom__">自定义（手填端点）</option>';
+  const pane = document.getElementById("teModelCustom");
+  if (hit) {
+    sel.value = hit.key;
+    pane.hidden = true;
+  } else {
+    sel.value = "__custom__";
+    pane.hidden = false;
+    document.getElementById("teBaseUrl").value = target.base_url || "";
+    document.getElementById("teModelName").value = target.model || "";
+    const kSel = pane.querySelector("[data-keysel]");
+    if (kSel) {
+      try { wireKeySelect(kSel, (await FAPI.get("/secrets")).items || []); }
+      catch (e) { wireKeySelect(kSel, []); }
+      const kEnv = pane.querySelector("[data-keyenv]");
+      if (target.api_key_env && kEnv) {
+        kSel.value = "__env__";
+        kEnv.hidden = false;
+        kEnv.value = target.api_key_env;
+      }
+    }
+  }
+  bindModelCustom("teModelSel", "teModelCustom");   // 选项重建后重挂显隐（幂等）
+  if (!drawer.dataset.teBound) {                    // foot 按钮与 chips 监听只挂一次
+    drawer.dataset.teBound = "1";
+    drawer.querySelector("#teSaveBtn").addEventListener("click", () => saveTaskEdit(false));
+    drawer.querySelector("#teRunBtn").addEventListener("click", () => saveTaskEdit(true));
+    document.getElementById("teScenes").addEventListener("click", e => {
+      const del = e.target.closest("[data-te-del]");
+      if (!del || !teState) return;
+      teState.scenes = teState.scenes.filter(s => s !== del.dataset.teDel);
+      teRenderScenes();
+    });
+    document.getElementById("teAddBtn").addEventListener("click", () => {
+      const input = document.getElementById("teAddScene");
+      const s = input.value.trim();
+      if (!s || !teState) return;
+      if (teState.scenes.includes(s)) { fapiToast(`场景 ${s} 已在列表`, true); return; }
+      teState.scenes.push(s);
+      input.value = "";
+      teRenderScenes();
+    });
+  }
+  drawer.hidden = false;
+}
+
+async function saveTaskEdit(runAfter) {
+  if (!teState) return;
+  const { taskId, spec: orig } = teState;
+  const name = document.getElementById("teName").value.trim();
+  const version = document.getElementById("teVersion").value.trim();
+  if (!version) { fapiToast("被测版本必填（终态结果按版本归档）", true); return; }
+  if (!teState.scenes.length) { fapiToast("至少保留一个场景", true); return; }
+  // 目标模型：与「新建运行」同规则（登记项直接引用，自定义端点校验必填）
+  let target;
+  const modelKey = document.getElementById("teModelSel").value;
+  if (modelKey === "__custom__") {
+    target = { type: "openai_compatible",
+               base_url: document.getElementById("teBaseUrl").value.trim(),
+               model: document.getElementById("teModelName").value.trim() };
+    const kSel = document.querySelector("#teModelCustom [data-keysel]");
+    const keyEnv = kSel ? keyEnvValue(kSel) : "";
+    if (keyEnv) target.api_key_env = keyEnv;
+    if (!target.base_url || !target.model) {
+      fapiToast("自定义端点需填写 模型访问 url 与 模型名称", true);
+      return;
+    }
+  } else {
+    const src = MODEL_SOURCES.find(s => s.key === modelKey);
+    if (!src) { fapiToast("目标模型已失效，请重新选择", true); return; }
+    target = { ...src.target };
+  }
+  const spec = JSON.parse(JSON.stringify(orig || {}));   // 原样打底，未识别字段不丢
+  spec.version = version;
+  spec.target = target;
+  spec.tools = { ...(orig.tools || {}) };
+  spec.tools.datasets = [...teState.scenes];
+  const cases = document.getElementById("teCases").value.split("\n")
+    .map(s => s.trim()).filter(Boolean);
+  if (cases.length) spec.tools.cases = cases; else delete spec.tools.cases;
+  const timeout = document.getElementById("teTimeout").value.trim();
+  if (timeout) spec.extra = { ...(orig.extra || {}), timeout: Number(timeout) };
+  else if (orig.extra && orig.extra.timeout !== undefined) {
+    delete spec.extra.timeout;
+    if (!Object.keys(spec.extra).length) delete spec.extra;
+  }
+  if (name) spec.run_name = name; else delete spec.run_name;
+  try {
+    await FAPI.patch(`/functional/tasks/${taskId}`, { name: name || undefined, spec });
+    if (runAfter) await FAPI.post(`/functional/tasks/${taskId}/run`);
+    document.getElementById("taskEditDrawer").hidden = true;
+    fapiToast(runAfter
+      ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行`
+      : `配置已保存（${taskId.slice(0, 8)}，仍为 pending，随时可运行）`);
+    await wireTasks();
+    await showLiveTask(taskId);
+  } catch (err) {
+    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在 pending，可能已被发起运行）" : ""}`, true);
+  }
+}
+
+let showLiveTaskSeq = 0;
+
+async function showLiveTask(taskId, roundSel) {
   const seq = ++showLiveTaskSeq;
   const detail = document.querySelector('main.page-host [data-page="detail"]');
   if (!showLiveTask.original) showLiveTask.original = detail.innerHTML;
@@ -812,7 +1112,12 @@ async function showLiveTask(taskId) {
   let result = null;
   try { result = await FAPI.get(`/functional/tasks/${taskId}/result`); }
   catch (e) { /* 409 非终态 */ }
-  const runId = t.result?.run_id || result?.result?.run_id || null;
+  // 轮次选择：默认看最新一轮；roundSel 由「执行历史」chips 传入切换
+  const rounds = t.history || [];
+  const sel = rounds.length
+    ? rounds[Math.min(Math.max(roundSel || rounds.length, 1), rounds.length) - 1]
+    : null;
+  const runId = sel?.run_id || t.result?.run_id || result?.result?.run_id || null;
   let run = null;
   if (runId) {
     try { run = await FAPI.get(`/runs/${runId}`); }   // DB 唯一权威（原则 8）
@@ -822,6 +1127,7 @@ async function showLiveTask(taskId) {
   if (runId) {
     try { cases = (await FAPI.get(`/runs/${runId}/cases`)).items || []; } catch (e) {}
   }
+  // 执行历史取自任务行 history（每轮 trigger/当时 spec 快照/结果概要），见「执行历史」卡
   const summaries = (run?.summaries || [])
     .filter(x => (x.dataset || "").startsWith("pytest:"));
   const overall = (run?.summaries || [])
@@ -830,10 +1136,6 @@ async function showLiveTask(taskId) {
     || summaries.reduce((a, x) => a + (x.count || 0), 0)
     || (result?.result?.total_cases ?? 0);
   const errorCases = run?.error_cases ?? result?.result?.error_cases ?? 0;
-  // 目标模型预制解析（curl 复现用：base_url / model / api_key_env）
-  const presets = await fapiPresets();
-  const targetProfile = t.spec?.target?.profile || "";
-  const preset = presets.find(p => p.name === targetProfile) || null;
   const passedCases = cases.filter(x => (x.metrics || []).some(m => m.passed === true));
   const failedCases = cases.filter(x => (x.metrics || []).some(m => m.passed === false));
   const progress = run?.details?.progress || null;
@@ -841,60 +1143,14 @@ async function showLiveTask(taskId) {
   const pct = progress && progress.total
     ? Math.round((progress.done || 0) / progress.total * 100) : null;
   const pp = v => v === null || v === undefined ? "—" : `${(v * 100).toFixed(1)}%`;
-  function fapiExpectRows(expect, response) {
-    // 展示用途的逐断言标注（期望 vs 实际）；无法客户端判定的键标注"引擎判定"
-    const rows = [];
-    if (!expect || typeof expect !== "object") return rows;
-    const status = response && response._status !== undefined ? response._status : 200;
-    const content = (() => {
-      if (!response || typeof response !== "object") return "";
-      if (typeof response._body !== "undefined") return String(response._body);
-      return response.choices?.[0]?.message?.content ?? "";
-    })();
-    const finish = response?.choices?.[0]?.finish_reason ?? null;
-    const ic = expect.ignore_case === true;
-    const norm = t => (ic ? String(t).toLowerCase() : String(t));
-    const push = (name, exp, act, ok) => rows.push(
-      { name, exp: String(exp), act: String(act), ok });
-    for (const [k, v] of Object.entries(expect)) {
-      if (k === "ignore_case") continue;
-      if (k === "contains") {
-        for (const kw of [].concat(v)) {
-          const hit = norm(content).includes(norm(kw));
-          push("包含关键词", kw, hit ? "命中" : "未命中", hit);
-        }
-      } else if (k === "not_contains") {
-        for (const kw of [].concat(v)) {
-          const hit = norm(content).includes(norm(kw));
-          push("不得包含", kw, hit ? "出现了（违规）" : "未出现", !hit);
-        }
-      } else if (k === "nonempty") {
-        push("非空", v ? "期望非空" : "任意", content.trim() ? "非空" : "空",
-             !!content.trim() === !!v);
-      } else if (k === "http_status") {
-        push("HTTP 状态码", v, status, Number(v) === status);
-      } else if (k === "finish_reason") {
-        push("finish_reason", v, finish, finish === v);
-      } else if (k === "sse_done") {
-        push("sse_done 正常收尾", v, response._sse_ok === true);
-      } else if (k === "chunks_min") {
-        push("分块数 ≥", v, response._chunks, (response._chunks || 0) >= v);
-      } else if (k === "no_leak") {
-        push("无泄漏 no_leak", "敏感模式扫描", "引擎判定", null);
-      } else if (k === "json" || k === "resp") {
-        push(k, JSON.stringify(v), "结构断言（引擎判定）", null);
-      } else if (k === "tool" || k === "tool_args_contains" || k === "no_tool") {
-        push(k, v ?? "—", "工具调用断言（引擎判定）", null);
-      } else {
-        push(k, JSON.stringify(v), "引擎判定", null);
-      }
-    }
-    return rows;
-  }
-
   const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   window.__copyStore = window.__copyStore || new Map();
   let __cseq = 0;
+  // 「展开全文」id 必须全渲染唯一：曾在 caseBlock 内每例归零，跨用例重复 id
+  // （点击展开命中 DOM 第一个同名 pre，全文又被最后渲染的用例覆盖 → 折叠显示
+  // A 用例内容、展开变 B 用例内容）；存全文的 Map 也随之每次渲染重建
+  window.__expStore = new Map();
+  let __eseq = 0;
   const copyBtn = (text, label) => {
     const id = `cc${++__cseq}`;
     window.__copyStore.set(id, text);
@@ -960,109 +1216,172 @@ async function showLiveTask(taskId) {
   }
   const caseBlock = (x, isFailed) => {
     const st = isFailed ? "failed" : "passed";
-    // cases 接口的 input 即 messages 数组本身（非 {messages:[...]} 包裹）——归一化
-    const rawIn = x.input;
-    const io = Array.isArray(rawIn) ? { messages: rawIn } : (rawIn || {});
-    const msgs = io.messages || [];
     const out = (typeof x.output === "object" && x.output !== null) ? x.output : {};
-    const content = out.choices?.[0]?.message?.content ?? "";
     const errLines = (x.error || "").split(String.fromCharCode(10));
     const errFirst = errLines[0] || "";
-    // —— 输入：按角色分块；长内容默认折叠（展开全文/复制/下载完整请求）——
-    const BQ = String.fromCharCode(92), NLQ = String.fromCharCode(10);
-    window.__expStore = window.__expStore || new Map();
-    let __eseq = 0;
     const COLLAPSE_AT = 300;
-    const msgHtml = m => {
-      const c = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
-      const long = c.length > COLLAPSE_AT;
-      const preStyle = "white-space:pre-wrap;margin:4px 0 0;padding:6px 8px;border-left:3px solid var(--line);font-size:12px;";
-      if (!long) return `<div style="margin:4px 0"><span class="tag mono">${esc(m.role)}</span>
-        <pre style="${preStyle}">${esc(c)}</pre></div>`;
+    // 长文本折叠 pre（展开全文）：请求体/响应体/断言期望共用
+    const dumpPre = text => {
+      if (text.length <= COLLAPSE_AT)
+        return `<pre style="white-space:pre-wrap;font-size:12px;margin:0">${esc(text)}</pre>`;
       const id = `ex${++__eseq}`;
-      window.__expStore.set(id, c);
-      return `<div style="margin:4px 0"><span class="tag mono">${esc(m.role)}</span>
-        <pre id="${id}" style="${preStyle}max-height:120px;overflow:hidden">${esc(c.slice(0, COLLAPSE_AT))}…</pre>
-        <div style="margin-top:2px"><button type="button" class="btn sm ns-exp" data-exp-id="${id}" style="padding:1px 8px;font-size:11px">展开全文（共 ${c.length} 字符）</button></div></div>`;
+      window.__expStore.set(id, text);
+      return `<pre id="${id}" style="white-space:pre-wrap;font-size:12px;max-height:120px;overflow:hidden;margin:0">${esc(text.slice(0, COLLAPSE_AT))}…</pre>
+        <div style="margin-top:2px"><button type="button" class="btn sm ns-exp" data-exp-id="${id}" style="padding:1px 8px;font-size:11px">展开全文（共 ${text.length} 字符）</button></div>`;
     };
-    const inputHtml = msgs.length ? msgs.map(msgHtml).join("")
-      : `<pre style="font-size:12px;white-space:pre-wrap">${esc(JSON.stringify(io, null, 2))}</pre>`;
-    // 复现三件套：完整输入 JSON / curl（预制模型解析 URL 与密钥占位）/ 下载 .json
-    // 完整请求体 = model + messages + 行参数快照（raw.params，剔除控制键）+ tools
-    // ——与引擎 _post 的合并顺序一致（params 同名键覆盖、tools 顶层追加）
-    const rawRec = (typeof x.raw === "object" && x.raw) ? x.raw : {};
-    const rawParams = (typeof rawRec.params === "object" && rawRec.params) || {};
-    const rawParamsClean = Object.fromEntries(
-      Object.entries(rawParams).filter(([k]) => !k.startsWith("_")));
-    const rawTools = Array.isArray(rawRec.tools) ? rawRec.tools : null;
-    const inputJson = JSON.stringify(io, null, 2);
-    const reqBody = { model: preset ? preset.model : (targetProfile || "target-model"),
-      ...(msgs.length ? { messages: msgs.map(m => ({ role: m.role, content: m.content ?? "" })) } : {}),
-      ...rawParamsClean,
-      ...(rawTools ? { tools: rawTools } : {}) };
-    const base = (preset?.base_url || "https://target.example/v1").replace(/[/]+$/, "");
-    const urlFull = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
-    const auth = preset?.api_key_env
-      ? `Authorization: Bearer ${"$" + preset.api_key_env}`
-      : "Authorization: Bearer your-api-key";
-    const bodyCompact = JSON.stringify(reqBody).split("'").join(BQ + "'");
-    const curlTxt = [
-      `curl -X POST "${urlFull}"`,
-      `  -H "Content-Type: application/json"`,
-      `  -H "${auth}"`,
-      `  -d '${bodyCompact}'`,
-    ].join(" " + BQ + NLQ);
-    // —— 输出：content 正文为主体，形态/元信息降级为标签，原始 JSON 折叠 ——
-    const meta = [];
-    if (out.finish_reason) meta.push(`finish_reason=${out.finish_reason}`);
-    if (out._chunks) meta.push(`chunks=${out._chunks}`);
-    if (out._sse_ok !== undefined) meta.push(`sse_done=${out._sse_ok}`);
-    if (out.usage) meta.push(`usage=${JSON.stringify(out.usage)}`);
-    const outputHtml = `<pre style="white-space:pre-wrap;font-size:12px;max-height:200px;overflow:auto;margin:0">${esc(content || "—")}</pre>`
-      + (meta.length ? `<div class="hint" style="margin-top:4px">${meta.map(esc).join(" · ")}</div>` : "")
-      + `<details style="margin-top:4px"><summary class="dim" style="font-size:11px;cursor:pointer">原始响应 JSON</summary>
-         <pre style="font-size:11px;white-space:pre-wrap;max-height:180px;overflow:auto;margin:4px 0 0">${esc(JSON.stringify(out, null, 2))}</pre></details>`;
-    // —— 断言对照：期望 | 实际 两列并排 ——
-    const rows = fapiExpectRows(x.expected, out)
-      .map(r => ({ ...r, ok: isFailed ? r.ok : true }));
-    const rowHtml = r => {
-      const color = r.ok === false ? "var(--bad)" : r.ok === true ? "var(--ok)" : "var(--tx3)";
-      return `<div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:8px;font-size:12px;margin:3px 0;align-items:start">
-        <span style="font-weight:650;color:${color}">${esc(r.name)}</span>
-        <span style="color:${color};word-break:break-all">期望 ${esc(r.exp)}</span>
-        <span style="color:${color};word-break:break-all">实际 ${esc(r.act)}</span></div>`;
+    const pretty = v => v === null || v === undefined ? null : JSON.stringify(v, null, 2);
+    // —— 请求头/请求体/响应体原样展示（引擎 _request 留痕 / 响应去留痕键），不再拆字段 ——
+    const { _request: reqMeta, ...respRaw } = out;
+    const rawObj = (typeof x.raw === "object" && x.raw !== null) ? x.raw : {};
+    // 请求体 = 实际发出的完整 payload（model + messages + 全部扩展参数）；
+    // 旧 run 无留痕时回退 messages ⊕ raw.params 快照（缺 model，仅近似还原；
+    // _ 前缀控制键不进快照，与真实 payload 口径一致）
+    const reqObj = (reqMeta && typeof reqMeta === "object") ? reqMeta.body
+      : (x.input == null && !rawObj.params ? null
+        : { ...(Array.isArray(x.input) ? { messages: x.input } : {}),
+            ...Object.fromEntries(Object.entries(rawObj.params || {}).filter(([k]) => !k.startsWith("_"))) });
+    const reqText = typeof reqObj === "string" ? reqObj : (pretty(reqObj) ?? "—");
+    const reqHead = (reqMeta && typeof reqMeta === "object")
+      ? `${reqMeta.method || "POST"} ${reqMeta.url || ""}`
+      : "旧数据无请求留痕，以 messages ⊕ params 快照代替";
+    // 请求头：留痕为实际发送的合并结果（默认鉴权 ⊕ 自定义，敏感值已由引擎打码）
+    const hdr = (reqMeta && typeof reqMeta === "object" && reqMeta.headers
+      && typeof reqMeta.headers === "object") ? reqMeta.headers : null;
+    const hdrText = hdr ? Object.entries(hdr).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
+    const respText = typeof x.output === "string" ? x.output
+      : x.output == null ? "（无响应记录）" : (pretty(respRaw) ?? "—");
+    const expText = pretty(x.expected);
+    // —— 断言判定：期望 vs 实际逐行对照。实际值从响应提取，口径同引擎 check()：
+    // 预期错误模式取 _status/_body，正常响应取 choices[0].message 与流式控制键 ——
+    const choice0 = (out.choices || [])[0] || {};
+    const msg0 = choice0.message || {};
+    const content0 = (msg0.content || "").trim();
+    const tools0 = msg0.tool_calls || [];
+    const fn0 = (tools0[0] || {}).function || {};
+    const _OPS = { eq: "==", neq: "!=", gte: ">=", lte: "<=", in: "∈" };
+    const clip = (v, n = 80) => {
+      const s = typeof v === "string" ? v : (JSON.stringify(v) ?? String(v));
+      return s.length > n ? `${s.slice(0, n)}…` : s;
     };
-    const assertHtml = rows.length
-      ? `<div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:8px;font-size:11px;color:var(--tx3)">
-           <span>断言</span><span>期望</span><span>实际</span></div>
-         ${rows.map(rowHtml).join("")}`
-      : '<span class="faint" style="font-size:12px">—</span>';
-    // —— 失败日志：首行醒目，全文折叠（不再重复渲染输入/输出摘要） ——
+    const expObj = (typeof x.expected === "object" && x.expected !== null) ? x.expected : {};
+    const actualBody = out._body !== undefined ? out._body : out;
+    const rows = [];
+    const addRow = (name, expect, actual) => rows.push({ name, expect, actual });
+    for (const [k, v] of Object.entries(expObj)) {
+      if (k === "ignore_case") continue;   // 修饰键，并入包含关键词行标注
+      if (k === "http_status") addRow("HTTP 状态码",
+        typeof v === "object" ? `${_OPS[Object.keys(v)[0]] || "?"} ${Object.values(v)[0]}` : `== ${v}`,
+        out._status != null ? String(out._status) : "—");
+      else if (k === "contains") addRow(`包含关键词${expObj.ignore_case ? "（忽略大小写）" : ""}`,
+        clip(v), content0 || "（空）");
+      else if (k === "not_contains") addRow("不含关键词", clip(v), content0 || "（空）");
+      else if (k === "nonempty") addRow("回复非空", "非空", content0 ? `非空（${content0.length} 字符）` : "（空）");
+      else if (k === "no_garbled") addRow("无乱码", "无乱码", content0 || "（空）");
+      else if (k === "no_repeat") addRow("无复读", "无复读", content0 || "（空）");
+      else if (k === "no_leak") addRow("无泄漏", `不出现 ${clip(v, 40)}`, content0 || "（空）");
+      else if (k === "finish_reason") addRow("finish_reason", String(v),
+        choice0.finish_reason != null ? String(choice0.finish_reason) : "—");
+      else if (k === "chunks_min") addRow("流式块数", `>= ${v}`, out._chunks != null ? String(out._chunks) : "—");
+      else if (k === "sse_done") addRow("SSE 收尾 data: [DONE]", String(v), String(out._sse_ok));
+      else if (k === "json") addRow("JSON 结构断言", clip(v, 70), clip(respRaw, 70));
+      else if (k === "resp") addRow("响应体字段断言", clip(v, 70), clip(actualBody, 70));
+      else if (k === "tool") addRow("指定工具被调用", String(v), fn0.name || "（未发起工具调用）");
+      else if (k === "no_tool") addRow("不发起工具调用", "无工具调用",
+        tools0.length ? tools0.map(t => (t.function || {}).name || "?").join(", ") : "无工具调用");
+      else if (k === "tool_args_contains") addRow("工具参数包含", clip(v),
+        fn0.arguments != null ? clip(fn0.arguments) : "（无参数）");
+    }
+    const rowHtml = r => `<tr>
+        <td class="dim" style="padding:3px 10px 3px 0;white-space:nowrap;font-size:12px;vertical-align:top">${esc(r.name)}</td>
+        <td class="mono" style="padding:3px 14px 3px 0;font-size:12px;vertical-align:top;width:38%;word-break:break-all">${esc(String(r.expect))}</td>
+        <td class="mono" style="padding:3px 0;font-size:12px;word-break:break-all">${esc(String(r.actual))}</td>
+      </tr>`;
+    const assertSec = rows.length ? `
+      ${secHead("断言判定", `<span class="badge ${st}"><i></i>${isFailed ? "不通过" : "通过"}</span> ${copyBtn(expText ?? "", "复制断言配置")}`)}
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;padding:2px 10px 4px 0;font-weight:600;color:var(--tx3);font-size:12px">断言项</th>
+          <th style="text-align:left;padding:2px 14px 4px 0;font-weight:600;color:var(--tx3);font-size:12px;width:38%">期望</th>
+          <th style="text-align:left;padding:2px 0 4px;font-weight:600;color:var(--tx3);font-size:12px">实际</th>
+        </tr></thead>
+        <tbody>${rows.map(rowHtml).join("")}</tbody>
+      </table>` : "";
+    const statusTag = out._status != null ? ` · HTTP ${out._status}` : "";
+    // —— 失败日志：首行醒目，引擎原始日志全文直接展示（不再折叠） ——
     const logSec = isFailed && x.error ? `
       <div style="margin-top:10px;padding:8px 10px;border-left:3px solid var(--bad);background:color-mix(in srgb,var(--bad) 8%,transparent);border-radius:0 8px 8px 0">
+        <div style="font-weight:650;font-size:12.5px;color:var(--bad);margin-bottom:4px">引擎原始日志</div>
         <div class="mono" style="font-size:12px;color:var(--bad);word-break:break-all">${esc(errFirst)}</div>
-        <details style="margin-top:4px"><summary class="dim" style="font-size:11px;cursor:pointer">引擎原始日志（含输入/输出全文）</summary>
-          <pre style="font-size:11px;white-space:pre-wrap;max-height:220px;overflow:auto;margin:4px 0 0">${esc(x.error)}</pre></details>
+        <pre style="font-size:11px;white-space:pre-wrap;margin:6px 0 0">${esc(x.error)}</pre>
       </div>` : "";
-    return `<details ${isFailed ? "open" : ""} style="border:1px solid ${isFailed ? "color-mix(in srgb,var(--bad) 35%,transparent)" : "var(--line)"};border-radius:10px;padding:8px 12px;margin-top:8px">
-      <summary style="cursor:pointer;font-size:12.5px">
-        <span class="mono">${esc(x.external_key)}</span>
-        <span class="badge ${st}" style="margin-left:8px"><i></i>${isFailed ? "失败" : "通过"}</span></summary>
-      ${secHead("输入", [copyBtn(inputJson, "复制输入 JSON"), copyBtn(curlTxt, "复制 curl"), dlBtn(reqBody, `${x.external_key || "case"}-request.json`)].join(""))}
-      ${inputHtml}
-      ${secHead("输出", content ? copyBtn(content, "复制正文") : "")}
-      ${outputHtml}
-      ${secHead("断言", copyBtn(rows.map(r => `${r.name}: 期望 ${r.exp} / 实际 ${r.act}`).join("；"), "复制断言"))}
-      ${assertHtml}
-      ${logSec}
-    </details>`;
+    // —— 列表行：状态徽标 + 行 id + 用例 id/类型/等级标签 + 失败首行 + 编辑/详情 ——
+    // （用例 id/类型/等级来自执行记录 metadata = 脚本行 case_id/type/level 透传）
+    const md = (typeof x.metadata === "object" && x.metadata) || {};
+    const tags = [
+      md.case_id ? `<span class="tag mono" title="外部用例 id">用例 ${esc(md.case_id)}</span>` : "",
+      md.type ? `<span class="tag" title="行类型">${esc(md.type)}</span>` : "",
+      md.level ? `<span class="tag" title="优先级等级">${esc(md.level)}</span>` : "",
+    ].join("");
+    const errSnippet = isFailed && errFirst
+      ? `<span class="mono" title="${esc(x.error || "")}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bad);font-size:11.5px">${esc(errFirst)}</span>`
+      : `<span style="flex:1"></span>`;
+    return `<div class="case-item" style="border:1px solid ${isFailed ? "color-mix(in srgb,var(--bad) 35%,transparent)" : "var(--line)"};border-radius:10px;margin-top:8px;overflow:hidden">
+      <div class="case-item-head" data-case-toggle style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12.5px">
+        <span class="badge ${st}"><i></i>${isFailed ? "失败" : "通过"}</span>
+        <span class="mono" style="font-weight:650">${esc(x.external_key || "—")}</span>
+        ${tags}
+        ${errSnippet}
+        <button type="button" class="btn sm" data-case-edit="${esc(x.external_key || "")}"
+          data-case-scenario="${esc(x.dataset || "")}" title="打开所属脚本并定位此行编辑">编辑</button>
+        <button type="button" class="btn sm" data-case-toggle>详情</button>
+      </div>
+      <div class="case-item-body" hidden style="border-top:1px solid var(--line);padding:8px 12px">
+        ${assertSec}
+        ${hdrText ? secHead("请求头", copyBtn(hdrText, "复制请求头")) + dumpPre(hdrText) : ""}
+        ${secHead(`请求体 · ${esc(reqHead)}`, [copyBtn(reqText, "复制请求体"), dlBtn(reqObj, `${x.external_key || "case"}-request.json`)].join(""))}
+        ${dumpPre(reqText)}
+        ${secHead(`响应体${statusTag}`, [copyBtn(respText, "复制响应体"), dlBtn(respRaw, `${x.external_key || "case"}-response.json`)].join(""))}
+        ${dumpPre(respText)}
+        ${logSec}
+      </div>
+    </div>`;
   };
+  // —— 执行历史（同一任务的每轮运行；每轮留当时 spec 快照，审计可追）——
+  const rateOf = r => r.pass_rate != null ? pp(r.pass_rate) : "—";
+  const roundChips = rounds.map(r => `
+      <span class="chip${sel && r.n === sel.n ? " on" : ""}" style="cursor:pointer"
+        title="查看该轮结果（spec 快照随轮留档）"
+        onclick="showLiveTask('${taskId}', ${r.n})">#${r.n}
+        ${r.trigger === "retry" ? "重试" : "运行"} · ${fapiShortTime(r.started_at)}
+        · ${taskBadge(r.status)} · ${rateOf(r)}</span>`).join("");
+  const histSec = `
+    <section class="card" style="margin-bottom:14px">
+      <div class="card-head"><div><h3>执行历史</h3>
+        <div class="sub">同一任务的每轮运行在此累积（重试/重跑不新建任务）；点轮次切换下方结果视图，「复制」是独立分支变体不在此列</div></div></div>
+      ${roundChips ? `<div class="chips" style="margin-bottom:8px">${roundChips}</div>` : ""}
+      ${sel ? `<table class="sumtable">
+        <thead><tr><th>轮次</th><th>触发</th><th>状态</th><th>pass_rate</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
+        <tbody><tr>
+          <td class="mono">#${sel.n}</td><td>${sel.trigger === "retry" ? "重试" : "运行"}</td>
+          <td>${taskBadge(sel.status)}</td><td class="num">${rateOf(sel)}</td>
+          <td class="dim">${fapiShortTime(sel.started_at)}</td>
+          <td style="text-align:right">${copyBtn(JSON.stringify(sel.spec || {}, null, 2), "复制该轮 spec")}</td>
+        </tr></tbody>
+      </table>
+      ${sel.error ? `<div class="hint" style="color:var(--bad);margin-top:6px">该轮错误：${esc(sel.error)}</div>` : ""}` : '<div class="ds-empty">尚无运行记录 —— 发起运行后在此累积每一轮</div>'}
+      ${t.retry_of ? `<div class="hint" style="margin-top:6px">旧版重试链来源：<span class="mono">${esc(String(t.retry_of))}</span>（兼容保留，新语义重跑不再产生）</div>` : ""}
+    </section>`;
   detail.innerHTML = `
     <header class="topbar">
       <div><h1>${t.name || "(未命名)"} ${taskBadge(t.status)}</h1>
       <div class="crumb">task ${t.id} · 引擎 pytest · 被测版本 ${t.spec?.version || "未标注"}
-      · 模型 ${t.spec?.target?.profile || t.spec?.target?.model || "-"}</div></div>
+      · 模型 ${t.spec?.target?.profile || t.spec?.target?.model || "-"}${rounds.length ? ` · 第 ${sel?.n || rounds.length} / ${rounds.length} 轮` : ""}${t.retry_of ? ` · 旧链 ← ${esc(String(t.retry_of)).slice(0, 8)}` : ""}</div></div>
       <div class="actions">
+        ${["pending", "succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('run', '${taskId}')">${t.status === "pending" ? "运行" : "重跑"}</button>
+        <button class="btn" onclick="fapiTaskAction('edit', '${taskId}')" title="改配置（非运行中可改）：模型/版本/场景/用例过滤/超时">编辑</button>` : ""}
+        ${["running", "stopping"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('stop', '${taskId}')">停止</button>` : ""}
+        ${["succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
+        <button class="btn" onclick="fapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
         <button class="btn" onclick="showLiveTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>
@@ -1076,6 +1395,7 @@ async function showLiveTask(taskId) {
       <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>执行错误</div>
         <div class="value">${errorCases}</div><span class="delta flat">超时/连接等未跑成</span></div>
     </section>
+    ${histSec}
     <section class="card" style="margin-bottom:14px">
       <div class="card-head"><div><h3>场景级汇总</h3>
         <div class="sub">每场景一行 pass_rate · 来自 run 指标摘要（DB 权威）</div></div></div>
@@ -1091,7 +1411,7 @@ async function showLiveTask(taskId) {
     </section>
     <section class="card">
       <div class="card-head"><div><h3>用例明细（原始输入输出）</h3>
-        <div class="sub">成功/失败分组 · 点开看原始 输入(messages)/输出(模型响应) · 数据源 = 用例结果表</div></div></div>
+        <div class="sub">成功/失败分组列表 · 行 id + 用例 id/类型/等级标签 · 「编辑」直达脚本行（改完保存即生效）·「详情」展开原始输入输出</div></div></div>
       <div class="detail-stack">
         ${failedCases.length ? `<div class="seg-title" style="margin-top:0">失败用例（${failedCases.length}）</div>
           ${failedCases.map(x => caseBlock(x, true)).join("")}` : ""}
@@ -1107,6 +1427,7 @@ function backToRuns() { showPage("runs"); }
 /* ------------------------------------------------- 版本结果库 + 质量大屏 */
 async function wireResults() {
   const data = await FAPI.get("/functional/version-results");
+  fapiSetNavCount("vresults", data.count);
   const rows = data.items;
   const counts = {};
   document.getElementById("vrTbl").innerHTML = `
@@ -1171,21 +1492,6 @@ async function wireResults() {
   targetSel.addEventListener("change", refreshBoard);
   baselineSel.addEventListener("change", refreshBoard);
   await refreshBoard();
-  // 被测版本转自由输入（版本管理页未建前，允许手输任意版本号；datalist 给历史提示）
-  const verSel = document.getElementById("ftVerSel");
-  if (verSel && verSel.tagName === "SELECT") {
-    const input = document.createElement("input");
-    input.id = "ftVerSel";
-    input.className = "in";
-    input.setAttribute("list", "ftVerDl");
-    input.placeholder = "如 v1.3.0（可自由输入）";
-    input.value = verSel.value.replace(/（.*）/, "");
-    const dl = document.createElement("datalist");
-    dl.id = "ftVerDl";
-    dl.innerHTML = versions.map(v => `<option>${v}</option>`).join("");
-    verSel.replaceWith(input);
-    input.insertAdjacentElement("afterend", dl);
-  }
 }
 
 async function renderBoard(model, target, baseline) {
@@ -1281,6 +1587,48 @@ async function renderBoard(model, target, baseline) {
 }
 
 /* ---------------------------------------------------------- 创建任务提交 */
+/* ------------------------------------- 被测版本（全局版本注册表 = 公共 · 版本管理） */
+let FT_VERSIONS = [];   // [{version, description}]（公共 · 版本管理创建，与模型无关）
+
+/* 抽屉被测版本下拉：全量列出登记版本（版本与模型无关，发起处与目标模型自由组合）；
+   重建选项时保留现选中值（不闪跳）。注册表为空给引导选项，必填校验在提交处。 */
+function renderTaskVersions(prefer) {
+  const sel = document.getElementById("ftVerSel");
+  if (!sel) return;
+  const prev = prefer !== undefined ? prefer : sel.value;
+  sel.innerHTML = FT_VERSIONS.map(v =>
+    `<option value="${v.version}">${v.version}` +
+    `${v.description ? `（${v.description}）` : ""}</option>`).join("")
+    || '<option value="">暂无版本 —— 点「＋ 新版本」就地创建</option>';
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+async function refreshTaskVersions(prefer) {
+  FT_VERSIONS = (await FAPI.get("/versions")).items;
+  renderTaskVersions(prefer);
+}
+
+/* 「＋ 新版本」就地创建：版本与模型无关，只登记版本号；
+   创建落库后立即回填下拉并选中——发起处无需再去「公共 · 版本管理」页 */
+async function ftCreateVersion() {
+  const version = (prompt("输入版本号（如 v1.3.0）：") || "").trim();
+  if (!version) return;
+  try {
+    await FAPI.post("/versions", { version });
+    fapiToast(`版本已创建：${version}（「公共 · 版本管理」页可管理）`);
+    await refreshTaskVersions(version);
+  } catch (err) { fapiToast(`创建失败：${err.message}`, true); }
+}
+
+async function wireTaskVersions() {
+  const btn = document.getElementById("ftVerNewBtn");
+  if (btn && !btn.dataset.liveBound) {
+    btn.dataset.liveBound = "1";
+    btn.addEventListener("click", ftCreateVersion);
+  }
+  await refreshTaskVersions();
+}
+
 function bindTaskSubmit() {
   const drawer = document.getElementById("newRunModal");
   const submit = drawer.querySelector(".drawer-foot .btn.primary");
@@ -1288,17 +1636,19 @@ function bindTaskSubmit() {
     const secs = drawer.querySelectorAll(".form-sec");
     const name = secs[0].querySelector("input.in").value.trim();
     const modelKey = document.getElementById("ftModelSel").value;
-    const version = document.getElementById("ftVerSel").value.trim();   // 提交时查询（live 下可能是替换后的 input）
+    const version = document.getElementById("ftVerSel").value.trim();   // 全局版本注册表下拉（公共 · 版本管理创建）
+    if (!version) { fapiToast("请选择被测版本（没有就点「＋ 新版本」就地创建）", true); return; }
     const timeout = secs[2].querySelector("input.in").value.trim();
     const scenes = SCENES.map(s => s[0]).filter(sc => ftSceneState(sc) !== "none");
     if (!scenes.length) { fapiToast("请至少选择一个评估场景", true); return; }
     let target;
     if (modelKey === "__custom__") {
       const pane = document.getElementById("ftModelCustom");
-      const inputs = pane.querySelectorAll("input.in");
+      const inputs = pane.querySelectorAll("input.in:not([data-keyenv])");
       target = { type: "openai_compatible", base_url: inputs[0].value.trim(),
                  model: inputs[1].value.trim() };
-      const keyEnv = inputs[2].value.trim();
+      const kSel = pane.querySelector("[data-keysel]");
+      const keyEnv = kSel ? keyEnvValue(kSel) : "";
       if (keyEnv) target.api_key_env = keyEnv;
       if (!target.base_url || !target.model) {
         fapiToast("自定义端点需填写 模型访问 url 与 模型名称", true);
@@ -1316,16 +1666,8 @@ function bindTaskSubmit() {
     };
     if (name) spec.run_name = name;
     if (timeout) spec.extra = { timeout: Number(timeout) };
-    const userSel = scenes.filter(sc => !BUILTIN_IDS.includes(sc));
-    const builtinSel = scenes.filter(sc => BUILTIN_IDS.includes(sc));
-    if (userSel.length && builtinSel.length) {
-      fapiToast("内置与自建场景暂不支持同任务混跑（两者在不同目录），请分两次发起", true);
-      return;
-    }
-    // 必须显式给场景根：内置 = 包内目录，自建 = 用户根（parse_tool_suite 两者缺一即拒）
-    spec.tools.tests_dir = userSel.length
-      ? "data/functional/scenarios"
-      : "aite/functional/scenarios";
+    // 场景全部在托管根（builtin 已移除）：tests_dir 缺省即托管根，不传亦可
+    spec.tools.tests_dir = "data/functional/scenarios";
     // 场景级选择 → tools.datasets（只跑勾选的场景，适配器按名过滤未知名报错）
     spec.tools.datasets = scenes;
     // 部分勾选的场景 → tools.cases 限定用例（场景内用例 id，不带场景前缀）
@@ -1351,18 +1693,19 @@ function bindTaskSubmit() {
 let MODEL_SOURCES = [];   // [{key, label, target}]：key = common:<名> / db:<id> / __custom__
 
 async function wireModels() {
-  const [common, db] = await Promise.all([
+  const [common, db, secrets] = await Promise.all([
     FAPI.get("/common/models").catch(() => ({ items: [] })),
     FAPI.get("/models").catch(() => ({ items: [] })),
+    FAPI.get("/secrets").catch(() => ({ items: [] })),
   ]);
   MODEL_SOURCES = [
     ...common.items.map(m => ({
-      key: `common:${m.name}`,
+      key: `common:${m.name}`, name: m.name,
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（预制）`,
       target: { profile: m.name },
     })),
     ...db.items.map(m => ({
-      key: `db:${m.id}`,
+      key: `db:${m.id}`, name: m.name,
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（注册）`,
       target: { type: "openai_compatible", base_url: m.base_url || "",
                 model: m.model || "", api_key_env: m.api_key_env || undefined },
@@ -1373,6 +1716,8 @@ async function wireModels() {
   sel.innerHTML = MODEL_SOURCES.map(s => `<option value="${s.key}">${s.label}</option>`).join("")
     + '<option value="__custom__">自定义（手填端点）</option>';
   bindModelCustom("ftModelSel", "ftModelCustom");   // 选项重建后重挂自定义面板开关
+  const keySel = document.querySelector("#ftModelCustom [data-keysel]");
+  if (keySel) wireKeySelect(keySel, secrets.items);   // 自定义端点的鉴权密钥：选已归档 / 手填环境变量
 }
 
 /* ---------------- 公共 · 模型管理页（common2.html，DB 网关别名注册） ---------------- */
@@ -1391,7 +1736,10 @@ async function wireCommonModelsPage() {
     return `<span class="mono dim">${env}</span>`
       + `<div class="rid">${keyMask[env] ? `🔑 ${keyMask[env]}` : "⚠ 密钥未录入（密钥库可录）"}</div>`;
   };
-  const commonRows = commonData.items.map(m => `<tr>
+  // 注册过的模型经 POST /models 已同步进 common.yaml（target.profile 可引用），
+  // 预制行剔除同名条目，否则同一模型显示「预制」+「注册」两行（一次新增出现俩）
+  const registered = new Set(MODEL_ROWS.map(m => m.name));
+  const commonRows = commonData.items.filter(m => !registered.has(m.name)).map(m => `<tr>
       <td class="rname"><b class="mono">${m.name}</b></td>
       <td><span class="tag" style="color:var(--ac)">预制</span></td>
       <td class="mono dim" style="font-size:12px">${m.base_url || "—"}</td>
@@ -1458,91 +1806,431 @@ async function wireCommonModelsPage() {
     });
   }
 
+  // 注册抽屉密钥下拉：已归档密钥（掩码）+ 仅环境变量 + 现场归档；密钥库增删后随 wire 刷新
+  const keySel = document.getElementById("mKeySel");
+  if (keySel) {
+    wireKeySelect(keySel, secretData.items);
+    keySel.insertAdjacentHTML("beforeend",
+      '<option value="__archive__">＋ 现场归档新密钥（密文落盘）</option>');
+    if (!keySel.dataset.arcBound) {
+      keySel.dataset.arcBound = "1";
+      keySel.addEventListener("change", () => {
+        document.getElementById("mKeyArchive").hidden = keySel.value !== "__archive__";
+      });
+    }
+    keySel.dispatchEvent(new Event("change"));   // 选项重建后重同步归档面板/回退框显隐
+  }
+
   const drawer = document.getElementById("modelDrawer");
   if (drawer && !drawer.dataset.liveBound) {
     drawer.dataset.liveBound = "1";
     drawer.querySelector(".drawer-foot .btn.primary").addEventListener("click", async () => {
-      const inputs = drawer.querySelectorAll(".drawer-body input.in");
-      const type = drawer.querySelector(".drawer-body select.in").value;
+      // 直属 .field 的输入 = 名称/base_url/model（密钥区输入嵌套在 #mKeyArchive，不在此列）
+      const fields = [...drawer.querySelectorAll(".drawer-body > .field > input.in")];
+      const type = drawer.querySelector(".drawer-body select.in").value;   // 首个 select = 类型
+      const name = fields[0].value.trim();
+      let keyEnv = "";
+      const keySel = document.getElementById("mKeySel");
+      if (keySel.value === "__archive__") {   // 现场归档：先密文落盘再注册
+        const an = document.getElementById("mKeyArcName").value.trim();
+        const av = document.getElementById("mKeyArcVal").value;
+        if (!an || !av) { fapiToast("现场归档需填写密钥名与密钥值", true); return; }
+        try { await FAPI.req("PUT", `/secrets/${encodeURIComponent(an)}`, { value: av }); }
+        catch (err) { fapiToast(`密钥归档失败：${err.message}`, true); return; }
+        keyEnv = an;
+      } else {
+        keyEnv = keyEnvValue(keySel);
+      }
       try {
-        await FAPI.post("/models", { name: inputs[0].value.trim(), type,
-          base_url: inputs[1].value.trim(), model: inputs[2].value.trim(),
-          api_key_env: inputs[3].value.trim(), params: {} });
+        const out = await FAPI.post("/models", { name, type,
+          base_url: fields[1].value.trim(), model: fields[2].value.trim(),
+          api_key_env: keyEnv || undefined, params: {} });
         drawer.hidden = true;
-        fapiToast(`模型 ${inputs[0].value.trim()} 已注册`);
+        fapiToast(`模型 ${name} 已注册`
+          + (keyEnv && out.key_archived === false
+            ? `（⚠ 密钥 ${keyEnv} 未归档且环境变量未设置，运行时将无鉴权——先到密钥库录入）` : ""));
         await wireCommonModelsPage();
       } catch (err) { fapiToast(`注册失败：${err.message}`, true); }
     });
   }
 }
 
-/* ---------------- 公共 · 版本管理（common2.html，全局版本登记 §10.6） ---------------- */
+/* ---------------- 公共 · 版本管理页（common2.html，全局版本创建 §10.6） ---------------- */
 async function wireCommonVersions() {
-  const [verData, dbData] = await Promise.all([
-    FAPI.get("/versions"),
-    FAPI.get("/models").catch(() => ({ items: [] })),
-  ]);
+  const verData = await FAPI.get("/versions");
   const rows = verData.items;
   const tbl = document.getElementById("versionsTbl");
   tbl.innerHTML = `
-    <thead><tr><th>模型</th><th>版本</th><th>说明</th><th>登记时间</th>
+    <thead><tr><th>版本号</th><th>说明</th><th>创建时间</th>
     <th style="text-align:right">操作</th></tr></thead>
     <tbody>${rows.length ? rows.map(v => `<tr>
-      <td class="rname"><b class="mono">${v.model}</b></td>
-      <td class="mono">${v.version}</td>
+      <td class="mono"><b>${v.version}</b></td>
       <td class="dim" style="white-space:normal">${v.description || "—"}</td>
       <td class="dim">${fapiShortTime(v.created_at)}</td>
       <td style="text-align:right"><button class="btn sm danger" data-del-ver="${v.id}">删除</button></td></tr>`).join("")
-      : '<tr><td colspan="5" class="ds-empty">暂无登记版本 —— 下方表单登记后，精度/功能任务发起即可按模型选择被测版本</td></tr>'}</tbody>`;
+      : '<tr><td colspan="4" class="ds-empty">暂无版本 —— 下方表单创建后，精度/功能任务发起即可选择被测版本</td></tr>'}</tbody>`;
   if (!tbl.dataset.liveBound) {
     tbl.dataset.liveBound = "1";
     tbl.addEventListener("click", async e => {
       const del = e.target.closest("[data-del-ver]");
-      if (!del || !confirm("删除该版本登记?（历史任务/归档持版本字符串不受影响）")) return;
+      if (!del || !confirm("删除该版本?（历史任务/归档持版本字符串不受影响）")) return;
       try { await FAPI.del(`/versions/${del.dataset.delVer}`); }
       catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
       await wireCommonVersions();
     });
   }
-  // 登记表单：模型下拉 = 注册模型 + 登记过的模型名（支持手填其他）
-  const sel = document.getElementById("verModelSel");
-  const names = [...new Set([...dbData.items.map(m => m.name),
-                             ...rows.map(v => v.model)])];
-  sel.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join("")
-    + '<option value="__other__">其他（手填）</option>';
-  let nameIn = document.getElementById("verModelOther");
-  if (!nameIn) {
-    nameIn = document.createElement("input");
-    nameIn.className = "in"; nameIn.id = "verModelOther";
-    nameIn.placeholder = "模型名（如 deepseek）"; nameIn.style.display = "none";
-    sel.insertAdjacentElement("afterend", nameIn);
-  }
-  if (!sel.dataset.liveBound) {
-    sel.dataset.liveBound = "1";
-    sel.addEventListener("change", () => {
-      nameIn.style.display = sel.value === "__other__" ? "" : "none";
-    });
-    document.getElementById("verSave").addEventListener("click", async () => {
-      const model = (sel.value === "__other__" ? nameIn.value : sel.value).trim();
+  // 创建表单：版本与模型无关，只填版本号 + 说明（可选）
+  const save = document.getElementById("verSave");
+  if (!save.dataset.liveBound) {
+    save.dataset.liveBound = "1";
+    save.addEventListener("click", async () => {
       const version = document.getElementById("verVersionIn").value.trim();
       const description = document.getElementById("verDescIn").value.trim();
       const hint = document.getElementById("verHint");
-      if (!model || !version) { fapiToast("模型与版本号均必填", true); return; }
+      if (!version) { fapiToast("版本号必填", true); return; }
       try {
-        await FAPI.post("/versions", { model, version, description });
+        await FAPI.post("/versions", { version, description });
         document.getElementById("verVersionIn").value = "";
         document.getElementById("verDescIn").value = "";
-        if (hint) hint.textContent = `已登记：${model} ${version}`;
-        fapiToast(`版本 ${model} ${version} 已登记（精度/功能发起可选）`);
+        if (hint) hint.textContent = `已创建：${version}`;
+        fapiToast(`版本 ${version} 已创建（精度/功能发起可选）`);
         await wireCommonVersions();
-      } catch (err) { fapiToast(`登记失败：${err.message}`, true); }
+      } catch (err) { fapiToast(`创建失败：${err.message}`, true); }
+    });
+  }
+}
+
+/* ---------------- 公共 · 数据集管理页（common2.html：目录 + 路径/在线源设置 + 导入抽屉） ---------------- */
+let DS_ROWS = [];
+
+function dsRef(r) { return `${r.type}:${r.name}`; }
+function dsStatsCell(stats) {
+  if (!stats || !Object.keys(stats).length) return "—";
+  const count = stats.count !== undefined ? `${stats.count} 条` : "";
+  const rest = Object.entries(stats).filter(([k]) => k !== "count").slice(0, 3)
+    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v).slice(0, 30) : v}`);
+  return [count, ...rest].filter(Boolean).join(" · ") || "—";
+}
+/* 来源类别（origin 由后端合并层给出）：在线=HF 镜像/远程直链拉取，其余=本地 */
+function dsOriginTag(r) {
+  return r.origin === "online"
+    ? '<span class="tag t-online">在线</span>'
+    : '<span class="tag">本地</span>';
+}
+/* 统一筛选框的分组与实时计数（mock/live 共用，行字段对齐后端合并行） */
+function dsBuildGroups(rows) {
+  const n = fn => rows.filter(fn).length;
+  const type = rows.filter(r => r.origin === "online").length;
+  return [
+    { key: "type", label: "类型", options: [
+      { value: "functional", label: "功能 functional", count: n(r => r.type === "functional") },
+      { value: "accuracy", label: "精度 accuracy", count: n(r => r.type === "accuracy") },
+      { value: "perf", label: "性能 perf", count: n(r => r.type === "perf") }] },
+    { key: "origin", label: "来源", options: [
+      { value: "local", label: "本地", count: rows.length - type },
+      { value: "online", label: "在线", count: type }] },
+    { key: "reg", label: "登记状态", options: [
+      { value: "in", label: "已登记", count: n(r => r.registered !== false) },
+      { value: "out", label: "未登记", count: n(r => r.registered === false) }] },
+  ];
+}
+function dsFilterMatch(r, sel) {
+  const pick = k => (sel || {})[k] || [];
+  if (pick("type").length && !pick("type").includes(r.type)) return false;
+  const origin = r.origin === "online" ? "online" : "local";
+  if (pick("origin").length && !pick("origin").includes(origin)) return false;
+  const reg = r.registered === false ? "out" : "in";
+  if (pick("reg").length && !pick("reg").includes(reg)) return false;
+  return true;
+}
+function dsRenderTable() {
+  const rows = DS_ROWS.filter(r => dsFilterMatch(r, window.DS_FILTERS));
+  document.getElementById("dsTbl").innerHTML = `
+    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>stats</th><th>path</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const ref = encodeURIComponent(dsRef(r));
+      const unreg = r.registered === false;
+      const originCell = dsOriginTag(r) + (unreg
+        ? ' <span class="badge pending" title="本机已有（注册表/目录），尚未登记 catalog；走一次导入即可入册"><i></i>未登记</span>'
+        : "");
+      return `<tr>
+      <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${r.name}</b>
+        <div class="rid mono faint">${(r.id || "").slice(0, 8)}</div></td>
+      <td style="white-space:nowrap">${originCell}</td>
+      <td class="dim" style="white-space:normal">${dsStatsCell(r.stats)}</td>
+      <td class="mono faint" style="font-size:11px">${r.path || "—"}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="${dsRef(r)}" title="查看该数据集自己的来源/统计/notes">详情</button>
+      <a class="btn sm" href="${FAPI.base}/datasets/${ref}/download" title="下载数据集文件">下载</a>
+      ${unreg ? "" : `<button class="btn sm danger" data-ds-del="${dsRef(r)}">删除</button>`}</td></tr>`;
+    }).join("")
+      || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
+}
+function dsOpenDetail(ref) {
+  const r = DS_ROWS.find(x => dsRef(x) === ref);
+  if (!r) return;
+  document.getElementById("dsDetailTitle").textContent = `数据集详情 · ${r.type}/${r.name}`;
+  const kvs = [
+    ["类型", `<span class="tag">${r.type}</span>`],
+    ["名称", `<b class="mono">${r.name}</b>`],
+    ["登记 id", `<span class="mono faint">${r.id}</span>`],
+    ["来源", `${dsOriginTag(r)} <span class="dim">${r.source || "—"}</span>`],
+    ["version（复现凭证：HF split / 生成 seed）", r.version ? `<span class="tag mono">${r.version}</span>` : "—"],
+    ["规模 stats", dsStatsCell(r.stats)],
+    ["文件路径", r.path ? `<span class="mono" style="font-size:12px">${r.path}</span>` : "—"],
+    ["schema_version", r.schema_version || "1"],
+    ["notes", r.notes || "—"],
+  ];
+  document.getElementById("dsDetailBody").innerHTML =
+    `<div class="ds-detail">${kvs.map(([k, v]) =>
+      `<div class="ds-kv"><span>${k}</span><div>${v}</div></div>`).join("")}</div>`;
+  document.getElementById("dsDetailDl").href =
+    `${FAPI.base}/datasets/${encodeURIComponent(ref)}/download`;
+  document.getElementById("dsDetailDel").dataset.dsDel = ref;
+  document.getElementById("dsDetail").hidden = false;
+}
+async function wireCommonDatasetsPage() {
+  const data = await FAPI.get("/datasets");
+  DS_ROWS = data.items || [];
+  if (window.dsFB) window.dsFB.setGroups(dsBuildGroups(DS_ROWS));
+  dsRenderTable();
+  const tbl = document.getElementById("dsTbl");
+  if (tbl && !tbl.dataset.liveBound) {
+    tbl.dataset.liveBound = "1";
+    tbl.addEventListener("click", async e => {
+      const view = e.target.closest("[data-ds-view]");
+      if (view) { dsOpenDetail(view.dataset.dsView); return; }
+      const del = e.target.closest("[data-ds-del]");
+      if (!del) return;
+      if (!confirm(`删除数据集登记 ${del.dataset.dsDel}?（文件保留）`)) return;
+      try {
+        await FAPI.del(`/datasets/${encodeURIComponent(del.dataset.dsDel)}`);
+        fapiToast("已删除登记（数据文件保留）");
+      } catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+      await wireCommonDatasetsPage();
+    });
+  }
+}
+async function wireDatasetSettings() {
+  const snap = await FAPI.get("/datasets/settings");
+  const fill = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ""; };
+  fill("dsSetDir", snap.settings.datasets_dir);
+  fill("dsSetCache", snap.settings.cache_dir);
+  fill("dsSetHf", snap.settings.hf_endpoint);
+  fill("dsSetRemote", snap.settings.remote_url);
+  const lockNotes = [];
+  if (snap.env_locked.datasets_dir) lockNotes.push("datasets_dir 被 AITE_DATASETS_DIR 覆盖");
+  if (snap.env_locked.cache_dir) lockNotes.push("cache_dir 被 HF_HOME 覆盖");
+  if (snap.env_locked.hf_endpoint) lockNotes.push("hf_endpoint 被 HF_ENDPOINT 覆盖");
+  if (snap.env_locked.remote_url) lockNotes.push("remote_url 被 AITE_DATASET_REMOTE_URL 覆盖");
+  if (lockNotes.length) lockNotes.push("环境变量优先于设置文件");
+  const lockEl = document.getElementById("dsSetLock");
+  if (lockEl) lockEl.textContent = lockNotes.join(" · ");
+  const save = document.getElementById("dsSetSave");
+  if (save && !save.dataset.liveBound) {
+    save.dataset.liveBound = "1";
+    save.addEventListener("click", async () => {
+      const val = id => document.getElementById(id).value.trim();
+      const patch = { hf_endpoint: val("dsSetHf"), remote_url: val("dsSetRemote") };
+      if (val("dsSetDir")) patch.datasets_dir = val("dsSetDir");
+      if (val("dsSetCache")) patch.cache_dir = val("dsSetCache");
+      try {
+        await FAPI.put("/datasets/settings", patch);
+        fapiToast("数据集设置已保存（上传/导入/下载即时走新路径）");
+        await wireDatasetSettings();
+      } catch (err) { fapiToast(`保存失败：${err.message}`, true); }
+    });
+  }
+  const probe = document.getElementById("dsProbeBtn");
+  if (probe && !probe.dataset.liveBound) {
+    probe.dataset.liveBound = "1";
+    probe.addEventListener("click", async () => {
+      const hfB = document.getElementById("dsProbeHf"), rmB = document.getElementById("dsProbeRemote");
+      const hint = document.getElementById("dsProbeHint");
+      probe.disabled = true;
+      if (hint) hint.textContent = "探测中…";
+      try {
+        const st = await FAPI.get("/datasets/online/status");
+        const hf = st.hf, rm = st.remote;
+        const setBadge = (el, cls, txt) => {
+          if (!el) return;
+          el.hidden = false;
+          el.className = `badge ${cls}`;
+          el.innerHTML = `<i></i>${txt}`;
+        };
+        setBadge(hfB, hf.ok ? "passed" : "failed",
+          `HF 镜像 ${hf.ok ? `通 · ${hf.latency_ms}ms` : `不通（${hf.error || hf.status}）`}`);
+        setBadge(rmB, !rm.configured ? "pending" : (rm.ok ? "passed" : "failed"),
+          `远程源 ${!rm.configured ? "未配置" : (rm.ok ? `通 · ${rm.latency_ms}ms` : `不通（${rm.error}）`)}`);
+        if (hint) hint.textContent = hf.ok
+          ? "HF 通：用「HF 镜像仓」导入" : "HF 不通：配好 remote_url 后用「远程直链」导入";
+      } catch (err) { if (hint) hint.textContent = `探测失败：${err.message}`; }
+      finally { probe.disabled = false; }
+    });
+  }
+}
+async function wireDatasetImportDrawer() {
+  // 导入抽屉提交：按当前来源模式分发（来源参数属于数据集自己，逐项读）
+  const go = document.getElementById("dsImpGo");
+  if (go && !go.dataset.liveBound) {
+    go.dataset.liveBound = "1";
+    go.addEventListener("click", async () => {
+      const mode = document.querySelector("#dsModeChips .chip.on")?.dataset.dsmode || "upload";
+      const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+      const name = val("dsImpName"), notes = val("dsImpNotes");
+      const force = document.getElementById("dsImpForce").checked;
+      try {
+        let doneMsg = "";
+        if (mode === "functional") {
+          if (!name) { fapiToast("请填数据集名（类型下唯一）", true); return; }
+          await FAPI.post("/datasets/functional/import",
+            { name, jsonl: document.getElementById("dsImpText").value, notes, force });
+          doneMsg = `功能数据集 ${name} 已导入（harness.Case 校验通过）`;
+        } else if (mode === "hf") {
+          const hfId = val("dsHfId");
+          if (!hfId) { fapiToast("请填 HF dataset id（如 openai/gsm8k）", true); return; }
+          const n = val("dsHfN"), seed = val("dsHfSeed");
+          go.disabled = true;
+          fapiToast("HF 拉取中（下载→转换→采样，视数据集大小可能要一会儿）…");
+          const row = await FAPI.post("/datasets/hf/import", {
+            hf_id: hfId, name: name || undefined,
+            split: val("dsHfSplit") || "test",
+            subset: val("dsHfSubset") || undefined,
+            n: n ? Number(n) : undefined,
+            seed: seed ? Number(seed) : 42,
+            fields: val("dsHfFields") || undefined, notes });
+          doneMsg = `已导入 accuracy/${row.name}（${(row.stats || {}).count ?? "—"} 条，之后完全离线可用）`;
+        } else if (mode === "remote") {
+          if (!name) { fapiToast("请填数据集名（类型下唯一）", true); return; }
+          go.disabled = true;
+          const row = await FAPI.post("/datasets/remote/import", {
+            type: document.getElementById("dsRemoteType").value,
+            name, url: val("dsRemoteUrl"), notes, force });
+          doneMsg = `已导入 ${row.type}/${row.name}（${(row.stats || {}).count ?? "—"} 条）`;
+        } else {
+          if (!name) { fapiToast("请填数据集名（类型下唯一）", true); return; }
+          const file = document.getElementById("dsImpFile").files[0];
+          if (!file) { fapiToast("请选择数据集文件（.jsonl/.json/.csv）", true); return; }
+          const text = await file.text();
+          await FAPI.post("/datasets/upload",
+            { type: "accuracy", name, filename: file.name, content: text, notes, force });
+          doneMsg = `精度数据集 ${name} 已上传（规范化为 jsonl 落位数据集目录）`;
+        }
+        document.getElementById("dsImport").hidden = true;
+        fapiToast(doneMsg);
+        await wireCommonDatasetsPage();
+      } catch (err) { fapiToast(`导入失败：${err.message}`, true); }
+      finally { go.disabled = false; }
+    });
+  }
+  // 详情抽屉「删除登记」：与目录行删除同语义（仅删登记，文件保留）
+  const delBtn = document.getElementById("dsDetailDel");
+  if (delBtn && !delBtn.dataset.liveBound) {
+    delBtn.dataset.liveBound = "1";
+    delBtn.addEventListener("click", async () => {
+      const ref = delBtn.dataset.dsDel;
+      if (!ref || !confirm(`删除数据集登记 ${ref}?（文件保留）`)) return;
+      try { await FAPI.del(`/datasets/${encodeURIComponent(ref)}`); }
+      catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+      fapiToast("已删除登记（数据文件保留）");
+      document.getElementById("dsDetail").hidden = true;
+      await wireCommonDatasetsPage();
+    });
+  }
+}
+
+/* ---------------- 公共 · 在线数据集（导入抽屉「在线数据集」模式内的基准库） ---------------- */
+let DS_ONLINE = [];
+let DS_ONLINE_ONLY = false;
+let DS_ONLINE_SEL = "";
+
+function dsOnlineBadgeCell(b) {
+  if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;
+  if (b.local_like) return `<span class="badge pending"><i></i>近似 · ${b.local_like}</span>`;
+  return '<span class="dim">—</span>';
+}
+function dsOnlineFiltered() {
+  const q = (document.getElementById("dsOnlineSearch")?.value || "").trim().toLowerCase();
+  return DS_ONLINE.filter(b => {
+    if (DS_ONLINE_ONLY && !b.local) return false;
+    if (!q) return true;
+    return [b.name, b.pretty_name, b.dataset_id, (b.tags || []).join(" ")]
+      .some(v => String(v || "").toLowerCase().includes(q));
+  });
+}
+function dsOnlineRender() {
+  const tbl = document.getElementById("dsOnlineTbl");
+  if (!tbl) return;
+  const rows = dsOnlineFiltered();
+  tbl.innerHTML = `
+    <thead><tr><th>基准</th><th>dataset_id</th><th>标签</th><th>指标</th><th>subsets</th><th>本机</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${rows.map(b => `<tr class="${b.name === DS_ONLINE_SEL ? "on" : ""}">
+      <td class="rname"><b class="mono">${b.name}</b><div class="rid mono faint">${b.pretty_name && b.pretty_name !== b.name ? b.pretty_name : ""}</div></td>
+      <td class="mono dim" style="font-size:11px">${b.dataset_id || "—"}</td>
+      <td class="dim">${(b.tags || []).slice(0, 4).map(t => `<span class="tag">${t}</span>`).join(" ")}</td>
+      <td class="mono dim" style="font-size:11px">${(b.metrics || []).join(", ") || "—"}</td>
+      <td class="dim">${(b.subsets || []).length}</td>
+      <td>${dsOnlineBadgeCell(b)}</td>
+      <td style="text-align:right"><button class="btn sm" data-ds-online="${b.name}">选用</button></td>
+    </tr>`).join("") || '<tr><td colspan="7" class="ds-empty">无匹配（换个关键词试试）</td></tr>'}</tbody>`;
+  const only = document.getElementById("dsOnlineLocalOnly");
+  if (only) {
+    const small = only.querySelector("small");
+    if (small) small.textContent = DS_ONLINE.filter(b => b.local).length;
+    only.classList.toggle("on", DS_ONLINE_ONLY);
+  }
+}
+/* 基准库点选：填入下方参数区（dataset id + 名称），再按需调 split/采样后提交 */
+function dsOnlineSelect(name) {
+  const b = DS_ONLINE.find(x => x.name === name);
+  if (!b) return;
+  DS_ONLINE_SEL = name;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set("dsHfId", b.dataset_id || "");
+  set("dsImpName", b.name || "");
+  dsOnlineRender();
+  fapiToast(`已选用 ${b.pretty_name || b.name}：确认 split/采样参数后点「校验并导入」`);
+}
+async function wireDatasetOnlinePage() {
+  const tbl = document.getElementById("dsOnlineTbl");
+  if (!tbl) return;
+  const badge = document.getElementById("dsOnlineBadge");
+  try {
+    const data = await FAPI.get("/datasets/online/datasets");
+    DS_ONLINE = data.items || [];
+    if (badge) {
+      badge.hidden = false;
+      badge.className = "badge passed";
+      badge.innerHTML = `<i></i>evalscope ${data.count} 个 · 本机已有 ${data.local_ready}`;
+    }
+    dsOnlineRender();
+  } catch (err) {
+    if (badge) { badge.hidden = false; badge.className = "badge failed"; badge.innerHTML = "<i></i>基准库列举失败"; }
+    tbl.innerHTML = `<tbody><tr><td colspan="7" class="ds-empty">在线数据集列举失败：${err.message}</td></tr></tbody>`;
+    return;
+  }
+  const search = document.getElementById("dsOnlineSearch");
+  if (search && !search.dataset.liveBound) {
+    search.dataset.liveBound = "1";
+    search.addEventListener("input", dsOnlineRender);
+  }
+  const only = document.getElementById("dsOnlineLocalOnly");
+  if (only && !only.dataset.liveBound) {
+    only.dataset.liveBound = "1";
+    only.addEventListener("click", () => {
+      DS_ONLINE_ONLY = !DS_ONLINE_ONLY;
+      dsOnlineRender();
+    });
+  }
+  if (!tbl.dataset.liveBound) {
+    tbl.dataset.liveBound = "1";
+    tbl.addEventListener("click", e => {
+      const btn = e.target.closest("[data-ds-online]");
+      if (btn) dsOnlineSelect(btn.dataset.dsOnline);
     });
   }
 }
 
 /* ------------------------------------------------------------------ boot */
-const BUILTIN_IDS = ["agent_tasks", "api_limits", "api_params", "api_shape",
-  "api_stream", "basic_chat", "long_context", "structured_output", "tool_calling"];
 
 async function fapiBoot() {
   let live = false;
@@ -1558,13 +2246,21 @@ async function fapiBoot() {
     catch (err) { fapiToast(`模型管理对接失败：${err.message}`, true); }
     try { await wireCommonVersions(); }                        // 版本管理（§10.6）
     catch (err) { fapiToast(`版本管理对接失败：${err.message}`, true); }
+    try { await wireCommonDatasetsPage(); }                    // 数据集目录（§12）
+    catch (err) { fapiToast(`数据集目录对接失败：${err.message}`, true); }
+    try { await wireDatasetSettings(); }                       // 全局设置（存储位置/在线源默认值）
+    catch (err) { fapiToast(`数据集设置对接失败：${err.message}`, true); }
+    try { await wireDatasetOnlinePage(); }                     // 在线数据集（evalscope 原生基准全集）
+    catch (err) { fapiToast(`在线数据集对接失败：${err.message}`, true); }
+    try { await wireDatasetImportDrawer(); }                   // 导入抽屉（四来源提交）+ 详情删除绑定
+    catch (err) { fapiToast(`数据集导入对接失败：${err.message}`, true); }
     return;
   }
   if (!document.getElementById("scriptsTbl")) return;         // 其余静态页不对接口
   // 逐段 fail-soft：单板块失败 toast 告知，不推翻整页 LIVE 状态（ping 才是权威）
   const steps = [
-    ["场景", wireScenarios], ["脚本库", wireScripts], ["任务列表", wireTasks],
-    ["版本结果库", wireResults], ["模型下拉", wireModels],
+    ["场景", wireScenarios], ["工具库", wireTools], ["脚本库", wireScripts], ["任务列表", wireTasks],
+    ["版本结果库", wireResults], ["模型下拉", wireModels], ["被测版本", wireTaskVersions],
   ];
   for (const [label, fn] of steps) {
     try {
@@ -1575,6 +2271,7 @@ async function fapiBoot() {
     }
   }
   bindLiveForm();
+  bindToolsUi();
   bindTaskSubmit();
   startLivePolling();
   // 刷新后停在详情页：仅当刷新时确实停在详情页（hash #detail / #detail/<id>）
@@ -1589,7 +2286,10 @@ async function fapiBoot() {
   fapiToast("已对接真实后端（数据真读写；任务状态 5s 自动同步）");
 }
 
-document.addEventListener("DOMContentLoaded", () => setTimeout(fapiBoot, 80));
+// 启动收尾（含 MOCK / 不对接页的提前返回）在 <html data-api-ready> 落标记：自动化验证据此等待监听绑定完成
+document.addEventListener("DOMContentLoaded", () => setTimeout(() => fapiBoot().finally(() => {
+  document.documentElement.dataset.apiReady = FAPI.live ? "live" : "mock";
+}), 80));
 
 // 动态重渲染的 [data-open-drawer] 按钮没有 v1.js 的启动期监听（脚本库行「定向执行」、
 // 场景卡「过滤跑 →」等）——文档级委托兜底；与启动期监听重复触发幂等（同为 unhide）。

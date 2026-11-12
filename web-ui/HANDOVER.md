@@ -9,13 +9,13 @@
 > 与 /versions；新表 model_version 由 create_all 自动建）+ `cd web-ui\mockups && python serve.py 8765`
 > → 外部浏览器开 **accuracy2.html**（精度，LIVE 徽标=真后端）/ **common2.html**（模型+版本+密钥管理）。
 >
-> **精度/agent 数据链路（全部已实装）**：脚本库（18 个 builtin 预置 = examples/accuracy/*.yaml 扫描，
+> **精度/agent 数据链路（全部已实装；2026-11-08 改版：预置脚本全删、场景/脚本用户自建、清单带数据集+条数，见 docs/domain-backends.md §17；前端已重对接 = accuracy2.html + api-acc3.js）**：脚本库（原 18 个 builtin 预置 = examples/accuracy/*.yaml 扫描，
 > 含 agent_eval/swebench 等 agent 预置）→ 创建任务（从脚本发起=spec 整体复用 / 自定义六卡=suite raw
 > 组装，映射契约 TOOL-SUITE-PARAMS.md）→ POST /accuracy/tasks + run → 任务列表/详情（指标汇总表含
 > tool_call_correctness 等 agent 指标、失败样本、报告产物路径）。数据集选择器 = GET /tools/benchmarks
 > 真目录（含 gaia/xlam_fc 等 Agent 型）；模型下拉 = /common/models 预制 + DB 注册 + 自定义端点；
-> **被测版本 = 全局版本管理**（common2 模型管理页「版本管理」卡登记 → 精度创建抽屉 datalist 选择 +
-> 「＋ 新版本」就地登记，契约 V1-PLAN §10.6）。
+> **被测版本 = 全局版本管理**（common2「版本管理」页创建 → 精度创建抽屉 datalist 选择 +
+> 「＋ 新版本」就地创建，契约 V1-PLAN §10.6）。
 >
 > **本轮新增后端**：`service/accuracy_assets.py` + `routers/accuracy.py`（GET/POST/PATCH/DELETE
 > /accuracy/scripts，builtin 只读 409 / 自定义落 `data/accuracy/scripts/<id>.yaml`，保存经
@@ -27,8 +27,7 @@
 > （api-acc1 已删）。改 js 内容必须换新文件名。
 >
 > **悬留**：趋势对比/人工评测两页仍为演示数据（趋势聚合 = V1-PLAN §8.6 缺口）；定时执行未实装
-> （前端显式拦截提示）；产物下载端点（§8.7）；脚本编辑 UI（后端 PATCH 已有）；功能域版本输入
-> 尚未切全局登记（沿用功能归档 datalist）。
+> （前端显式拦截提示）；产物下载端点（§8.7）；脚本编辑 UI（后端 PATCH 已有）。
 > 冒烟脚本 `scripts/smoke_acc_live.py`（隔离 DB 可复跑）；详见文末决策 42–43。
 >
 > ⚠️ **上一轮交接（2026-10-15/16，功能域）**：
@@ -822,3 +821,335 @@
     隔离冒烟：/versions 全链路 + 精度任务 spec.version 引用登记版本 + 脚本库
     回归，用户库零污染。**注意**：model_version 表由重启时 create_all 自动建
     （用户 8300 旧进程须重启）。
+
+- 2026-11-09 用例明细列表化 + 编辑直达（api32.js，需 dataset 后端修复配套见 roadmap 续七）：
+    任务详情「用例明细」从 details 卡片改列表行：状态徽标 + 行 id + 用例 id/类型/等级
+    标签 + 失败首行红字 +「编辑」「详情」；详情展开输入（复制 JSON/curl/下载）/输出/
+    断言对照/引擎日志，默认收起，行头点击开合（委托单绑定 __caseRowBound）。「编辑」
+    editCaseRow(rowId, dataset)：场景清单 → 逐脚本匹配行 id → openEditScript 开抽屉
+    （行卡回填态）→ .ns-rid 定位 scrollIntoView + 2s 高亮；场景缺失/行不存在 toast。
+    依赖后端：save_tool_case_record 行级 dataset 落场景名（旧 run 无 dataset → 不可跳，
+    属预期提示）。缓存版本号 bump：functional2 v=2→v=3、common2 v=1→v=2（同文件改内容防 IAB 路径缓存）。
+
+- 2026-11-09 新建脚本数据行卡折叠（functional2.html + v1.css + api32.js，用户「新旧行分割不清，
+    添加一行后旧行折叠只留 id/等级等描述，JSON 行边界要清晰」）：行卡 = head（恒可见：▾ + 行号
+    胶囊 + 摘要 + 复制/删除）+ body（编辑区），data-collapsed 开合，点行头任意处切换。折叠摘要
+    两行：行 id / 用例 id / 类型 / 等级标签 + request✓·断言数·占位符数，次行描述（超长省略，
+    title 全文），由 nsUpdateSummary 随输入实时刷新；展开态行头只显示「编辑中」。nsRevealRow
+    （其余折叠 + 本行展开 + 滚动定位）用于：＋添加数据行、复制此行、保存校验报错（api32
+    nsCheckingRow 记录出错行卡）、用例明细编辑直达；nsCollapseForReview（多行全折叠、单行保持
+    展开）用于：从 jsonl 导入、openEditScript。边界：行卡间距 14px、左 3px 色条（折叠灰 / 展开
+    主题色 + 主题色描边 + 行头浅底），折叠行的复制/删除 hover 才显现。submitNewScript 行号改取
+    .ns-row-no（.seg-title 随结构移除）。IAB 实测：添加折叠 / 导入 3 行 / 保存报错展开出错行
+    （零写入）/ 编辑 7 行脚本全折叠。缓存版本号：v1.css v=18→19（五页同步）、api32.js v=1→2。
+
+- 2026-11-09 静态稿验证工具化（效率复盘「优化动作落地」）：
+    ① `scripts/mockup_symbols.py`：`<页面> <函数名…>` 按加载顺序列出定义处并标生效处；
+    `--check` 查跨脚本覆盖、同脚本重复定义、同一文件在各页 `?v=` 不一致（已进 AGENTS.md
+    门禁速查）。首跑抓到 reliability3 的 renderLib 被套了一层同名外壳（「保存为场景」监听写在
+    外壳里，多调一次外壳就重复绑定），已拆掉外壳，IAB 实测每点一次只加一行。
+    ② `web-ui/mockups/iab_helpers.mjs`：domClick / domFill / waitUntil / waitForApi /
+    guardWrites（默认把非 GET 拦成 418，验证期不写后端）/ stubDialogs。
+    ③ api32.js、api-acc3.js 启动收尾（含 MOCK 提前返回）写 `<html data-api-ready="live|mock">`：
+    保存等监听在 bindLiveForm 里、全部板块对接完才绑，加载后立刻点按钮会落空（IAB 实测踩到）。
+    缓存版本号：api32.js 两页统一 v=4（functional2 v=3→4、common2 v=2→4），api-acc3.js v=1→2。
+
+- 2026-11-10 功能任务支持重试 / 复制（functional2.html + api32.js，用户「功能的任务需要支持重试和
+    复制功能」）：任务列表操作列与任务详情顶栏按状态渲染动作按钮——pending「运行」、running「停止」、
+    终态（succeeded/failed/cancelled/stale）「重试」、任意状态「复制」，统一走 api32
+    `fapiTaskAction(action, 行下标|任务 id, event)`（行内按钮 stopPropagation 不触发行点击进详情；
+    详情页操作后重渲染当前详情）。重试 = `POST /functional/tasks/{id}/retry` 建新任务（retry_of 链）
+    后立即 `/run`；复制 = 新端点 `POST /functional/tasks/{id}/duplicate`，同 spec 新 pending 任务、
+    名字加「· 副本」、不记 retry 链，留在列表由「运行」发起（「运行」「停止」是为复制补齐的生命周期
+    入口，此前页面只能在新建抽屉里一键建+跑）。mock 模式按钮照常渲染、点击只提示需 live；mock 行状态
+    passed→succeeded 与筛选 chip（data-status="succeeded"）对齐。后端：taskkit.duplicate + 四域路由
+    工厂同形端点 + CLI `aite {域} tasks dup <id>`（契约见 docs/domain-backends.md §2/§3/§4/§7）。
+    缓存版本号：api32.js 两页统一 v=4→5。
+
+- 2026-11-10 抽屉点空白关闭 + 未保存提示（assets/v1.js + v1.css，五页生效；用户「创建任务或脚本、
+    评估场景时，点击空白处关闭右侧抽屉，并给是否保存的提示」）：bindDrawers 用 MutationObserver 统一
+    感知各处直写 hidden 的抽屉开合、维护打开栈：栈顶抽屉下垫 `.drawer-mask` 遮罩（叠开时抽屉逐层
+    z+2、遮罩垫在栈顶下一层，点空白只关最上层）。点遮罩或头部 ✕ = 请求关闭，底栏「取消」仍直接关。
+    打开后用户在正文里真实输入 / 勾选 / 点选（isTrusted 的 input、change，及 chip / radio-card / ds-row /
+    button 点击；程序回填与 domFill 不算）记 `data-dirty`，有改动才弹「是否保存当前修改？」：不保存
+    （关闭）/ 继续编辑 / 保存——按钮文案取底栏主按钮，点它走原提交流程：成功由原流程关抽屉，失败留在
+    抽屉里看 toast；主按钮 disabled 则保存置灰。没有底栏主按钮的抽屉（脚本管理、perf 生成数据集）
+    点空白直接关。搜索框 / 纯视图开关标 `data-nodirty` 不计改动：functional `#ftSearch`、`#nsJsonlBtn`，
+    accuracy `#dsSearchBox`、`#advJsonToggle`；树的展开箭头 `.caret` 内置排除。「不保存」与「取消」同口径
+    只关闭不清空表单（重开是否清空仍由各打开入口决定）。IAB 实测（cua 真实鼠标/键盘，guardWrites 拦写）：
+    functional 新建场景 / 新建运行 / 脚本管理叠开新建脚本、reliability 发起实验（保存置灰）、accuracy
+    创建评测任务全链路通过。缓存版本号：v1.css v=19→20、v1.js v=14→15（五页同步）。
+
+- 2026-11-10 用例详情改为请求体 / 响应体原样展示（api32.js + harness.py，用户「每条用例的详情结果
+    把请求体和响应体原模原样打出来，不要自己拆字段」）：引擎 `_post` 返回的响应 dict 一律附
+    `_request`（{url, method, body}，body = 实际发出的原文：普通 / 流式为合并后的 payload，
+    `_raw_body` 为原始字符串，GET 为 null），随 output 落库；caseBlock 详情展开 = 请求体（标题带
+    method + url）/ 响应体（output 去掉 `_request` 后整体 JSON）/ 断言期望（expected 原样）/ 引擎
+    日志，长文本沿用 300 字符折叠。删除：按角色拆 messages、content 抽取 + finish_reason 等元信息
+    标签、前端逐断言重算（fapiExpectRows）、curl 拼装与 fapiPresets 预制解析。旧 run 无留痕时请求体
+    回退显示用例输入快照并在标题注明。静态 FAILS 卡同步为请求体 / 响应体。缓存版本号：api32.js
+    v=5→6（functional2 / common2 同步）。
+
+- 2026-11-10 验证工具与流程沉淀（owner「优化动作直接加、值得的固化成 skill」）：iab_helpers.mjs 增
+    isTrusted 真实输入四件套——cuaPoint（滚动 + 可见中心坐标，text 精确匹配文本）/ cuaClick / cuaEdit
+    （点中 + End + n×Backspace；keypress 不能插入字符）/ wakeInput（导航后 cua 零事件时截图唤醒），
+    模块导入实测通过；完整 runbook 固化为 workspace skill `.agents/skills/mockup-verify/`（门禁 →
+    起实例 → waitForApi → 输入方式选择 → 断言 → 收尾；脚手架示例目录已删），AGENTS「静态稿」节挂
+    指针、「优化动作」规则改为当场落地。另：8300 后端老进程（10-29 启动、无 --reload，缺当天新增的
+    /duplicate 路由）已按原命令行重启（miniconda evalscope env，新 PID 7504），任务数据原样，四域
+    retry / duplicate 齐全；8766 预览是纯静态 no-store 直读磁盘，无需重启。
+
+- 2026-11-11 用例详情「请求头」展示 + 老数据快照补全（owner：请求体要完整含 model/扩展参数，header 也要看）：
+    引擎 `_request` 留痕增加 headers（实际发送的合并头 = 默认鉴权 ⊕ 用例 `_headers`，落库前按敏感子串
+    打码——Authorization 等显示 `******`，凭证复现仍走环境注入）；抽取 `_mask_headers` 与
+    `_redact_params` 共用规则。api32.js caseBlock：请求体区上方新增「请求头」区（K: V 逐行 + 复制）；
+    旧 run 无留痕的回退快照从「仅 messages」改为 messages ⊕ raw.params（`_` 前缀控制键剔除，缺 model
+    在标题注明），与真实 payload 口径对齐。断言期望/失败首行展示保持不变（owner 认可直接）。
+    渲染门禁固化：web-ui/mockups/render_check.cjs + render_check_fixtures.json（5 类用例断言：
+    断言 400 实际 200 首行/请求头打码/完整请求体/流式留痕/旧数据快照/错误占位），改详情渲染先跑它。
+    缓存版本号：api32.js v=6→7（functional2 / common2 同步）。
+
+- 2026-11-11 精度域「评估场景」拆为独立导航页（owner：评估场景单独成页，不放脚本库里）：accuracy2
+    侧栏顺位改为 任务列表/任务详情/**评估场景**/脚本库/趋势对比/人工评测（对齐功能域）。新页 = 场景卡
+    片栅格（scene-grid：中文名/id/说明/维度标签/脚本数/例数 + 「查看脚本 →」跳脚本库带场景筛选 +
+    删除）+ 顶栏「＋ 新建评估场景」（原脚本库筛选行的场景新建/删除按钮整体迁出）；脚本库瘦身为纯脚本
+    清单 + 场景筛选（说明卡与空态文案指向评估场景页）。api-acc3.js：wireAccScripts 同时渲染场景卡
+    （live items 自带 scripts/cases 计数）+ setNavCount("scenarios")；场景删除抽 aapiDeleteScenario
+    （409 → 二次确认级联 force；AAPI.live=false 时降级为本地演示数据移除），废弃 accDelScenBtn /
+    aapiSyncScenDelBtn；保存为脚本、抽屉下拉的「先建场景」文案改指评估场景页。静态稿 mock 回退：内联
+    ACC_SCENS 演示卡 + 演示删除（同步脚本清单/筛选/计数）。IAB 隔离实例（8310 临时库 + 8776 反代）
+    全链路验证：导航/空态/建场景（注意：维度标签须取自共享标签库，API 契约/Agent/模型能力）→ 卡片与
+    徽章计数 → 查看脚本跳转筛选 → 删除回零 → mock 回退演示卡与演示删除；临时库与场景目录均无残留。
+    缓存版本号：api-acc3.js v=2→3（仅 accuracy2 引用；共享文件未动）。
+
+- 2026-11-11 模型管理：api_key_env 全平台改「密钥库下拉选择」（owner：手动预制模型、选择平台上已归档
+    的 API_KEY、调用时可选模型）：①共享助手落 v1.js——`wireKeySelect(sel, items)`（GET /secrets 的
+    items 灌选项，已归档密钥带 🔑 掩码 + 「仅环境变量（手填名字）」回退；容器约定 `<select data-keysel>`
+    + `<input data-keyenv>` 同包一层，回退框选中才露出；选项重建幂等，监听只挂一次）+ `keyEnvValue(sel)`
+    取最终 api_key_env 字符串；②common2 注册模型抽屉——api_key_env 手填框换密钥下拉 + 「＋ 现场归档
+    新密钥（密文落盘）」（mKeyArchive 面板：名+值 → 先 PUT /secrets 再 POST /models）+ 仅环境变量回退；
+    api32.js 提交逻辑改按 `.drawer-body > .field > input.in` 直属取值（密钥区输入嵌套不混入）；③后端
+    POST /models 响应加 `key_archived`（resolve_secret 试解析：环境变量 > 密钥库，未归档 false 不阻断、
+    密钥可后补录），前端 toast 附「⚠ 密钥 X 未归档且环境变量未设置」提示；④发起抽屉自定义端点面板同改
+    （functional2 ftModelCustom / accuracy2 accModelCustom + accScriptModelCustom；perf2、reliability3
+    仍纯静态未对接，不在本次范围），api32.js bindTaskSubmit 与 api-acc3.js aapiTargetOf 改读密钥下拉
+    （pane 内 `input.in:not([data-keyenv])` + `[data-keysel]`）。IAB 隔离实例（8310 临时库 + 8776 反代）
+    全链路验证：表单归档密钥 → 注册抽屉下拉带掩码 → 选归档密钥注册（表格 🔑 掩码 + 后端 api_key_env
+    落库）→ 现场归档路径（密文落盘 + 注册一并成功）→ 仅环境变量回退 + 未归档警告 toast → accuracy2
+    aapiTargetOf 两种路径 target 正确 → functional2 真实发起（任务 spec.target.api_key_env = 所选归档
+    密钥）；收尾停双实例、还原 data/common.yaml 与 .secrets.json（验证前备份）、删临时库。
+    缓存版本号：v1.js v=15→16（五页）、api32.js v=7→8（functional2/common2）、api-acc3.js v=3→4
+    （accuracy2）。运维注意：后端 routers/models.py 有改动，常驻 aite serve 需重启才有 key_archived。
+
+- 2026-11-11 版本管理对接收口 + 模型管理组拆三页（owner：要能手动创建版本，落库后所有需要版本的地方
+    都可选而不是手填；不要叫「登记」就叫「创建版本」；模型/版本/密钥统一放一个地方，左侧单独给模型管理
+    做导航栏）：①common2 模型管理组拆独立三页 = 模型管理/版本管理/密钥管理（page-list 加 versions/
+    secrets + v1.js GROUP 映射两组页归「模型管理」，侧栏自带三页导航；数据集/执行机维持单页通栏不变）；
+    版本页 = 版本清单 + 创建版本卡（模型下拉 = 注册 ∪ 创建过 ∪ 其他手填；空注册表只有「其他」一项时
+    dispatchEvent(change) 同步手填框显隐——新修的边界）；密钥页 = 密钥库 + 录入密钥（元素 id 不动，
+    wireCommonModelsPage/wireCommonVersions 零结构改动跨页生效）。②功能新建运行抽屉被测版本切全局版本
+    注册表：废弃「select→自由 input + 归档 datalist」转换（renderBoard 内删除），ftVerSel 保持下拉 =
+    GET /versions——当前模型有版本按模型过滤，没有则跨模型兜底（选项带「模型 · 版本」前缀；MODEL_SOURCES
+    补 name 字段供 ftPickModelName；换目标模型/手填模型名实时重过滤，重建选项保留现选中）；「＋ 新版本」
+    （ftVerNewBtn）就地创建 = ftCreateVersion（模型取当前所选，取不到 prompt 补问 → POST /versions →
+    回填下拉立即选中）；bindTaskSubmit 补被测版本必填校验。③措辞统一「登记→创建」（版本语境全扫）：
+    common2 创建版本卡、api32 wireCommonVersions（创建时间表头/空态/confirm/toast）、api-acc3
+    accRegisterVersion（prompt 文案 + toast 指路「公共 · 版本管理」页）、accuracy2 两处「＋ 新版本」
+    title + 自定义抽屉 tip、functional2 密钥 tip 指路「公共 · 密钥管理」。④后端零改动（model_version +
+    /versions 三接口 2026-10-24 已实装）；V1-PLAN §10.6 契约措辞与前端触点同步。IAB 隔离实例（8311
+    临时库 + 8777 反代；8310/8776 被并行会话占用）验证：模型管理组侧栏三页 → 版本页建版本（空注册表
+    手填路径）→ 功能抽屉下拉跨模型兜底带前缀 → 就地创建 v2.0-iab 立即选中且按模型过滤生效 → 切目标
+    模型实时重过滤 → 回 common2 两版本都在清单；截图目检布局正常；停实例删临时库。
+    缓存版本号：v1.js v=16→17（五页）、api32.js v=8→9（functional2/common2）、api-acc3.js v=4→5
+    （accuracy2）。静态稿改动刷新即生效，无需重启任何服务。
+
+- 2026-11-11 模型管理「一次新增出现俩」修复（api32.js，用户「模型管理中，一次新增模型会新增俩」）：
+  根因 = POST /models 落 DB 后有意同步 common.yaml 预制（target.profile 可引用），wireCommonModelsPage
+  把 /common/models（预制）与 /models（注册）两个来源都渲染进表格且不去重 → 每个注册模型显示
+  「预制」+「注册」两行。修法 = commonRows 过滤掉与 DB 注册同名的条目（registered Set），同名以
+  「注册」行为准；后端零改动，注册双写与删除同步（remove_model_profile）语义不变。IAB 隔离实例
+  （8310 临时库 + 8776 反代）验证：注册 e2e-dup-check 后表格仅一行「注册」，页面内 fetch 确认 DB 与
+  common.yaml 两侧条目都在（去重生效而非双写失效）；停实例删临时库。缓存版本号：api32.js v=9→10
+  （common2/functional2）。静态稿改动刷新即生效，无需重启任何服务。
+
+- 2026-11-11 版本与模型解耦（用户「版本创建只需要创建版本号，其他手填，模型不需要，和他没关系」）：
+  版本登记 = 纯版本号 + 说明（可选），全平台与模型脱钩。后端：POST /versions 收
+  {version, description?}（旧客户端传 model 兼容忽略）、唯一键 (model,version)→version、
+  GET /versions 去 ?model= 过滤；ModelVersionRow.model 降级遗留列（恒空串，旧登记数据保留）。
+  前端：common2 版本页清单去「模型」列、创建卡去模型下拉（含「其他（手填）」动态框）；
+  api32 wireCommonVersions/ftCreateVersion 与 api-acc3 accRegisterVersion 只问版本号（prompt 一问）；
+  功能抽屉被测版本下拉全量列出（去按模型过滤/跨模型兜底/换模型重过滤，wireTaskVersions 瘦身）；
+  精度 datalist 选项标签 = 说明。版本结果归档/质量大屏（版本 × 模型）不受影响——模型来自任务
+  目标、版本来自登记表，发起处自由组合。缓存版本号：api32.js v=10→11（common2/functional2）、
+  api-acc3.js v=5→6（accuracy2）。静态稿改动刷新即生效；后端 aite/ 有改动，需重启 aite serve。
+
+- 2026-11-11 用例详情三修（用户「test8 响应体折叠显示 200 展开变 400；期望断言和实际值不明显；
+  引擎原始日志不要下拉框」）：① 根因修复——「展开全文」id 曾在 caseBlock 内每例归零，跨用例
+  重复（点击命中 DOM 第一个同名 pre、全文被最后渲染的用例覆盖 → 折叠显示 A 用例内容展开变 B
+  用例内容），id 计数器提升到 showLiveTask 作用域全渲染唯一，存全文的 __expStore 每次渲染重建；
+  ② 用例展开体新增「断言判定」区置顶：期望 vs 实际逐行对照表（实际值口径同引擎 check()——
+  预期错误模式取 _status/_body，正常响应取 choices[0].message/流式控制键，16 类断言键全覆盖，
+  区头带通过/不通过徽标 + 复制断言配置），替代原沉底的裸「断言期望」JSON 区；③ 响应体标题带
+  实际状态（响应体 · HTTP 400）；④ 失败用例引擎原始日志去 details 折叠框直接全文展示
+  （首行仍醒目，error 引擎侧封顶 2000 字符，无滚动截断）。render_check 夹具加长两例响应体，
+  新增断言：展开按钮/pre id 跨用例唯一、无 details、断言判定行（HTTP 状态码 ==400 vs 200 等）。
+  缓存版本号：api32.js v=11→12（common2/functional2）。静态稿改动刷新即生效，无需重启任何服务。
+
+- 2026-11-11 数据集管理页对接 + 上传/下载/路径与在线源配置（common2.html datasets 页 + api32.js）：
+  ① 目录表接 GET /datasets（chips 类型筛选带计数、行内「下载」（GET /datasets/{ref}/download 链接）/
+  「删除」（DELETE，confirm 后仅删登记文件保留）、空 catalog 占位引导）；② 导入抽屉重做为
+  「导入 / 上传数据集」：精度=文件上传（FileReader 读文本 → POST /datasets/upload，.jsonl/.json/.csv，
+  后端规范化 jsonl 落位）/ 功能=文本粘贴（POST /datasets/functional/import 不变），类型切换联动字段显隐；
+  ③ 新增「路径与在线源配置」卡：datasets_dir/cache_dir/hf_endpoint/remote_url 四项
+  （GET·PUT /datasets/settings），env 覆盖提示（AITE_DATASETS_DIR/HF_HOME/HF_ENDPOINT/
+  AITE_DATASET_REMOTE_URL），「在线连通性探测」按钮（GET /datasets/online/status，HF 镜像 + 远程源
+  双状态，收到 HTTP 响应即算通）；④ 新增「在线数据集导入」卡：HF 镜像导入（POST /datasets/hf/import）
+  与远程拉取导入（POST /datasets/remote/import，url 缺省用 remote_url，结尾带 / 按 <地址>/<名>.jsonl
+  拼接）。后端配套：aite/datasets/settings.py（四键设置，env>设置文件>默认）+
+  service/dataset_files.py（upload/download/hf_import/remote_import/probe）+ datasets 路由 +7 端点
+  （REST 总数 89→105 进 arch_map 再生）+ CLI 五命令（dataset settings/settings-set/upload/download/
+  pull-url）；userstore.data_root、functional 摄取落位、perf 产物目录全部随 datasets_dir 设置走。
+  IAB 隔离实例全链路验证过（设置保存→探测 HF 镜像真实 200→远程导入→chips 筛选→功能导入→删除）。
+  缓存版本号：api32.js v=12→13（common2/functional2）。后端代码有改动：aite serve 需重启才生效；
+  静态稿刷新即生效。
+
+- 2026-11-12 创建任务「合计 N 例」统计虚高修复（api32.js，用户「功能任务创建这里的数字统计不对」，
+  实测全选场景 1 · 散选 0 · 合计 133，而唯一场景只有 65 例）：根因 = FT_CASES/ftSel 只增不清——
+  页面内置 9 个演示场景共 64 条用例 id 在 wireScenarios 重置勾选集时全部带入，会话内删除的场景/
+  脚本行也留残影；这些 id 不在树上渲染（ftSceneState 还判成 all），但 ftCaseN 取 ftSel.size 全被
+  合计：133 = 65 真实 + 64 演示残留 + 4 已删场景残留。三处修：① wireScenarios 先按在册场景出清
+  FT_CASES/ftExpanded 残留 key 再重置勾选集；② wireScripts 重建场景用例表时同步出清该场景 ftSel
+  里已不存在的行 id；③ 新增 fapiRebuildFtPresets 按真实 SCENES 重建预设标签（原「全量」等预设是
+  页面加载时按演示场景生成的死值，live 下点击会把 64 个演示 id 灌回勾选集，同一根因另一扇门）。
+  对真实后端 8300 只读 IAB 验证：合计 65 与场景行一致，预设 API 契约→65 / Agent→0 / 全量→65
+  联动正确，guardWrites 零写入。缓存版本号：api32.js v=14→15（common2/functional2）。
+  静态稿改动刷新即生效，无需重启任何服务。
+
+2026-11-12　数据集管理页重构：全局 vs 数据集级配置分家 + 三分区版式（owner 反馈「配置归属混乱、模块连在一起没分界」）
+- 配置归属收口（回答「哪些全局、哪些数据集自己」）：全局设置=安装环境级（存储位置 datasets_dir/cache_dir
+  ＋在线源默认值 hf_endpoint/remote_url——remote_url 明确标注「只是默认，单次导入可覆盖」）；数据集级
+  （来源/字段映射/split/subset/采样 n·seed/命名/notes）全部收进导入抽屉，详情抽屉可查登记属性。
+- common2.html 数据集页重写为三分区：kicker 小节标题（目录/导入/全局设置，细线延伸+右侧说明）切开模块；
+  目录卡（chips+表格，行内新增「详情」）；导入区四张来源入口卡（上传/HF 镜像/远程直链/perf 生成，图标徽章
+  +说明+动作语，取代原两块内联表单）；全局设置卡左右分栏（存储位置|在线源默认值，竖分隔线），连通性探测
+  改徽章（badge passed/failed/pending）+决策 hint。新增样式全部 .ds- 前缀内联在 common2.html head，
+  v1.css 不动（不影响其他页面）。
+- 导入抽屉重写为四来源模式（chips 切换，data-nodirty 防误标 dirty）：上传文件/功能 cases/HF 镜像（补齐
+  后端本就支持的 split/subset/n/seed/fields 全参数）/远程直链（类型+URL 可覆盖全局默认）；新增数据集详情
+  抽屉（dsOpenDetail：类型/名称/登记 id/version/source/stats/路径/schema/notes + 下载/删除登记）。
+- api32.js：wireDatasetOnlineImport+dsBindImportDrawer 合并为 wireDatasetImportDrawer（按模式分发提交
+  +详情删除绑定）；dsRenderTable 行内加详情按钮；探测结果改双徽章渲染；fapiBoot 接线同步。缓存版本号
+  api32.js v=14→15→本会话沿用 15（与并行会话的功能预设修复共存，mockup_symbols --check 通过）。
+- IAB 隔离实例验证（CWD 挪 .tmp/isol 防脏 owner 设置文件；8310/8776 已停干净）：三分区结构/目录行渲染/
+  详情抽屉内容与下载链接/四模式切换/设置保存回读/功能 cases 完整提交/详情删除（stub confirm）/探测徽章
+  （HF 通 1425ms passed、远程源解析失败 failed+hint）全部通过。
+- 注意：本次发现并行会话残留 8776 旧代理 + 8310 旧隔离后端导致页面拿到旧数据（已在 AGENTS.md 固化
+  「起实例前 netstat 查残留」规则）；后端重启验证时后台命令一律绝对路径（exit 127 教训重申）。
+  静态稿改动刷新即生效，无需重启任何服务；后端代码零改动，aite serve 不用重启。
+
+## 2026-11-12 · 数据集页「本机实际 ⊕ 在线全集」——计数对齐 + evalscope 原生基准板块
+
+- 起因：owner 报「数据集数量与列表对不上」——catalog 只显示登记行（5 条 accuracy），本机注册表
+  `data/aite_datasets.json` 里的 ceval_full（1606 题）没进 catalog、目录里还有孤儿 sample_qa.jsonl，
+  且 evalscope 原生 257 个在线基准完全没展示。
+- 后端（aite/service/dataset_files.py + web/routers/datasets.py）：`GET /datasets` 改「本地数据集总览」
+  ——merge_local_rows() 展示层合并 catalog ⊕ 注册表 ⊕ 目录孤儿扫描（未登记行带 registered:false +
+  source=registry/local-file；catalog 旧失效 path 以注册表实际文件修正展示）；resolve_download 三级回退
+  补齐（外部注册表文件、目录孤儿同名 jsonl——旧登记 path 失效/未登记都能下载）；新增
+  `GET /datasets/online/datasets`（evalscope BENCHMARK_REGISTRY 257 基准 + match_local_benchmarks
+  本机可用标记 local/local_like + 进程内缓存 + 主环境缺 evalscope 时经 common.yaml python_exe 子进程
+  回退，首列 8.8s / 缓存后 0.29s）。catalog 仍是写侧唯一权威，删除只对登记行。
+- 前端（common2.html + api32.js v=15→16，common2/functional2 同步 bump）：目录 chips 计数与列表天然
+  一致（同源 DS_ROWS）；未登记行「未登记」badge 且无删除按钮；目录下方新增「在线数据集」卡（搜索框
+  过滤 name/dataset_id/tags + 「只看本机已有」toggle + 绿 badge「evalscope 257 个 · 本机已有 3」 +
+  行内「导入」预填 HF 抽屉 dsHfId/dsImpName）；mock 模式有 6 条演示行，live 由 wireDatasetOnlinePage
+  接管；fapiBoot 接线同步。
+- 本机匹配规则（match_local_benchmarks 纯函数）：local=基准 dataset_id 命中本地 notes/upstream 的
+  hf id 或归一名（仅字母数字）相等；local_like=归一名互为前缀且 ≥4 字符（ceval↔ceval_full）。
+- 测试：tests/unit/test_dataset_files_local.py（合并/标记/缓存/回退 +14）、test_datasets_api.py
+  集成 +4（未登记展示/registry 回退下载/在线标记/502）；数据集域 52+33 全绿。
+- IAB 验证（8313 隔离后端带真实 aite.db 副本 + 8776 代理，已停干净）：chips 全部 7=accuracy 7=表格
+  7 行；ceval_full/sample_qa 标未登记无删除；搜索 swe→10 行、只看本机→3 行（swe_bench_lite/
+  verified/verified_agentic）；gsm8k 行点导入→抽屉预填 AI-ModelScope/gsm8k；swe_bench_verified 行
+  标「本机已有 · swebench_verified」；截图目检目录区与在线区版式正常。
+- 注意：在线板块首次列举走 python_exe 子进程（owner .venv 起服时约 9s，evalscope env 起服则进程内
+  直取），进程内缓存后秒回；后端代码有改动，owner 的 aite serve 需重启才生效。
+
+## 2026-11-12 · 功能任务「复制/重试可改参再跑」+ 任务详情运行历史链
+
+- 缺口：复制出的 pending 草稿无处改参；重试原语义是「同 spec 立即重跑」，而重试的真实动机
+  （上一轮参数有问题）要求先改参；单任务多轮运行的结果散在列表里，详情页没有历史视角。
+  后端能力本就齐（PATCH 仅 pending、retry 记 retry_of 链、GET /tasks?retry_of=），只补前端。
+- api32.js：新增 openTaskEdit/saveTaskEdit/teRenderScenes（编辑抽屉接线：名称/版本 datalist/
+  目标模型下拉含自定义端点回填/timeout/场景 chips 增删/tools.cases 多行文本 + 原始 spec 只读
+  pre；保存= PATCH 原任务，spec 以原 spec 打底覆盖表单字段，未识别键保留）；fapiTaskAction 的
+  retry/copy 改为生成 pending 新任务后自动 openTaskEdit（不再立即运行），新增 edit 动作。
+- api32.js showLiveTask：详情头部 pending 加「编辑」按钮 + crumb 重试标记；新增「运行历史
+  （重试链）」卡（GET /tasks?retry_of= 拉子任务 + retry_of 父链入口，行内 打开 跳详情）；
+  fetch 失败不阻塞详情。functional2.html：新增 taskEditDrawer（任务编辑抽屉）；renderRuns
+  pending 行加「编辑」按钮、retry/copy title 同步新语义。
+- 语义变化（前端）：重试不再立即运行——生成 pending 重试任务并打开编辑抽屉，由
+  「保存并运行」发起；纯重跑场景在抽屉里直接点「保存并运行」即可。后端契约未动
+  （domain-backends.md §2 仍准确）。
+- 门禁：render_check.cjs 补 fapiShortTime 桩 + retry_of URL 桩 + 夹具 retries/retry_of 字段 +
+  历史卡 3 断言（父链入口/子任务行/编辑按钮随 pending 显隐），PASS；mockup_symbols --check
+  PASS（5 页面无覆盖/重复/版本漂移）；api32.js bump v17（functional2/common2）。
+
+## 2026-11-12 · 任务列表「评估结果」列显示通过用例数
+
+- 后端 `aite/service/suite_task.py` evaluation_stats：在 pass_rate/evaluated_cases
+  之外新增 `passed_cases`（按 pytest: 行 value×count 逐场景 round 后求和），
+  四域套件任务 result 快照统一携带。
+- api32.js rebuildRunsFromTasks：评估单元格对象带 passed（含 /runs/{id} summaries
+  兜底分支同口径计算 passed）；functional2.html evalCell 渲染 `12/14 例`
+  （passed 缺省的旧任务快照仍显示 `14 例`，优雅降级）。
+- 门禁：ruff PASS、tests/unit/test_suite_task.py 3 passed（补 passed_cases 断言）、
+  mockup_symbols --check PASS、render_check PASS；api32.js bump v18
+  （functional2/common2）。
+
+## 2026-11-12 · 数据集页三改：数量修复 + 在线并入导入抽屉 + 统一大筛选框（owner 反馈五连）
+
+- 数量修复：aite/service/dataset_files.py merge_local_rows 从「只扫 accuracy 孤儿」扩为
+  全类型扫描（functional `<名>/cases.jsonl`、perf 直文件，.stats.json 不算；catalog 已引用
+  路径跳过防 perf 登记名≠文件名重复计数），router 放开 type 过滤限制并透传 only；行新增
+  `origin`（local/online：hf/remote 或 registry upstream=hf: → online）。GET /datasets
+  本机 7 行 → 9 行（补 mini-set、rag-scene 孤儿）。
+- version 列撤销（owner 问「有必要吗」）：列表不占列，详情抽屉改「version（复现凭证：
+  HF split / 生成 seed）」；source 明细同样收进详情，列表只留 本地/在线 tag + 未登记 badge。
+- 在线数据集独立板块撤销，整个并入导入抽屉「在线数据集」模式（data-mode=hf 复用）：
+  搜索 + 只看本机已有 + 257 基准库滚动列表，行「选用」填 dsHfId/dsImpName 并高亮（tr.on），
+  下方 split/subset/n/seed/fields 参数区不变；来源卡「HF 镜像仓」更名「在线数据集」。
+- 新组件 web-ui/mockups/v1/assets/filterbox.js（v1，自包含样式注入，后续页面筛选框统一格式）：
+  fbMount(挂载点, 分组, 回调) → 大框点击展开面板、点选项多选、tag 回填框内可 ✕、
+  重置/收起、外部点击关闭；handle.setGroups 刷计数。数据集目录 chips 行 → #dsFilter 单筛选框
+  （类型/来源/登记状态三组实时计数）。
+- 修存量 bug 两枚：① dsIsLive() 查 window.FAPI 恒 false（api32 顶层 const 不挂 window），
+  旧页靠 mock/live 双绑定后发者胜侥幸可用，单绑定 onChange 暴露后改裸 `FAPI` 判定；
+  ② filterbox 点选项后面板自收（renderPanel 重建 DOM 后冒泡到 document 监听时
+  mount.contains(已分离节点)=false 误判外部点击）→ 改 e.composedPath().includes(mount)。
+- 门禁：ruff/lint-imports/audit_func_len/arch_map 全 PASS；数据集域 25 tests passed
+  （补全类型孤儿 + origin 断言）；mockup_symbols --check、render_check PASS；
+  api32.js bump v19（functional2/common2）、filterbox.js v2（common2 独引）；
+  IAB 沙箱实测：筛选多选/交叉空态/重置、抽屉搜索（swe 命中 10 条含 imo_anSWErbench 子串）、
+  选用回填高亮全过，截图两张确认视觉。
+
+## 2026-11-12 · 任务两层化：执行历史归属任务（retry 同任务重跑）
+
+- owner 拍板（纠正 v17 的「历史卡+同级草稿」方案）：一个任务的多次执行是它的历史，
+  不是多个任务。后端：retry 不再新建任务 = 终态任务同配置再跑一轮（202）；PATCH
+  放宽到非运行中（终态改完可重跑）；任务行加 `history` JSON 列（migrations 注册四
+  表，旧库启动自动补列），taskkit `_open_round/_close_round` 在 run 起点开轮（快照
+  当时 spec）+ succeeded/failed/cancelled 三条终态路收轮（trigger/spec/结果概要/
+  run_id/起止时间）；retry_of/retry_count 保留只读兼容旧链。契约 §2/§3/§4 同步。
+- 前端 api32 v20：详情页「执行历史」卡 = 轮次 chips（点 `showLiveTask(id, n)` 切轮，
+  默认最新轮，各轮结果/请求留痕随 run_id 取数）+ 该轮 spec「复制该轮 spec」+ 旧链
+  提示；头部 pending 显「运行」、终态显「重跑」，编辑按钮随非运行中显隐；列表行终态
+  加「重跑」。编辑抽屉/重试语义文案同步。
+- 门禁：四域任务集成 17 + taskkit/CLI/迁移单测全过（重写 3 个旧链断言 + 新增迁移回
+  归 test_storage_migrations：手工建旧表验证 apply 补列）；render_check（轮次切换/
+  spec 快照/重跑按钮断言）、mockup_symbols --check、ruff、lint-imports、arch_map 再
+  生全绿；iab_sandbox 隔离实例 API 冒烟：stop→retry 同任务、history 2 轮、运行中
+  PATCH 409、终态 PATCH 200、列表不裂变全过（retry 同配置触发 pytest 断点续推，
+  只补缺失样本——正向协同）。
+
+

@@ -5,13 +5,52 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aite · 公共资源 · V1 静态稿</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=17">
+<link rel="stylesheet" href="assets/v1.css?v=20">
+<style>
+/* ---- 数据集页专属样式（.ds- 前缀作用域；v1.css 共享不动） ---- */
+.ds-kicker{display:flex;align-items:center;gap:12px;margin:26px 1px 12px}
+section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
+.ds-kicker>span{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--tx2)}
+.ds-kicker>i{flex:1;height:1px;background:var(--line)}
+.ds-kicker>em{font-style:normal;font-size:11.5px;color:var(--tx3)}
+.ds-src-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.ds-src{appearance:none;text-align:left;font:inherit;color:var(--tx);border:1px solid var(--line);border-radius:13px;
+  padding:14px 15px;background:var(--card);cursor:pointer;display:flex;flex-direction:column;gap:7px;
+  transition:.16s ease;min-width:0}
+.ds-src:hover{border-color:color-mix(in srgb,var(--ac) 46%,transparent);transform:translateY(-1.5px);
+  box-shadow:0 6px 18px color-mix(in srgb,var(--ac) 10%,transparent)}
+.ds-src .ico{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-size:16px;
+  background:color-mix(in srgb,var(--ac) 11%,transparent);color:var(--ac);margin-bottom:2px}
+.ds-src[data-tone="hf"] .ico{color:var(--ac2);background:color-mix(in srgb,var(--ac2) 11%,transparent)}
+.ds-src[data-tone="remote"] .ico{color:var(--run);background:color-mix(in srgb,var(--run) 11%,transparent)}
+.ds-src[data-tone="perf"] .ico{color:var(--ok);background:color-mix(in srgb,var(--ok) 11%,transparent)}
+.ds-src b{font-size:13.5px;font-weight:650}
+.ds-src p{margin:0;font-size:12px;color:var(--tx3);line-height:1.65}
+.ds-src .go{font-size:12px;color:var(--ac);font-weight:600;margin-top:auto}
+.ds-set-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 30px}
+.ds-set-group+.ds-set-group{border-left:1px solid var(--line);padding-left:30px}
+.ds-set-group h4{font-size:13px;font-weight:650;margin:0 0 12px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.ds-set-group h4 small{font-size:11.5px;color:var(--tx3);font-weight:400}
+.ds-mode-note{font-size:12px;color:var(--tx3);background:var(--chipbg);border:1px dashed var(--line);
+  border-radius:9px;padding:8px 12px;margin-bottom:12px;line-height:1.7}
+.ds-sep{height:1px;background:var(--line);margin:6px 0 14px}
+.ds-detail{display:flex;flex-direction:column}
+.ds-kv{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:9px 2px;border-bottom:1px dashed var(--line);font-size:12.5px}
+.ds-kv:last-child{border-bottom:0}
+.ds-kv>span{color:var(--tx3)}
+.ds-kv>div{color:var(--tx);word-break:break-all;line-height:1.7}
+/* 基准库选中行高亮（导入抽屉内 dsOnlineTbl） */
+.sumtable tr.on td{background:color-mix(in srgb,var(--ac) 8%,transparent)}
+#dsOnlineWrap{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+</style>
 </head>
 <body data-module="common" data-module-label="公共资源">
 <script type="text/plain" id="page-list">[
-  {"id":"datasets","label":"数据集管理","count":"24"},
-  {"id":"models","label":"模型管理","count":"9"},
-  {"id":"agents","label":"执行机","count":"3"},
+  {"id":"datasets","label":"数据集管理"},
+  {"id":"models","label":"模型管理"},
+  {"id":"versions","label":"版本管理"},
+  {"id":"secrets","label":"密钥管理"},
+  {"id":"agents","label":"执行机"},
   {"id":"tasks","label":"后台任务"}
 ]</script>
 
@@ -23,20 +62,74 @@
   <!-- ============ 数据集管理 ============ -->
   <section data-page="datasets" hidden>
     <header class="topbar">
-      <div><h1>数据集管理</h1><div class="crumb">统一 catalog（type/name 唯一 · version=seed 可复现凭证）· GET /datasets</div></div>
+      <div><h1>数据集管理</h1><div class="crumb">统一 catalog（type/name 唯一 · 来源分本地/在线）· 全局设置只管「存哪儿、从哪拉」，每个数据集自己的配置（来源/字段映射/采样）在导入抽屉里定、详情里查</div></div>
       <div class="actions">
-        <button class="btn" data-open-drawer="dsImport">导入功能数据集</button>
-        <button class="btn primary" onclick="location.href='perf2.html#datasets'">生成性能数据集</button>
+        <button class="btn primary" onclick="dsEntry('upload')">导入数据集</button>
+        <button class="btn" onclick="location.href='perf2.html#datasets'">生成性能数据集</button>
       </div>
     </header>
-    <div class="chips" style="margin-bottom:12px">
-      <span class="chip" data-single>全部 <small>24</small></span>
-      <span class="chip on" data-single>功能 functional <small>6</small></span>
-      <span class="chip" data-single>精度 accuracy <small>11</small></span>
-      <span class="chip" data-single>性能 perf <small>7</small></span>
+
+    <div class="ds-kicker"><span>目录</span><i></i><em>GET /datasets · 大筛选框点选 类型/来源/登记状态 · 行内「详情」查看单个数据集自己的来源、统计与 notes</em></div>
+    <section class="card">
+      <div id="dsFilter" style="margin-bottom:12px"></div>
+      <table id="dsTbl" class="sumtable"></table>
+      <div class="foot-note"><span>功能型：行为规约（请求+断言）· 精度型：题库（问题+标准答案）· 性能型：流量特征（分布语义无关）· 删除仅删登记，文件保留</span></div>
+    </section>
+
+    <div class="ds-kicker"><span>导入</span><i></i><em>四种来源 · 来源参数（hf_id/split/字段映射/URL…）属于数据集自己，导入抽屉里逐项配置</em></div>
+    <div class="ds-src-grid">
+      <button class="ds-src" onclick="dsEntry('upload')">
+        <span class="ico">⇪</span><b>上传文件</b>
+        <p>本机 .jsonl / .json / .csv 文本文件，校验后规范化落位（精度题库 / 功能 cases）</p>
+        <span class="go">开始上传 →</span>
+      </button>
+      <button class="ds-src" data-tone="hf" onclick="dsEntry('hf')">
+        <span class="ico">🤗</span><b>在线数据集</b>
+        <p>内置 250+ 基准库点选免填 id，或手填 dataset id 走镜像仓全参数导入；之后完全离线可用</p>
+        <span class="go">从在线导入 →</span>
+      </button>
+      <button class="ds-src" data-tone="remote" onclick="dsEntry('remote')">
+        <span class="ico">⛓</span><b>远程直链</b>
+        <p>OBS 桶 / 任意 http 直链 jsonl；URL 留空则用全局设置里的 remote_url 默认值</p>
+        <span class="go">从远程拉取 →</span>
+      </button>
+      <button class="ds-src" data-tone="perf" onclick="location.href='perf2.html#datasets'">
+        <span class="ico">⚡</span><b>性能流量生成</b>
+        <p>perf 型由生成器产出（请求长度分布 / 并发特征），不走导入，显式拒绝上传</p>
+        <span class="go">去 perf 页生成 →</span>
+      </button>
     </div>
-    <section class="card"><table id="dsTbl" class="sumtable"></table>
-      <div class="foot-note"><span>功能型：行为规约（请求+断言）· 精度型：题库（问题+标准答案）· 性能型：流量特征（分布语义无关）</span></div></section>
+
+    <div class="ds-kicker"><span>全局设置</span><i></i><em>安装环境级：所有数据集共用 · 环境变量 &gt; 设置文件 &gt; 内置默认 · GET·PUT /datasets/settings</em></div>
+    <section class="card">
+      <div class="ds-set-grid">
+        <div class="ds-set-group">
+          <h4>存储位置 <small>所有数据集共用，一次配置全局生效</small></h4>
+          <div class="field"><label>数据集目录（datasets_dir）<span class="qmark">?<span class="tip">本地数据集固定落位根：上传/导入的文件落在 &lt;目录&gt;/datasets/&lt;类型&gt;/ 下，外部注册表也随根走；默认 ./data。环境变量 AITE_DATASETS_DIR 优先</span></span></label>
+            <input class="in" id="dsSetDir" placeholder="./data 或 D:/eval-data"></div>
+          <div class="field"><label>下载缓存目录（cache_dir）<span class="qmark">?<span class="tip">在线数据集（HF 等）下载缓存根，注入 HF_HOME；默认 ./data/cache/hf。环境变量 HF_HOME 优先</span></span></label>
+            <input class="in" id="dsSetCache" placeholder="./data/cache/hf"></div>
+        </div>
+        <div class="ds-set-group">
+          <h4>在线源默认值 <small>只是默认：单次导入可在抽屉里单独覆盖 URL</small></h4>
+          <div class="field"><label>HF 镜像仓地址（hf_endpoint）<span class="qmark">?<span class="tip">和 HF 通时：在线数据集从这个镜像仓拉取（默认 https://hf-mirror.com，留空 = 用默认）。环境变量 HF_ENDPOINT 优先</span></span></label>
+            <input class="in" id="dsSetHf" placeholder="https://hf-mirror.com"></div>
+          <div class="field"><label>远程源默认地址（remote_url）<span class="qmark">?<span class="tip">和 HF 不通（内网）时：配 OBS 桶 https 地址或其他可直链下载数据集的地址；结尾带 / 时按 &lt;地址&gt;/&lt;数据集名&gt;.jsonl 拉取。单次远程导入可在抽屉里填 URL 覆盖这个默认。环境变量 AITE_DATASET_REMOTE_URL 优先</span></span></label>
+            <input class="in" id="dsSetRemote" placeholder="https://obs.cn-east-3.myhuaweicloud.com/&lt;bucket&gt;/datasets/"></div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:2px">
+            <button class="btn sm" id="dsProbeBtn">探测连通性</button>
+            <span class="badge" id="dsProbeHf" hidden></span>
+            <span class="badge" id="dsProbeRemote" hidden></span>
+            <span class="hint" id="dsProbeHint"></span>
+          </div>
+        </div>
+      </div>
+      <div class="ds-sep"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:2px">
+        <button class="btn primary" id="dsSetSave">保存全局设置</button>
+        <span class="hint" id="dsSetLock"></span>
+      </div>
+    </section>
   </section>
 
   <!-- ============ 模型管理 ============ -->
@@ -46,27 +139,37 @@
       <div class="actions"><button class="btn primary" data-open-drawer="modelDrawer">＋ 注册模型</button></div>
     </header>
     <section class="card"><table id="modelsTbl"></table></section>
+  </section>
 
+  <!-- ============ 版本管理 ============ -->
+  <section data-page="versions" hidden>
+    <header class="topbar">
+      <div><h1>版本管理</h1><div class="crumb">被测版本号的全局登记（跨域共享）· 与模型无关：精度/功能任务发起「被测版本」从这里选择，与目标模型自由组合 · 同一脚本逐版本执行的结果才可做版本间对比</div></div>
+    </header>
     <section class="card">
-      <div class="card-head"><div><h3>版本管理</h3><div class="sub">被测系统/模型的全局版本登记（跨域共享）· 精度/功能任务发起时「被测版本」从这里选择 · 同一模型逐版本执行的结果才可做版本间对比 · GET/POST /versions</div></div></div>
+      <div class="card-head"><div><h3>版本清单</h3><div class="sub">创建后全平台可选 · 任务终态结果按（版本 × 模型）自动归档，供版本趋势/对比 · GET/POST/DELETE /versions</div></div></div>
       <table id="versionsTbl" class="sumtable"></table>
     </section>
     <section class="card">
-      <div class="card-head"><div><h3>登记版本</h3><div class="sub">(模型, 版本) 唯一 · 重复登记 409</div></div></div>
+      <div class="card-head"><div><h3>创建版本</h3><div class="sub">版本号唯一 · 重复创建 409 · 与模型无关（发起时与目标模型自由组合）</div></div></div>
       <div class="form-grid">
-        <div class="field"><label>模型<span class="qmark">?<span class="tip">模型管理注册的名称或预制 profile 名；被测版本挂在模型下，按模型过滤选择</span></span></label>
-          <select class="in" id="verModelSel"></select></div>
         <div class="field"><label>版本号<span class="qmark">?<span class="tip">如 v1.3.0；任务发起时引用此字符串写入 spec.version，版本趋势/对比按它聚合</span></span></label>
           <input class="in" id="verVersionIn" placeholder="如 v1.3.0"></div>
         <div class="field wide"><label>说明（可选）</label>
           <input class="in" id="verDescIn" placeholder="如 迭代一：修复召回率回退"></div>
       </div>
-      <button class="btn primary" id="verSave">登记</button>
+      <button class="btn primary" id="verSave">创建</button>
       <span class="hint" id="verHint" style="margin-left:10px"></span>
     </section>
+  </section>
 
+  <!-- ============ 密钥管理 ============ -->
+  <section data-page="secrets" hidden>
+    <header class="topbar">
+      <div><h1>密钥管理</h1><div class="crumb">密文落盘（独立密钥文件 + 加密库），界面仅显示掩码 · 运行时解析顺序：环境变量 > 密钥库</div></div>
+    </header>
     <section class="card">
-      <div class="card-head"><div><h3>密钥库</h3><div class="sub">api_key_env 指向的环境变量未在本机设置时，运行时自动从此处解密注入 · 密文落盘（独立密钥文件 + 加密库），界面仅显示掩码 · 环境变量同名时优先</div></div></div>
+      <div class="card-head"><div><h3>密钥库</h3><div class="sub">api_key_env 指向的环境变量未在本机设置时，运行时自动从此处解密注入 · GET/PUT/DELETE /secrets</div></div></div>
       <table id="secretTbl" class="sumtable"></table>
     </section>
     <section class="card">
@@ -109,18 +212,82 @@
   </section>
 </main>
 
-<!-- 数据集导入抽屉 -->
-<div class="drawer" id="dsImport" hidden>
-  <div class="drawer-head"><h3>导入功能数据集</h3><button class="icon-btn" data-close>✕</button></div>
+<!-- 数据集导入抽屉（四种来源 · 数据集自己的配置都在这里定） -->
+<div class="drawer drawer-lg" id="dsImport" hidden>
+  <div class="drawer-head"><h3>导入数据集</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body">
-    <div class="field"><label>名称</label><input class="in" value="api-regression-mini"></div>
-    <div class="field"><label>cases.jsonl（一行 = id + desc + messages + expect）</label>
-      <textarea class="in" rows="9">{"id": "c1", "desc": "未知参数必须 400", "messages": [{"role": "user", "content": "hi"}], "expect": {"http_status": 400}}
+    <div class="field"><label>来源方式</label>
+      <div class="chips" id="dsModeChips" data-nodirty style="margin:0">
+        <span class="chip on" data-dsmode="upload">上传文件</span>
+        <span class="chip" data-dsmode="functional">功能 cases</span>
+        <span class="chip" data-dsmode="hf">在线数据集</span>
+        <span class="chip" data-dsmode="remote">远程直链</span>
+      </div>
+    </div>
+    <div class="ds-mode" data-mode="upload">
+      <div class="field"><label>数据集文件<span class="qmark">?<span class="tip">上传后自动解析校验并规范化为 jsonl 落位数据集目录；精度题库需含 question/input 等输入字段，answer/expected 等答案字段自动识别</span></span></label>
+        <input class="in" type="file" id="dsImpFile" accept=".jsonl,.json,.csv">
+        <span class="hint">POST /datasets/upload · 校验失败显式报错（带行/条定位）</span></div>
+    </div>
+    <div class="ds-mode" data-mode="functional" hidden>
+      <div class="field"><label>cases.jsonl（一行 = id + desc + messages + expect）</label>
+        <textarea class="in" id="dsImpText" rows="9">{"id": "c1", "desc": "未知参数必须 400", "messages": [{"role": "user", "content": "hi"}], "expect": {"http_status": 400}}
 {"id": "c2", "desc": "回复非空", "messages": [{"role": "user", "content": "介绍自己"}], "expect": {"nonempty": true}}</textarea>
-      <span class="hint">POST /datasets/functional/import · harness.Case 真实校验 · 坏行报错带行号</span></div>
-    <div class="field"><label>notes（可选）</label><input class="in" placeholder="来源 / 用途说明"></div>
+        <span class="hint">POST /datasets/functional/import · harness.Case 真实校验 · 坏行报错带行号</span></div>
+    </div>
+    <div class="ds-mode" data-mode="hf" hidden>
+      <div class="ds-mode-note">在线数据集：上方基准库点选（本机已有的标绿、近似标蓝，点「选用」自动填下方参数），或手填 dataset id 走镜像仓；镜像端点/下载缓存取「全局设置」，HF 不通改用「远程直链」。名称留空自动取 id 尾段。</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <input class="in" id="dsOnlineSearch" placeholder="搜基准名 / dataset_id / 标签（如 gsm8k、Math、swe）" style="flex:1;min-width:200px">
+        <span class="chip" id="dsOnlineLocalOnly">只看本机已有 <small>0</small></span>
+        <span class="badge pending" id="dsOnlineBadge" hidden><i></i></span>
+      </div>
+      <div id="dsOnlineWrap"><table id="dsOnlineTbl" class="sumtable"></table></div>
+      <div class="form-grid" style="margin-top:12px">
+        <div class="field"><label>dataset id<span class="qmark">?<span class="tip">HF 数据集标识，如 openai/gsm8k、ceval/ceval-exam</span></span></label>
+          <input class="in" id="dsHfId" placeholder="如 openai/gsm8k"></div>
+        <div class="field"><label>split<span class="qmark">?<span class="tip">数据集分片（test/validation/train），与采样 seed 一起作为复现凭证登记进 catalog（详情里查）</span></span></label>
+          <input class="in" id="dsHfSplit" placeholder="test"></div>
+        <div class="field"><label>subset（可选）</label>
+          <input class="in" id="dsHfSubset" placeholder="如 agriculture（多子集数据集）"></div>
+        <div class="field"><label>采样条数 n（留空全量）</label>
+          <input class="in" id="dsHfN" placeholder="200"></div>
+        <div class="field"><label>采样 seed<span class="qmark">?<span class="tip">同样本量下固定 seed 保证两次导入拿到同一批数据（可复现）</span></span></label>
+          <input class="in" id="dsHfSeed" placeholder="42"></div>
+        <div class="field"><label>字段映射 fields<span class="qmark">?<span class="tip">把 HF 数据集的列映射为本框架字段，如 input=question,expected=answer；留空走自动识别</span></span></label>
+          <input class="in" id="dsHfFields" placeholder="input=question,expected=answer"></div>
+      </div>
+      <span class="hint">POST /datasets/hf/import · 下载→字段映射→采样→落位 · split+seed 作复现凭证（详情里查，不占列表列）</span>
+    </div>
+    <div class="ds-mode" data-mode="remote" hidden>
+      <div class="ds-mode-note">HF 不通（内网）时的通道：OBS 桶等可直链下载的地址；URL 留空用「全局设置」里的 remote_url，结尾带 / 时按 &lt;地址&gt;/&lt;名称&gt;.jsonl 拼接。</div>
+      <div class="form-grid">
+        <div class="field"><label>数据集类型</label>
+          <select class="in" id="dsRemoteType"><option value="accuracy">精度（题库）</option><option value="functional">功能（cases.jsonl）</option></select></div>
+        <div class="field"><label>直链 URL（可选，覆盖全局 remote_url）</label>
+          <input class="in" id="dsRemoteUrl" placeholder="https://…/my-qa-100.jsonl"></div>
+      </div>
+      <span class="hint">POST /datasets/remote/import · 复用上传校验管线 · source=remote</span>
+    </div>
+    <div class="ds-sep"></div>
+    <div class="form-grid">
+      <div class="field"><label>名称（类型下唯一）</label><input class="in" id="dsImpName" placeholder="如 my-qa-100"></div>
+      <div class="field"><label>notes（可选）</label><input class="in" id="dsImpNotes" placeholder="来源 / 用途说明，登记进 catalog 供详情查看"></div>
+    </div>
+    <div class="field"><label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="dsImpForce"> 同名已存在时覆盖登记与文件（force）</label></div>
   </div>
-  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">校验并导入</button></div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="dsImpGo">校验并导入</button></div>
+</div>
+
+<!-- 数据集详情抽屉（数据集自己的配置/来源/统计） -->
+<div class="drawer drawer-lg" id="dsDetail" hidden>
+  <div class="drawer-head"><h3 id="dsDetailTitle">数据集详情</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body" id="dsDetailBody"></div>
+  <div class="drawer-foot">
+    <button class="btn danger" id="dsDetailDel">删除登记</button>
+    <span style="flex:1"></span>
+    <a class="btn primary" id="dsDetailDl" href="#">下载文件</a>
+  </div>
 </div>
 
 <!-- 模型抽屉 -->
@@ -131,31 +298,173 @@
     <div class="field"><label>类型</label><select class="in"><option>openai_compatible</option><option>anthropic</option><option>gemini</option></select></div>
     <div class="field"><label>base_url</label><input class="in" value="https://api.deepseek.com/v1"></div>
     <div class="field"><label>model</label><input class="in" value="deepseek-chat"></div>
-    <div class="field"><label>api_key_env</label><input class="in" value="DEEPSEEK_API_KEY"></div>
-    <span class="hint">密钥不落库：仅存环境变量名，运行时解析</span>
+    <div class="field"><label>鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">「密钥库」已归档的密钥可直接下拉选择（运行时解密注入，界面只见掩码）；环境变量同名时优先于密钥库；密钥没归档可现场录入，密文落盘</span></span></label>
+      <div style="display:flex;gap:8px">
+        <select class="in" id="mKeySel" style="flex:1"></select>
+        <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+      </div>
+      <div class="form-grid" id="mKeyArchive" hidden style="margin-top:8px">
+        <div class="field"><label>密钥名（= api_key_env）</label><input class="in" id="mKeyArcName" placeholder="如 DEEPSEEK_API_KEY"></div>
+        <div class="field"><label>密钥值</label><input class="in" id="mKeyArcVal" type="password" placeholder="sk-...（保存后仅显示掩码）"></div>
+      </div>
+      <span class="hint">密钥不落模型库：只存名字，运行时环境变量 > 密钥库 解析</span></div>
   </div>
   <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">保存</button></div>
 </div>
 
 <div class="ribbon">V1 静态稿 · 公共资源 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=13"></script>
+<script src="assets/v1.js?v=17"></script>
+<script src="assets/filterbox.js?v=2"></script>
 <script>
-/* ---------- 数据集目录 ---------- */
+/* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets 重渲染） ---------- */
 const DS = [
-  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl"],
-  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl"],
-  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full"],
-  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private"],
-  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl"],
+  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）"],
+  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编"],
+  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full", "HF 镜像导入 · fields=input=question,expected=answer"],
+  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private", "私域题库（上传 jsonl）"],
+  ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）"],
+  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）"],
 ];
-document.getElementById("dsTbl").innerHTML = `
-  <thead><tr><th>类型</th><th>名称</th><th>version</th><th>source</th><th>stats</th><th>path</th></tr></thead>
-  <tbody>${DS.map(d => `<tr>
-    <td><span class="tag">${d[0]}</span></td><td class="rname"><b class="mono">${d[1]}</b></td>
-    <td class="mono dim">${d[2]}</td><td class="dim">${d[3]}</td>
-    <td class="dim" style="white-space:normal">${d[4]}</td>
-    <td class="mono faint" style="font-size:11px">${d[5]}</td></tr>`).join("")}</tbody>`;
+/* 行对象与后端合并行同形：dsBuildGroups/dsFilterMatch/dsRenderTable 由 api32.js 提供 */
+const DS_ROWS_MOCK = DS.map(d => ({
+  type: d[0], name: d[1], version: d[2], source: d[3], id: "mock0000",
+  origin: /hf:|remote/.test(d[3]) ? "online" : "local",
+  registered: true, statsText: d[4], path: d[5], notes: d[6],
+}));
+
+/* live 模式让位给 api32.js 的绑定与渲染（mock 才走下面这套）。
+   FAPI 是 api32.js 的顶层 const（词法全局，不挂 window），必须裸引用判定 */
+function dsIsLive() {
+  return typeof FAPI !== "undefined" && !!FAPI.live;
+}
+function dsMockGuard() {
+  if (dsIsLive()) return false;
+  if (window.fapiToast) fapiToast("MOCK 静态稿：起 aite serve + serve.py 预览后即真实读写", true);
+  return true;
+}
+
+/* 导入抽屉来源模式切换（DOM 通用：mock/live 共用；live 提交由 api32.js 接管） */
+function dsSyncMode(mode) {
+  document.querySelectorAll("#dsModeChips .chip").forEach(c =>
+    c.classList.toggle("on", c.dataset.dsmode === mode));
+  document.querySelectorAll("#dsImport .ds-mode").forEach(g => (g.hidden = g.dataset.mode !== mode));
+}
+function dsEntry(mode) {
+  dsSyncMode(mode);
+  const d = document.getElementById("dsImport");
+  if (d && d.hidden) d.hidden = false;
+}
+document.querySelectorAll("#dsModeChips .chip").forEach(c =>
+  c.addEventListener("click", () => dsSyncMode(c.dataset.dsmode)));
+
+function dsMockRender() {
+  const rows = DS_ROWS_MOCK.filter(r => dsFilterMatch(r, window.DS_FILTERS));
+  if (window.dsFB) window.dsFB.setGroups(dsBuildGroups(DS_ROWS_MOCK));
+  document.getElementById("dsTbl").innerHTML = `
+    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>stats</th><th>path</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${rows.map(x => `<tr>
+      <td><span class="tag">${x.type}</span></td><td class="rname"><b class="mono">${x.name}</b></td>
+      <td style="white-space:nowrap">${x.origin === "online" ? '<span class="tag t-online">在线</span>' : '<span class="tag">本地</span>'}</td>
+      <td class="dim" style="white-space:normal">${x.statsText}</td>
+      <td class="mono faint" style="font-size:11px">${x.path}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn sm" onclick="dsMockView('${x.name}')">详情</button>
+      <button class="btn sm" onclick="dsMockGuard()">下载</button>
+      <button class="btn sm danger" onclick="dsMockGuard()">删除</button></td></tr>`).join("")
+      || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
+}
+/* mock 详情：与 live 的 dsOpenDetail（api32.js）同版式，数据取自静态 DS */
+function dsMockView(name) {
+  const d = DS_ROWS_MOCK.find(x => x.name === name);
+  if (!d) return;
+  document.getElementById("dsDetailTitle").textContent = `数据集详情 · ${d.type}/${d.name}`;
+  const kvs = [
+    ["类型", `<span class="tag">${d.type}</span>`], ["名称", `<b class="mono">${d.name}</b>`],
+    ["登记 id", '<span class="mono faint">静态稿演示数据</span>'],
+    ["来源", `${d.origin === "online" ? '<span class="tag t-online">在线</span>' : '<span class="tag">本地</span>'} <span class="dim">${d.source}</span>`],
+    ["version（复现凭证：HF split / 生成 seed）", d.version],
+    ["规模 stats", d.statsText],
+    ["文件路径", `<span class="mono" style="font-size:12px">${d.path}</span>`], ["notes", d.notes || "—"],
+  ];
+  document.getElementById("dsDetailBody").innerHTML =
+    `<div class="ds-detail">${kvs.map(([k, v]) =>
+      `<div class="ds-kv"><span>${k}</span><div>${v}</div></div>`).join("")}</div>`;
+  document.getElementById("dsDetailDl").removeAttribute("href");
+  document.getElementById("dsDetailDel").removeAttribute("data-ds-del");
+  document.getElementById("dsDetail").hidden = false;
+}
+["dsSetSave", "dsProbeBtn", "dsImpGo", "dsDetailDel"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("click", () => dsMockGuard());
+});
+document.getElementById("dsDetailDl").addEventListener("click", e => {
+  if (dsMockGuard()) e.preventDefault();
+});
+
+/* ---------- 在线数据集（导入抽屉内基准库；mock 演示数据，live 由 api32.js 渲染） ---------- */
+const DS_ONLINE_MOCK = [
+  { name: "gsm8k", pretty_name: "GSM8K", dataset_id: "AI-ModelScope/gsm8k", tags: ["Math", "Reasoning"], metrics: ["mean_acc"], subsets: ["main"], few_shot_num: 0, local: null, local_like: null },
+  { name: "ceval", pretty_name: "C-Eval", dataset_id: "evalscope/ceval", tags: ["Knowledge", "MCQ", "Chinese"], metrics: ["mean_acc"], subsets: ["accountant", "civil_servant", "teacher"], few_shot_num: 0, local: null, local_like: "ceval_full" },
+  { name: "swe_bench_verified", pretty_name: "SWE-bench Verified", dataset_id: "princeton-nlp/SWE-bench_Verified", tags: ["Coding", "Agent"], metrics: ["mean_acc"], subsets: ["default"], few_shot_num: 0, local: "swebench_verified", local_like: null },
+  { name: "aime25", pretty_name: "AIME 2025", dataset_id: "evalscope/aime25", tags: ["Math", "Reasoning"], metrics: ["mean_acc"], subsets: ["default"], few_shot_num: 0, local: null, local_like: null },
+  { name: "mmlu", pretty_name: "MMLU", dataset_id: "evalscope/MMLU", tags: ["Knowledge", "MCQ"], metrics: ["mean_acc"], subsets: ["abstract_algebra", "anatomy", "astronomy"], few_shot_num: 0, local: null, local_like: null },
+  { name: "hellaswag", pretty_name: "HellaSwag", dataset_id: "evalscope/hellaswag", tags: ["Knowledge", "MCQ"], metrics: ["mean_acc"], subsets: ["default"], few_shot_num: 0, local: null, local_like: null },
+];
+let DS_ONLINE_MOCK_ONLY = false;
+let DS_ONLINE_MOCK_SEL = "";
+function dsOnlineMockBadge(b) {
+  if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;
+  if (b.local_like) return `<span class="badge pending"><i></i>近似 · ${b.local_like}</span>`;
+  return '<span class="dim">—</span>';
+}
+function dsOnlineMockRender() {
+  const tbl = document.getElementById("dsOnlineTbl");
+  if (!tbl) return;
+  const q = (document.getElementById("dsOnlineSearch").value || "").trim().toLowerCase();
+  const rows = DS_ONLINE_MOCK.filter(b => {
+    if (DS_ONLINE_MOCK_ONLY && !b.local) return false;
+    if (!q) return true;
+    return [b.name, b.pretty_name, b.dataset_id, (b.tags || []).join(" ")]
+      .some(v => String(v || "").toLowerCase().includes(q));
+  });
+  tbl.innerHTML = `
+    <thead><tr><th>基准</th><th>dataset_id</th><th>标签</th><th>指标</th><th>subsets</th><th>本机</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${rows.map(b => `<tr class="${b.name === DS_ONLINE_MOCK_SEL ? "on" : ""}">
+      <td class="rname"><b class="mono">${b.name}</b><div class="rid mono faint">${b.pretty_name !== b.name ? b.pretty_name : ""}</div></td>
+      <td class="mono dim" style="font-size:11px">${b.dataset_id}</td>
+      <td class="dim">${(b.tags || []).slice(0, 4).map(t => `<span class="tag">${t}</span>`).join(" ")}</td>
+      <td class="mono dim" style="font-size:11px">${(b.metrics || []).join(", ")}</td>
+      <td class="dim">${(b.subsets || []).length}</td>
+      <td>${dsOnlineMockBadge(b)}</td>
+      <td style="text-align:right"><button class="btn sm" onclick="dsMockGuard()">选用</button></td>
+    </tr>`).join("") || '<tr><td colspan="7" class="ds-empty">无匹配（换个关键词试试）</td></tr>'}</tbody>`;
+  document.querySelector("#dsOnlineLocalOnly small").textContent =
+    DS_ONLINE_MOCK.filter(b => b.local).length;
+}
+
+/* 页面初始化（DOMContentLoaded）：api32.js 在本内联脚本之后加载，届时
+   dsBuildGroups/dsFilterMatch/fbMount 才可用；监听注册顺序保证 boot 先行 */
+function dsDatasetsInit() {
+  if (!document.getElementById("dsFilter")) return;
+  window.DS_FILTERS = {};
+  window.dsFB = fbMount("dsFilter", dsBuildGroups(DS_ROWS_MOCK), sel => {
+    window.DS_FILTERS = sel;
+    if (dsIsLive()) dsRenderTable();              // live：api32.js 渲染 + 后端筛选
+    else dsMockRender();                          // mock：静态稿筛选
+  });
+  document.getElementById("dsOnlineSearch").addEventListener("input", () => {
+    if (dsIsLive()) return;                       // live 由 api32.js 接管
+    dsOnlineMockRender();
+  });
+  document.getElementById("dsOnlineLocalOnly").addEventListener("click", () => {
+    if (dsIsLive()) return;
+    DS_ONLINE_MOCK_ONLY = !DS_ONLINE_MOCK_ONLY;
+    document.getElementById("dsOnlineLocalOnly").classList.toggle("on", DS_ONLINE_MOCK_ONLY);
+    dsOnlineMockRender();
+  });
+  if (!dsIsLive()) { dsMockRender(); dsOnlineMockRender(); }
+}
+window.addEventListener("DOMContentLoaded", dsDatasetsInit);
 
 /* ---------- 模型管理 ---------- */
 const MODELS = [
@@ -208,6 +517,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=1"></script>
+<script src="api32.js?v=20"></script>
 </body>
 </html>

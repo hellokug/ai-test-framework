@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aite · 任务管理 · 功能</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=17">
+<link rel="stylesheet" href="assets/v1.css?v=20">
 </head>
 <body data-module="functional" data-module-label="任务管理 · 功能">
 <script type="text/plain" id="page-list">[
-  {"id":"runs","label":"任务列表","count":"23"},
+  {"id":"runs","label":"任务列表"},
   {"id":"detail","label":"任务详情"},
-  {"id":"scenarios","label":"评估场景","count":"13"},
-  {"id":"scripts","label":"脚本库","count":"26"},
-  {"id":"vresults","label":"版本结果库","count":"6"},
+  {"id":"scenarios","label":"评估场景"},
+  {"id":"scripts","label":"脚本库"},
+  {"id":"tools","label":"工具库"},
+  {"id":"vresults","label":"版本结果库"},
   {"id":"board","label":"质量大屏"}
 ]</script>
 
@@ -28,15 +29,15 @@
       <div class="actions"><button class="btn" data-open-drawer="newRunModal">＋ 新建运行</button></div>
     </header>
     <section class="stats">
-      <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">23</div><span class="delta up">▲ 5 本周</span></div>
-      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>场景通过率</div><div class="value">91.7%</div><span class="delta up">▲ 2.4pp</span></div>
-      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>内置场景</div><div class="value">13</div><span class="delta flat">+2 本月</span></div>
-      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>失败场景</div><div class="value">3</div><span class="delta down">▼ 1</span></div>
+      <div class="stat"><div class="label"><i></i>累计运行</div><div class="value">—</div></div>
+      <div class="stat"><div class="label"><i style="background:var(--ok)"></i>运行中</div><div class="value">—</div></div>
+      <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>评估场景</div><div class="value">—</div></div>
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>版本结果</div><div class="value">—</div></div>
     </section>
     <div class="filter-bar" id="runsFilter">
-      <span class="chip on" data-status="all">全部 <small>23</small></span>
+      <span class="chip on" data-status="all">全部</span>
       <span class="chip" data-status="succeeded">已完成</span>
-      <span class="chip" data-status="failed">执行异常 <small>2</small></span>
+      <span class="chip" data-status="failed">执行异常</span>
       <span class="chip" data-status="running">进行中</span>
       <span style="flex:1"></span>
       <span class="lbl">执行人</span><select class="in" data-owner style="width:136px"><option value="all">全部执行人</option><option value="zhimeng">zhimeng（我）</option><option value="陈曦">陈曦</option><option value="刘畅">刘畅</option><option value="王维">王维</option></select>
@@ -111,6 +112,15 @@
       <div class="card-head"><div><h3>劣化检测 · 汇报结论</h3><div class="sub">自动生成 · 可直接进版本报告</div></div></div>
       <div class="detail-stack" id="boardVerdict"></div>
     </section>
+  </section>
+
+  <!-- ============ 工具库（tool_calls 工具定义） ============ -->
+  <section data-page="tools" hidden>
+    <header class="topbar">
+      <div><h1>工具库</h1><div class="crumb">tool_calls 工具定义（OpenAI tools 格式）· 数据行 request.tools 写工具名引用 · 执行时展开为完整定义</div></div>
+      <div class="actions"><button class="btn primary" id="toolNewBtn">＋ 新建工具</button></div>
+    </header>
+    <section class="card"><table class="sumtable" id="toolsTbl"><tbody><tr><td class="ds-empty">加载中…</td></tr></tbody></table></section>
   </section>
 
   <!-- ============ 版本结果库 ============ -->
@@ -224,18 +234,21 @@
           <span class="p-label">模型名称<span class="qmark">?<span class="tip">请求体 model 字段</span></span></span>
           <input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
         <div class="p-row" style="margin-bottom:0">
-          <span class="p-label">鉴权 api_key_env<span class="qmark">?<span class="tip">密钥不落库：仅存环境变量名，运行时解析</span></span></span>
-          <input class="in" placeholder="如 OPENAI_API_KEY" style="max-width:300px"></div>
+          <span class="p-label">鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">「公共 · 密钥管理」密钥库已归档的密钥直接下拉选择（运行时解密注入）；也可选「仅环境变量」手填本机变量名，环境变量同名时优先</span></span></span>
+          <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+            <select class="in" data-keysel style="flex:1"></select>
+            <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+          </div></div>
       </div>
       <div class="p-row" style="margin-bottom:0">
         <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；任务终态后结果自动归档进「版本结果库」，供质量大屏做 版本 × 模型 × 维度 对比</span></span></span>
         <div style="display:flex;gap:8px;align-items:center;max-width:440px">
           <select class="in" id="ftVerSel" style="flex:1">
-            <option>v1.3.0-rc（当前最新）</option>
-            <option>v1.2.0</option>
-            <option>v1.1.0</option>
+            <option value="v1.3.0-rc">v1.3.0-rc（当前最新）</option>
+            <option value="v1.2.0">v1.2.0</option>
+            <option value="v1.1.0">v1.1.0</option>
           </select>
-          <button class="btn sm" type="button" title="该模型没有对应版本？去「公共 · 版本管理」登记">＋ 新版本</button>
+          <button class="btn sm" type="button" id="ftVerNewBtn" title="就地创建到全局版本管理（公共 · 版本管理），创建后立即选中">＋ 新版本</button>
         </div></div>
     </div>
 
@@ -249,7 +262,7 @@
         <span class="chip" data-p="none">清空</span>
       </div>
       <div class="chips" style="margin-bottom:8px">
-        <input class="in" id="ftSearch" style="flex:1;min-width:220px;height:32px;padding:4px 10px" placeholder="搜索场景 / 用例 id、说明…（可批量勾选命中项）">
+        <input class="in" id="ftSearch" data-nodirty style="flex:1;min-width:220px;height:32px;padding:4px 10px" placeholder="搜索场景 / 用例 id、说明…（可批量勾选命中项）">
         <button class="btn sm" id="ftSelFiltered">勾选命中</button>
         <button class="btn sm" id="ftClrFiltered">移除命中</button>
         <span class="hint" id="ftSearchN" style="margin:0"></span>
@@ -271,13 +284,73 @@
     <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">启动（后台执行）</button></div>
   </div>
 
+<!-- 任务编辑抽屉（pending 限定）：复制/重试生成的草稿从这里改参再跑 -->
+<div class="drawer drawer-lg" id="taskEditDrawer" hidden>
+  <div class="drawer-head"><div><h3>编辑任务配置</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-body">
+
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>与「新建运行」同形 · 只影响下一次运行</small></div>
+      <div class="p-row">
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空列表显示「未命名」；建议体现本轮改动目的，便于任务列表检索</span></span></span>
+        <input class="in" id="teName" placeholder="任务名称"></div>
+      <div class="p-row">
+        <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">终态后结果按此版本归档进「版本结果库」；候选来自公共 · 版本管理，也可直接手填新版本号</span></span></span>
+        <input class="in" id="teVersion" list="teVerList" placeholder="如 v1.3.0-rc" style="max-width:300px">
+        <datalist id="teVerList"></datalist></div>
+      <div class="p-row">
+        <span class="p-label">目标模型<span class="qmark">?<span class="tip">候选与「新建运行」同源（公共 · 模型管理 + 平台注册）；当前配置命中不了下拉时自动落到「自定义」并回填端点</span></span></span>
+        <select class="in" id="teModelSel" style="max-width:380px"></select></div>
+      <div id="teModelCustom" hidden>
+        <div class="p-row">
+          <span class="p-label">模型访问 url<span class="qmark">?<span class="tip">OpenAI 兼容端点地址，含版本路径</span></span></span>
+          <input class="in" id="teBaseUrl" placeholder="如 http://10.1.2.3:8000/v1" style="max-width:380px"></div>
+        <div class="p-row">
+          <span class="p-label">模型名称<span class="qmark">?<span class="tip">请求体 model 字段</span></span></span>
+          <input class="in" id="teModelName" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
+        <div class="p-row" style="margin-bottom:0">
+          <span class="p-label">鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">密钥库已归档密钥直接选择（运行时解密注入）；或选「仅环境变量」手填本机变量名</span></span></span>
+          <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+            <select class="in" data-keysel style="flex:1"></select>
+            <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+          </div></div>
+      </div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">单场景超时 timeout<span class="qmark">?<span class="tip">写入 spec.extra.timeout（秒），到时记失败并继续后续场景；留空恢复缺省 1800</span></span></span>
+        <input class="in" id="teTimeout" type="number" min="1" placeholder="秒；留空 = 缺省 1800" style="max-width:300px"></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>场景与用例过滤</b><small>tools.datasets 决定跑哪些场景 · tools.cases 精确限定到用例</small></div>
+      <div class="p-row">
+        <span class="p-label">已选场景<span class="qmark">?<span class="tip">点 ✕ 移除；下方补选框加回（候选来自评估场景资产）</span></span></span>
+        <div class="chips" id="teScenes" style="flex:1;min-width:260px"></div></div>
+      <div class="p-row">
+        <span class="p-label">补选场景</span>
+        <div style="display:flex;gap:8px;max-width:440px">
+          <input class="in" id="teAddScene" list="teSceneList" placeholder="场景 id，如 basic_chat" style="flex:1">
+          <button class="btn sm" type="button" id="teAddBtn">添加</button></div>
+        <datalist id="teSceneList"></datalist></div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">用例过滤 tools.cases<span class="qmark">?<span class="tip">每行一条用例 id（场景内用例名，精确匹配，打错显式报错）；留空 = 跑所选场景全部用例</span></span></span>
+        <textarea class="in mono" id="teCases" rows="4" placeholder="如：&#10;hello_zh&#10;status_404" style="max-width:480px"></textarea></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">3</span><b>原始 spec（只读参照）</b><small>保存以上方表单为准 · 表单未覆盖的字段原样保留</small></div>
+      <pre class="mono" id="teSpecView" style="font-size:11px;white-space:pre-wrap;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:180px;overflow:auto;margin:0"></pre>
+    </div>
+    </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn" id="teSaveBtn">保存（不运行）</button><button class="btn primary" id="teRunBtn">保存并运行</button></div>
+</div>
+
 <!-- 新建评估场景抽屉 -->
 <div class="drawer" id="scnDrawer" hidden>
   <div class="drawer-head"><h3>新建评估场景</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body">
-    <div class="field"><label>显示名<span class="qmark">?<span class="tip">场景的业务名称，人看的：场景卡标题、创建任务时的场景树、质量大屏矩阵的维度行名、报告与汇报结论里都用它</span></span></label>
+    <div class="field"><label>显示名（中文名称）<span class="qmark">?<span class="tip">场景的业务名称，人看的：场景卡标题、创建任务时的场景树、质量大屏矩阵的维度行名、报告与汇报结论里都用它</span></span></label>
       <input class="in" value="参数校验"></div>
-    <div class="field"><label>场景 id<span class="qmark">?<span class="tip">英文目录名，机器看的：场景卡副行（mono 小字）、脚本库「所属场景」副行、jsonl 物理路径 scenarios/&lt;id&gt;/、任务 spec 与 tools.cases 的 id 前缀（场景名.用例名）；创建后不可修改</span></span></label>
+    <div class="field"><label>场景 id（英文编号）<span class="qmark">?<span class="tip">机器看的编号：小写字母开头，允许数字/-/_；场景卡副行（mono 小字）、脚本库「所属场景」副行、jsonl 物理路径 scenarios/&lt;id&gt;/、任务 spec 与 tools.cases 的 id 前缀（场景名.用例名）；创建后不可修改。命名约定：id 用英文编号，显示名用中文名称</span></span></label>
       <input class="in" value="param_validation"></div>
     <div class="field"><label>维度标签<span class="qmark">?<span class="tip">跨场景的业务归类（汇报分组与场景筛选用）。标签来自共享「维度标签库」：新增一次即入库，之后所有场景的创建/编辑都直接选用，无需重复输入；库由后端统一存储（§10.5 标签注册表），静态稿用 localStorage 演示复用</span></span></label>
       <div class="chips" id="scnDims" style="margin:0"></div>
@@ -313,34 +386,37 @@
   <div class="drawer-foot"><button class="btn" data-close>关闭</button></div>
 </div>
 
+<!-- 工具定义抽屉 -->
+<div class="drawer drawer-lg" id="toolDrawer" hidden>
+  <div class="drawer-head"><div><h3 id="toolDrawerTitle">新建工具</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">OpenAI tools 条目：{"type":"function","function":{name, description, parameters}} · 工具名创建后不可改（数据行按名引用）</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div style="margin-bottom:8px"><button type="button" class="btn sm" id="toolTplBtn">填入模板</button></div>
+    <textarea class="in" id="toolJson" rows="20" spellcheck="false" style="font-family:var(--mono,monospace);font-size:12.5px"></textarea>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="toolSaveBtn">保存工具</button></div>
+</div>
+
 <!-- 从 0 创建脚本抽屉（低代码） -->
 <div class="drawer drawer-lg" id="newScriptDrawer" hidden>
-  <div class="drawer-head"><div><h3>新建脚本（从 0 创建）</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">归属场景 → 用例类型 → 数据行（content + params + 断言）· 三要素固定即脚本完成</div></div><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-head"><div><h3>新建脚本</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">场景 → 脚本（1 个 jsonl 文件）→ 数据行（行 = 用例执行单元：request + expect）</div></div><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body">
     <div class="form-sec" style="margin-top:0">
-      <div class="sec-head"><span class="sec-num">1</span><b>归属</b><small>先场景后用例 · 无场景不建脚本（硬约束）</small></div>
+      <div class="sec-head"><span class="sec-num">1</span><b>脚本</b><small>用例 id / 类型 / 等级在每个数据行上标注</small></div>
       <div class="form-grid">
-        <div class="field"><label>评估场景（必选）<span class="qmark">?<span class="tip">场景 = 质量大屏的维度聚合键，用例必须归属场景；没有目标场景？先回列表「＋ 新建评估场景」</span></span></label>
-          <select class="in" id="nsScen"><option value="">请选择评估场景…</option><option>basic_chat · 基础对话</option><option>tool_calling · 工具调用 FC</option></select></div>
-        <div class="field"><label>脚本 id（= jsonl 文件名）</label><input class="in" value="boundary_oversize_input"></div>
+        <div class="field"><label>评估场景<span class="qmark">?<span class="tip">从场景卡「＋ 脚本」或场景「管理脚本」里新建时自动锁定为当前场景；从脚本库新建时需选择</span></span></label>
+          <select class="in" id="nsScen"><option value="">请选择评估场景…</option></select>
+          <span class="hint" id="nsScenLock" hidden style="margin:4px 0 0">已锁定为当前场景</span></div>
+        <div class="field"><label>脚本 id（英文编号）<span class="qmark">?<span class="tip">= jsonl 文件名，全平台唯一；小写字母开头，允许数字/-/_；创建后不可改</span></span></label>
+          <input class="in" id="nsSid" placeholder="如 boundary_oversize_input"></div>
       </div>
-      <div class="form-grid">
-        <div class="field"><label>脚本名称（测试意图）</label><input class="in" value="边界 · 超长输入"></div>
-        <div class="field"><label>外部平台用例编号（可选）</label><input class="in" placeholder="如 TC-3120"></div>
-      </div>
-      <div class="field" style="margin-bottom:0"><label>用例类型<span class="qmark">?<span class="tip">类型 = 标签不是层级：场景内靠 基础/边界/异常 标签覆盖完整能力；大屏后续可按类型过滤劣化</span></span></label>
-        <div class="chips" id="nsCaseType" style="margin:0">
-          <span class="chip" data-single>基础</span>
-          <span class="chip on" data-single>边界</span>
-          <span class="chip" data-single>异常</span>
-          <span class="chip" data-single>兼容</span>
-        </div></div>
+      <div class="field" style="margin-bottom:0"><label>脚本名称（中文名称）</label>
+        <input class="in" id="nsName" placeholder="如 边界 · 超长输入"></div>
     </div>
     <div class="form-sec" style="margin-bottom:0">
-      <div class="sec-head"><span class="sec-num">2</span><b>数据行（1..N）</b><small>行 = 变体 · 行级执行与判定 · 脚本结果 = 行级聚合</small></div>
+      <div class="sec-head"><span class="sec-num">2</span><b>数据行（1..N）</b><small>每行 = 一个可执行用例：行 id + 用例 id + 类型/等级 + request + expect · 添加新行后旧行自动折叠为摘要，点行头展开</small></div>
       <div id="nsRows"><!-- 行卡由 nsRowHtml(n) 生成：初始 1 空行，可增删（数据行 1..N，至少保留 1 行）--></div>
       <button class="btn sm" id="nsRowAdd">＋ 添加数据行</button>
-      <button type="button" class="btn sm" id="nsJsonlBtn">从 jsonl 导入行</button>
+      <button type="button" class="btn sm" id="nsJsonlBtn" data-nodirty>从 jsonl 导入行</button>
       <span class="hint" style="margin-left:8px">同意图多变体挂同一脚本；批量变体还可用 vars 占位符生成器（引擎已有能力）</span>
       <div id="nsJsonlArea" hidden style="margin-top:8px">
         <textarea class="in" id="nsJsonlText" rows="5" placeholder='每行一个用例（JSONL），例如：&#10;{"desc":"变体 1","messages":[...],"params":{...},"expect":{...}}'></textarea>
@@ -368,8 +444,8 @@
         <div class="field"><label>用例类型</label><select class="in"><option>基础</option><option selected>边界</option><option>异常</option></select></div>
       </div>
       <div class="form-grid">
-        <div class="field"><label>脚本名称</label><input class="in" value="边界 · 乱码与非法输入"></div>
-        <div class="field"><label>脚本 id（= jsonl 文件名）</label><input class="in" value="boundary_garbled_input"></div>
+        <div class="field"><label>脚本名称（中文名称）</label><input class="in" value="边界 · 乱码与非法输入"></div>
+        <div class="field"><label>脚本 id（英文编号，= jsonl 文件名）</label><input class="in" value="boundary_garbled_input"></div>
       </div>
     </div>
     <div class="form-sec" style="margin-bottom:0">
@@ -392,14 +468,14 @@
 
 <div class="ribbon">V1 静态稿 · 功能测试 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=13"></script>
+<script src="assets/v1.js?v=17"></script>
 <script>
 const RUNS = [
   ["ft-full-qwen3b", "#7a21c9e4 · v1.2.0 · 全量 9 场景", "qwen2.5:3b", "failed", 91.7, "84 / 3 fail", "09-23 20:12", "zhimeng"],
   ["ft-api-contract-deepseek", "#b09d41aa · v1.2.0 · API 契约 4 场景", "DeepSeek-V3", "failed", 86.8, "38 / 5 fail", "09-23 15:31", "陈曦"],
-  ["ft-agent-tasks-qwen", "#5ce208b1 · v1.2.0 · 工具调用 2 场景", "qwen2.5:3b", "passed", 100.0, "12 / 0", "09-23 11:20", "刘畅"],
-  ["ft-smoke-ollama", "#d3417f0a · v1.2.0 · 冒烟 4 场景", "qwen2.5:3b", "passed", 100.0, "14 / 0", "09-22 09:15", "zhimeng"],
-  ["ft-full-nightly", "#18c7b2e9 · v1.2.0 · 全量 9 场景 · timeout 3600", "DeepSeek-V3", "passed", 98.8, "84 / 1 fail", "09-22 02:00", "王维"],
+  ["ft-agent-tasks-qwen", "#5ce208b1 · v1.2.0 · 工具调用 2 场景", "qwen2.5:3b", "succeeded", 100.0, "12 / 0", "09-23 11:20", "刘畅"],
+  ["ft-smoke-ollama", "#d3417f0a · v1.2.0 · 冒烟 4 场景", "qwen2.5:3b", "succeeded", 100.0, "14 / 0", "09-22 09:15", "zhimeng"],
+  ["ft-full-nightly", "#18c7b2e9 · v1.2.0 · 全量 9 场景 · timeout 3600", "DeepSeek-V3", "succeeded", 98.8, "84 / 1 fail", "09-22 02:00", "王维"],
 ];
 /* 任务层状态徽章与评估结果单元格（api19 同名定义已移除，此处为唯一来源） */
 const TASK_BADGE = {
@@ -417,20 +493,35 @@ function evalCell(ev) {
   if (!ev || ev.rate === null || ev.rate === undefined) return '<span class="faint">—</span>';
   const pct = Math.round(ev.rate * 1000) / 10;
   const color = ev.rate >= 1 ? "var(--ok)" : ev.rate <= 0 ? "var(--bad)" : "var(--warn)";
+  const n = ev.passed !== undefined && ev.passed !== null ? `${ev.passed}/` : "";
   return `<span class="num mono" style="color:${color};font-weight:650">${pct}%</span>` +
-    (ev.total ? ` <span class="dim" style="font-size:11px">${ev.total} 例</span>` : "");
+    (ev.total ? ` <span class="dim" style="font-size:11px">${n}${ev.total} 例</span>` : "");
 }
 function renderRuns(status, owner, kw) {
+  syncStatusChips("runsFilter", RUNS, r => r[3]);
   const hits = RUNS.filter(r => (status === "all" || r[3] === status)
     && (owner === "all" || r[7] === owner)
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
   document.getElementById("runsTbl").innerHTML = `
   <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>任务状态</th><th>评估结果</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${hits.length ? hits.map(r => `<tr class="clickable" onclick="openRunDetail(${RUNS.indexOf(r)})">
+  <tbody>${hits.length ? hits.map(r => {
+    const i = RUNS.indexOf(r);
+    // 操作按状态渲染（终态集合与后端 TASK_TERMINAL 对齐；行为见 api32 fapiTaskAction）
+    const acts = [
+      ["pending", "succeeded", "failed", "cancelled", "stale"].includes(r[3])
+        ? `<button class="btn sm" onclick="fapiTaskAction('run', ${i}, event)" title="${r[3] === "pending" ? "发起运行" : "重跑一轮（同一任务，追加执行历史）"}">${r[3] === "pending" ? "运行" : "重跑"}</button>
+      <button class="btn sm" onclick="fapiTaskAction('edit', ${i}, event)" title="改配置（非运行中可改）：模型/版本/场景/用例过滤/超时">编辑</button>` : "",
+      r[3] === "running" ? `<button class="btn sm" onclick="fapiTaskAction('stop', ${i}, event)" title="协作式停止">停止</button>` : "",
+      ["succeeded", "failed", "cancelled", "stale"].includes(r[3]) ? `<button class="btn sm" onclick="fapiTaskAction('retry', ${i}, event)" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : "",
+      `<button class="btn sm" onclick="fapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>`,
+      `<button class="btn sm">报告 ↗</button>`,
+    ].filter(Boolean).join("");
+    return `<tr class="clickable" onclick="openRunDetail(${i})">
     <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
     <td class="dim">${r[2]}</td><td class="dim">${r[7]}</td><td>${taskBadge(r[3])}</td><td>${evalCell(r[4])}</td>
     <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
-    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")
+    <td style="text-align:right;white-space:nowrap">${acts}</td></tr>`;
+  }).join("")
     : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
 }
 bindTaskFilter("runsFilter", renderRuns);
@@ -452,22 +543,28 @@ document.getElementById("sumTbl").innerHTML = `
 
 const FAILS = [
   { case: "api_params.extra_param_ignored", assert: "http_status = 400（未知参数必须拒绝）",
-    input: `POST /v1/chat/completions {"model":"qwen2.5:3b","messages":[…],"temperature":0.7,"top_k":40}`,
-    output: `HTTP 200 — n/extra 参数被静默忽略（Ollama 已知规范差异，标准端点应转绿）` },
+    req: `POST /v1/chat/completions
+{"model":"qwen2.5:3b","messages":[{"role":"user","content":"你好"}],"temperature":0.7,"top_k":40}`,
+    resp: `HTTP 200
+{"id":"chatcmpl-…","choices":[{"message":{"role":"assistant","content":"你好！"}}]}
+（n/extra 参数被静默忽略 —— Ollama 已知规范差异，标准端点应转绿）` },
   { case: "api_stream.sse_done_marker", assert: "流式以 data: [DONE] 结束",
-    input: `POST /v1/chat/completions {"stream":true, …}`,
-    output: `流正常返回 12 个 chunk，但缺少 [DONE] 终止帧（ finish_reason=stop 后连接直接关闭）` },
+    req: `POST /v1/chat/completions
+{"model":"qwen2.5:3b","messages":[…],"stream":true}`,
+    resp: `12 个 chunk 正常返回（finish_reason=stop 后连接直接关闭），缺少 [DONE] 终止帧` },
   { case: "tool_calling.weather_args", assert: "tool_args_contains {city: 北京}",
-    input: `messages: ["北京明天穿什么？"] + tools:[get_weather]`,
-    output: `模型调用 get_weather，但参数为 {"city": "Beijing"}（中文名未按用例约束保留）` },
+    req: `POST /v1/chat/completions
+{"model":"qwen2.5:3b","messages":[{"role":"user","content":"北京明天穿什么？"}],"tools":[{"type":"function","function":{"name":"get_weather",…}}]}`,
+    resp: `{"tool_calls":[{"function":{"name":"get_weather","arguments":"{\\"city\\": \\"Beijing\\"}"}}]}
+（中文名未按用例约束保留）` },
 ];
 document.getElementById("failList").innerHTML = FAILS.map(f => `
   <div style="border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);border-radius:10px;padding:12px 16px">
     <div class="mono" style="font-size:13px;color:var(--bad)">✕ ${f.case}</div>
     <div class="detail-stack" style="margin-top:10px">
       <div class="kv"><span>断言</span><div style="font-size:12.5px">${f.assert}</div></div>
-      <div class="kv"><span>输入</span><pre>${f.input}</pre></div>
-      <div class="kv"><span>输出</span><pre>${f.output}</pre></div>
+      <div class="kv"><span>请求体</span><pre>${f.req}</pre></div>
+      <div class="kv"><span>响应体</span><pre>${f.resp}</pre></div>
     </div></div>`).join("");
 
 const CASES = [
@@ -771,19 +868,106 @@ document.getElementById("scScriptTbl").innerHTML = `
 /* 从0创建抽屉：数据行 = nsRowHtml(n) 单一模板；初始 1 空行，可增删（1..N，至少留 1 行）；
    断言 = 选类型即展开参数行（目标 / 关系 / 期望值），键族 = harness 白名单 */
 let nsRowN = 1;
+const NS_ROW_TYPES = ["基础", "边界", "异常", "兼容", "bad case"];
+const NS_ROW_LEVELS = ["P0", "P1", "P2", "P3"];
+const NS_REQ_TEMPLATE = {
+  messages: [
+    { role: "system", content: "你是一个有帮助的助手。" },
+    { role: "user", content: "在这里填写用户输入" },
+  ],
+  temperature: 0,
+  max_tokens: 512,
+  stream: false,
+};
+function nsToolOptions() {
+  return '<option value="">＋ 从工具库添加…</option>' +
+    (window.FT_TOOLS || []).map(t =>
+      `<option value="${t.name}">${t.name}${t.description ? " · " + t.description : ""}</option>`).join("");
+}
+/* request JSON ⇄ 行存储（harness.Case 平铺形状）：messages / tools 独立，其余键 = params；
+   不写 messages = 不发对话字段（_omit_messages）；tools 写名字 = 工具库引用 */
+function nsSplitRequest(req) {
+  const p = { ...req }, out = {};
+  if ("messages" in p) { out.messages = p.messages; delete p.messages; }
+  else { out.messages = []; p._omit_messages = true; }
+  if ("tools" in p) { out.tools = p.tools; delete p.tools; }
+  if (Object.keys(p).length) out.params = p;
+  return out;
+}
+function nsMergeRequest(row) {
+  const p = { ...(row.params || {}) }, req = {};
+  if (p._omit_messages) delete p._omit_messages;
+  else req.messages = row.messages ?? [];
+  Object.assign(req, p);
+  if (row.tools) req.tools = row.tools;
+  return req;
+}
+/* 行卡 = head（折叠摘要，恒可见）+ body（编辑区）；data-collapsed 切换。
+   添加/复制新行时旧行自动折叠成摘要（id/用例 id/类型/等级/描述 + 完成度），点行头再展开 */
+const nsEsc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+function nsUpdateSummary(card) {
+  const g = s => card.querySelector(s)?.value.trim() ?? "";
+  const asserts = card.querySelector(".ns-asserts");
+  const assertN = asserts ? asserts.querySelectorAll(":scope > div .tag").length : 0;
+  const varN = card.querySelectorAll(".ns-var").length;
+  const req = g(".ns-req");
+  const tags = [];
+  const rid = g(".ns-rid");
+  tags.push(`<span class="tag mono" ${rid ? "" : 'style="opacity:.55"'}>${nsEsc(rid) || "id 自动"}</span>`);
+  if (g(".ns-cid")) tags.push(`<span class="tag mono">${nsEsc(g(".ns-cid"))}</span>`);
+  if (g(".ns-type")) tags.push(`<span class="tag">${nsEsc(g(".ns-type"))}</span>`);
+  if (g(".ns-level")) tags.push(`<span class="tag">${nsEsc(g(".ns-level"))}</span>`);
+  const meta = [`<span class="ns-row-meta ${req ? "ok" : "warn"}">request ${req ? "✓" : "空"}</span>`,
+    `<span class="ns-row-meta">断言 ${assertN}</span>`];
+  if (varN) meta.push(`<span class="ns-row-meta">占位符 ${varN}</span>`);
+  const desc = g(".ns-desc");
+  const sum = card.querySelector(".ns-row-sum");
+  if (sum) sum.innerHTML =
+    `<span class="ns-sum-l1">${tags.join("")}<span class="ns-sum-meta">${meta.join("")}</span></span>` +
+    `<span class="ns-row-desc" title="${nsEsc(desc)}">${nsEsc(desc) || "<i style='opacity:.5;font-style:normal'>（未填描述）</i>"}</span>`;
+}
+function nsSetCollapsed(card, collapsed) {
+  card.dataset.collapsed = collapsed ? "1" : "0";
+  nsUpdateSummary(card);
+}
+function nsCollapseAll(except) {   // except 之外的行全部折叠（添加/复制新行时收起旧行）
+  document.querySelectorAll("#nsRows .ns-row").forEach(c => { if (c !== except) nsSetCollapsed(c, true); });
+}
+function nsCollapseForReview() {   // 批量灌入（导入 / 编辑已有脚本）：多行收成摘要清单，单行保持展开
+  const rows = document.querySelectorAll("#nsRows .ns-row");
+  if (rows.length > 1) nsCollapseAll();
+  else rows.forEach(c => nsSetCollapsed(c, false));
+}
+function nsRevealRow(card) {   // 展开并定位某行（保存校验报错 / 用例明细直达编辑）
+  nsCollapseAll(card);
+  nsSetCollapsed(card, false);
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
 function nsRowHtml(n) {
-  return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-      <div class="seg-title" style="margin-top:0">行 ${n}</div>
-      <button class="btn sm ns-row-copy" title="以此行为模板复制一行（改参数即可成新变体）">复制此行</button>
+  const opt = arr => '<option value="">—</option>' + arr.map(v => `<option>${v}</option>`).join("");
+  return `<div class="card ns-row" data-collapsed="0">
+    <div class="ns-row-head" title="点击展开 / 折叠此行">
+      <span class="ns-fold">▾</span>
+      <span class="ns-row-no">行 ${n}</span>
+      <span class="ns-row-sum"></span>
+      <button class="btn sm ns-row-copy" title="复制此行（行 id 清空，其余照搬）">复制此行</button>
       <button class="btn sm ns-row-del" title="删除此行（至少保留 1 行）">删除此行</button>
     </div>
-    <div class="field"><label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">对话承载
-      <select class="in ns-carrier" style="width:auto"><option value="messages">messages</option><option value="input">input</option><option value="none">不发对话</option></select>
-      <span class="qmark">?<span class="tip">messages=标准 chat 字段；input=DeepSeek 等新版接口把对话放 input（引擎自动省略 messages）；不发对话=纯参数校验用例（如只测 model 有效性）。下方 JSON 数组写入所选字段</span></span></label>
-      <textarea class="in" rows="2" placeholder='[{"role":"user","content":"…"}]'></textarea></div>
-    <div class="field"><label>tools 工具定义（可选 · JSON 数组）<span class="qmark">?<span class="tip">OpenAI tools 数组原样进请求体顶层；FC 断言用 expect.tool / tool_args_contains / no_tool</span></span></label><textarea class="in ns-tools" rows="2" placeholder='[{"type":"function","function":{"name":"get_weather",…}}]；留空 = 请求体不带 tools'></textarea></div>
-    <div class="field"><label>生成值占位符（vars）<span class="qmark">?<span class="tip">点生成器按钮即插入 {占位符} 到 content（空 content 自动生成骨架）；占位符也可直接写进 params（如 {"input": "{g1}"}）；参数可改；seed 留空 = 每次执行取新随机值，填了可复现。生成器 = 引擎内置白名单，前端只做低代码封装</span></span></label>
+    <div class="ns-row-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr 120px 90px;gap:0 10px">
+      <div class="field"><label>行 id<span class="qmark">?<span class="tip">JSON 行 id = 执行与结果回填的唯一键（场景内唯一，按它圈选执行）；留空自动生成「脚本id.序号」</span></span></label><input class="in ns-rid" placeholder="留空自动生成"></div>
+      <div class="field"><label>用例 id<span class="qmark">?<span class="tip">外部用例平台的用例编号；一个用例可拆多行（多变体）挂同一编号；执行结果按它回填到外部用例</span></span></label><input class="in ns-cid" placeholder="如 TC-1024"></div>
+      <div class="field"><label>类型</label><select class="in ns-type">${opt(NS_ROW_TYPES)}</select></div>
+      <div class="field"><label>等级</label><select class="in ns-level">${opt(NS_ROW_LEVELS)}</select></div>
+    </div>
+    <div class="field"><label>描述</label><input class="in ns-desc" placeholder="这一行测什么，如：超长输入 64k 应返回 400"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">request（请求体 JSON）
+      <button type="button" class="btn sm ns-tpl">填入模板</button>
+      <select class="in ns-tool-pick" style="width:auto;max-width:260px">${nsToolOptions()}</select>
+      <span class="qmark">?<span class="tip">即实际发送的请求体（model 由任务的目标模型注入）。tools 里写工具库的工具名（字符串），保存时校验、执行时展开为完整定义；也可直接写完整定义对象。不写 messages = 不发对话字段（参数校验场景）。下划线控制键（_raw_body / _http_method）原样支持</span></span></label>
+      <textarea class="in ns-req" rows="9" spellcheck="false" style="font-family:var(--mono,monospace);font-size:12.5px" placeholder="点「填入模板」开始，基于模板修改"></textarea></div>
+    <div class="field"><label>生成值占位符<span class="qmark">?<span class="tip">点按钮生成 {g1} 等占位符并插入 request 光标处（request 为空时自动填模板）；执行时替换为生成值。seed 留空 = 每次执行取新随机值，填了可复现</span></span></label>
       <div class="ns-vars" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
         <button type="button" class="btn sm ns-add-var" data-kind="garbled">＋ 乱码</button>
@@ -792,28 +976,7 @@ function nsRowHtml(n) {
         <button type="button" class="btn sm ns-add-var" data-kind="random_choice">＋ 随机选项</button>
         <button type="button" class="btn sm ns-add-var" data-kind="haystack">＋ 长文埋码</button>
       </div></div>
-    <div class="field"><label>常用参数<span class="qmark">?<span class="tip">留空 = 用官方缺省。值不做前端拦截——非法值（如 temperature=3）原样透传，配合 http_status 断言即参数校验用例；key 拼错同理透传</span></span></label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">temperature</span><input type="number" step="any" class="in ns-temp" placeholder="1.0（0–2）"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">top_p</span><input type="number" step="any" class="in ns-topp" placeholder="1.0（0–1）"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">max_tokens</span><input type="number" step="1" class="in ns-maxt" placeholder="缺省 8K/64K"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stream</span><select class="in ns-stream" style="width:100%"><option value="">缺省</option><option value="false">false</option><option value="true">true</option></select></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stop</span><input class="in ns-stop" placeholder="多个逗号分隔"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">resp_format</span><select class="in ns-respf" style="width:100%"><option value="">缺省</option><option>text</option><option>json_object</option></select></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">thinking</span><select class="in ns-think" style="width:100%"><option value="">缺省(high)</option><option value="disabled">关</option><option value="low">开·low</option><option value="high">开·high</option><option value="max">开·max</option><option value="none">开·none</option></select></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">stream_opt</span><select class="in ns-sopt" style="width:100%"><option value="">缺省</option><option value="include_usage">include_usage</option></select></div>
-        <div style="display:grid;grid-template-columns:80px auto 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">tool_choice</span><select class="in ns-tchoice" style="width:auto"><option value="">缺省</option><option>none</option><option>auto</option><option>required</option><option value="named">具名…</option></select><input class="in ns-tcname" placeholder="函数名" style="display:none"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">logprobs</span><select class="in ns-logprobs" style="width:100%"><option value="">缺省</option><option value="false">false</option><option value="true">true</option></select></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">top_logprobs</span><input type="number" step="1" class="in ns-tlp" placeholder="0–20"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">user_id</span><input class="in ns-uid" placeholder="字母/数字/-_，≤512"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">freq_penalty</span><input type="number" step="any" class="in ns-fp" placeholder="已废弃·透传"></div>
-        <div style="display:grid;grid-template-columns:80px 1fr;align-items:center;gap:6px"><span class="dim" style="font-size:12px">pres_penalty</span><input type="number" step="any" class="in ns-pp" placeholder="已废弃·透传"></div>
-      </div></div>
-    <div class="field"><label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">params JSON（高级 · 其余字段 / 键与结构破坏场景）
-      <label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" class="ns-rawbody">原始报文发送</label>
-      <span class="qmark">?<span class="tip">合法 JSON：与常用参数合并（此处同名键覆盖常用值），乱写 key 会原样透传测端点行为。勾选「原始报文发送」：框内文本经 _raw_body 原样作为请求体——构造非法 JSON/结构破坏的 400 场景，内容无需合法</span></span></label>
-      <textarea class="in ns-params" rows="2" placeholder='{"unknown_key": 1, "logprobs": true}；结构破坏场景勾「原始报文发送」后随意写'></textarea></div>
-    <div class="field" style="margin-bottom:0"><label>断言（评估方法 · 可多选）<span class="qmark">?<span class="tip">选类型即展开参数行：填目标/关系/期望值（如 http_status == 200）；每行至少 1 个断言（harness 必填）。键族 = 引擎白名单，前端只做结构化编辑，不造指标</span></span></label>
+    <div class="field" style="margin-bottom:0"><label>expect（断言 · 可多选）<span class="qmark">?<span class="tip">选类型即展开参数行：填目标/关系/期望值；每行至少 1 个断言。键族 = 引擎白名单</span></span></label>
       <div class="chips" style="margin:0">
         <span class="chip" data-multi>http_status</span><span class="chip" data-multi>JSON 字段</span>
         <span class="chip" data-multi>包含关键词</span><span class="chip" data-multi>不含关键词</span>
@@ -824,17 +987,8 @@ function nsRowHtml(n) {
       </div>
       <div class="ns-asserts" style="margin-top:8px;display:flex;flex-direction:column;gap:6px"></div></div>
     <div style="margin-top:8px"><button type="button" class="btn sm ns-preview-btn">预览完整请求体 ▾</button>
-    <div class="ns-preview" hidden style="margin:8px 0 0;padding:10px;border:1px solid var(--line);border-radius:8px">
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-        <span class="hint" style="margin:0">目标模型</span>
-        <select class="in ns-pv-model" style="width:auto;max-width:240px"></select>
-        <button type="button" class="btn sm ns-pv-copy" data-what="json">复制 JSON</button>
-        <button type="button" class="btn sm ns-pv-copy" data-what="curl">复制 curl</button>
-        <span class="hint" style="margin:0">占位符执行时替换 · curl 密钥为环境变量占位</span>
-      </div>
-      <pre class="ns-pv-body" style="margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
-      <pre class="ns-pv-curl" style="margin:0;padding:10px;border:1px dashed var(--line);border-radius:8px;font-size:11.5px;white-space:pre-wrap;max-height:160px;overflow:auto;color:var(--tx2)"></pre>
-    </div></div>
+    <div class="ns-preview" hidden style="margin:8px 0 0;padding:10px;border:1px solid var(--line);border-radius:8px"></div></div>
+    </div>
   </div>`;
 }
 let nsPvPresets = null;   // 模型预制缓存（/common/models，跨行共享）
@@ -847,95 +1001,18 @@ async function nsPresets() {
     return items;
   } catch (e) { return []; }
 }
-function nsCollectParams(card, label) {
-  // 常用参数控件 → base；JSON 框合法则覆盖合并（JSON 键优先）；原始模式返回 {raw}
-  const base = {};
-  const numOf = (cls, name) => {
-    const v = card.querySelector(cls)?.value.trim() ?? "";
-    if (v === "") return undefined;
-    const n = Number(v);
-    if (!Number.isFinite(n)) throw new Error(`${label}：${name} 须为数字`);
-    return n;
-  };
-  const temp = numOf(".ns-temp", "temperature");
-  if (temp !== undefined) base.temperature = temp;
-  const topp = numOf(".ns-topp", "top_p");
-  if (topp !== undefined) base.top_p = topp;
-  const maxt = numOf(".ns-maxt", "max_tokens");
-  if (maxt !== undefined) {
-    if (!Number.isInteger(maxt)) throw new Error(`${label}：max_tokens 须为整数`);
-    base.max_tokens = maxt;
-  }
-  const stopRaw = card.querySelector(".ns-stop")?.value.trim() ?? "";
-  if (stopRaw) {
-    const parts = stopRaw.split("，").join(",").split(",").map(s => s.trim()).filter(Boolean);
-    base.stop = parts.length === 1 ? parts[0] : parts;
-  }
-  const streamV = card.querySelector(".ns-stream")?.value ?? "";
-  if (streamV !== "") base.stream = streamV === "true";
-  const respf = card.querySelector(".ns-respf")?.value ?? "";
-  if (respf) base.response_format = { type: respf };
-  const think = card.querySelector(".ns-think")?.value ?? "";
-  if (think === "disabled") base.thinking = { type: "disabled" };
-  else if (think) base.thinking = { type: "enabled", reasoning_effort: think };
-  const sopt = card.querySelector(".ns-sopt")?.value ?? "";
-  if (sopt) base.stream_options = { include_usage: true };
-  const tc = card.querySelector(".ns-tchoice")?.value ?? "";
-  if (tc === "named") {
-    const n = card.querySelector(".ns-tcname")?.value.trim() ?? "";
-    if (!n) throw new Error(`${label}：具名 tool_choice 须填函数名`);
-    base.tool_choice = { type: "function", function: { name: n } };
-  } else if (tc) base.tool_choice = tc;
-  const lp = card.querySelector(".ns-logprobs")?.value ?? "";
-  if (lp !== "") base.logprobs = lp === "true";
-  const tlp = numOf(".ns-tlp", "top_logprobs");
-  if (tlp !== undefined) {
-    if (!Number.isInteger(tlp)) throw new Error(`${label}：top_logprobs 须为整数`);
-    base.top_logprobs = tlp;
-  }
-  const uid = card.querySelector(".ns-uid")?.value.trim() ?? "";
-  if (uid) base.user_id = uid;
-  const fp = numOf(".ns-fp", "frequency_penalty");
-  if (fp !== undefined) base.frequency_penalty = fp;
-  const pp = numOf(".ns-pp", "presence_penalty");
-  if (pp !== undefined) base.presence_penalty = pp;
-  if (card.querySelector(".ns-rawbody")?.checked) {
-    const raw = card.querySelector(".ns-params").value;
-    if (!raw.trim()) throw new Error(`${label}：原始报文模式须填写报文文本`);
-    return { raw };
-  }
-  const rawText = card.querySelector(".ns-params").value.trim();
-  if (rawText) {
-    let extra;
-    try { extra = JSON.parse(rawText); }
-    catch (e) { throw new Error(`${label}：params JSON 解析失败（结构破坏场景请勾「原始报文发送」）：${e.message}`); }
-    if (!extra || Array.isArray(extra) || typeof extra !== "object") {
-      throw new Error(`${label}：params JSON 须为对象`);
-    }
-    Object.assign(base, extra);   // JSON 键覆盖常用值
-  }
-  return { base };
-}
 function nsBuildBody(card, model) {
-  const parse = (sel, fb) => {
-    try { const v = card.querySelector(sel)?.value.trim(); return v ? JSON.parse(v) : fb; }
-    catch (e) { return { __error: "JSON 解析失败：" + e.message }; }
-  };
-  const carrier = card.querySelector(".ns-carrier")?.value || "messages";
-  const conv = carrier === "none" ? [] : parse("textarea.in", []);
-  if (conv && conv.__error) return conv;
-  const body = { model };
-  if (carrier !== "none") body[carrier] = conv;
-  let collected;
-  try { collected = nsCollectParams(card, "预览"); }
-  catch (e) { return { __error: e.message }; }
-  if (collected.raw !== undefined) {
-    body.__raw_body = collected.raw;   // 原始报文模式：原样展示（执行时经 _raw_body 直发）
-    return body;
+  const t = card.querySelector(".ns-req")?.value.trim();
+  let req = {};
+  if (t) {
+    try { req = JSON.parse(t); }
+    catch (e) { return { __error: "request JSON 解析失败：" + e.message }; }
   }
-  Object.assign(body, collected.base);
-  const tools = parse(".ns-tools", null);
-  if (tools) { if (tools.__error) return tools; body.tools = tools; }
+  const body = { model, ...req };
+  if (Array.isArray(body.tools)) {
+    body.tools = body.tools.map(x => typeof x === "string"
+      ? ((window.FT_TOOLS || []).find(tl => tl.name === x)?.schema || { __unknown_tool: x }) : x);
+  }
   return body;
 }
 async function nsRenderPreview(card) {
@@ -1026,10 +1103,12 @@ function nsAddVar(card, kind) {
   while (used.has("g" + n)) n += 1;
   const name = "g" + n;
   box.insertAdjacentHTML("beforeend", nsVarRowHtml(name, kind));
-  const ta = card.querySelector("textarea");
+  const ta = card.querySelector(".ns-req");
   if (!ta.value.trim()) {
     const ph = "{" + name + "}";
-    ta.value = `[{"role":"user","content":"${ph}"}]`;
+    const tpl = JSON.parse(JSON.stringify(NS_REQ_TEMPLATE));
+    tpl.messages[tpl.messages.length - 1].content = ph;
+    ta.value = JSON.stringify(tpl, null, 2);
     const at = ta.value.indexOf(ph) + ph.length;   // 光标落位 content 内占位符之后，后续插入不破坏 JSON
     ta.selectionStart = ta.selectionEnd = at;
   } else {
@@ -1078,12 +1157,11 @@ function renderNsAsserts(card) {
     const r = div.querySelector(".as-rel"); if (r && k.rel !== null) r.value = k.rel;
     const icb = div.querySelector(".as-icb"); if (icb && k.ic !== null) icb.checked = k.ic;
   });
+  nsUpdateSummary(card);
 }
 function nsRenumber() {
-  document.querySelectorAll("#nsRows .card .seg-title").forEach((t, i) => {
-    t.textContent = t.textContent.replace(/^行\s*\d+/, `行 ${i + 1}`);
-  });
-  nsRowN = document.querySelectorAll("#nsRows .card").length;
+  document.querySelectorAll("#nsRows .ns-row-no").forEach((t, i) => { t.textContent = `行 ${i + 1}`; });
+  nsRowN = document.querySelectorAll("#nsRows .ns-row").length;
 }
 function nsReset() {   // 每次打开都是干净态：1 空行，不残留静态稿演示样例
   const ns = document.getElementById("newScriptDrawer");
@@ -1091,45 +1169,71 @@ function nsReset() {   // 每次打开都是干净态：1 空行，不残留静�
   ns.querySelectorAll(".drawer-body textarea.in").forEach(t => { t.value = ""; });
   ns.querySelectorAll(".drawer-body input[type=checkbox]").forEach(cb => { cb.checked = false; });
   ns.querySelectorAll(".drawer-body .chip.on").forEach(c => c.classList.remove("on"));
-  const sel = ns.querySelector(".drawer-body select.in");
-  if (sel) sel.selectedIndex = 0;
+  const sel = document.getElementById("nsScen");
+  if (sel) { sel.selectedIndex = 0; sel.disabled = false; }
+  document.getElementById("nsScenLock").hidden = true;
+  document.getElementById("nsSid").disabled = false;
   const rows = document.getElementById("nsRows");
   rows.innerHTML = nsRowHtml(1);
+  nsRowN = 1;
   bindChips(rows);
   renderNsAsserts(rows.firstElementChild);
 }
 document.getElementById("nsRows").innerHTML = nsRowHtml(1);   // 初始态；DOMContentLoaded 的全局 bindChips 覆盖绑定
 renderNsAsserts(document.querySelector("#nsRows .card"));
 document.getElementById("nsRows").addEventListener("change", e => {
-  const carrierSel = e.target.closest(".ns-carrier");
-  if (carrierSel) {
-    const ta = carrierSel.closest(".card").querySelector("textarea");
-    ta.style.display = carrierSel.value === "none" ? "none" : "";
-    if (carrierSel.value === "none") ta.value = "";
+  const pick = e.target.closest(".ns-tool-pick");
+  if (!pick || !pick.value) return;
+  const ta = pick.closest(".card").querySelector(".ns-req");
+  let req;
+  try { req = ta.value.trim() ? JSON.parse(ta.value) : JSON.parse(JSON.stringify(NS_REQ_TEMPLATE)); }
+  catch (err) {
+    if (typeof fapiToast === "function") fapiToast("request 不是合法 JSON，先修正再添加工具", true);
+    pick.value = "";
     return;
   }
-  const tc = e.target.closest(".ns-tchoice");
-  if (tc) {
-    const nameIn = tc.closest(".card").querySelector(".ns-tcname");
-    nameIn.style.display = tc.value === "named" ? "" : "none";
-    if (tc.value !== "named") nameIn.value = "";
-  }
+  req.tools = Array.isArray(req.tools) ? req.tools : [];
+  if (!req.tools.includes(pick.value)) req.tools.push(pick.value);
+  ta.value = JSON.stringify(req, null, 2);
+  pick.value = "";
+  nsUpdateSummary(pick.closest(".ns-row"));
+});
+document.getElementById("nsRows").addEventListener("input", e => {   // 边填边刷新行头摘要（select 也触发 input）
+  const card = e.target.closest(".ns-row");
+  if (card) nsUpdateSummary(card);
 });
 renderNsAsserts(document.querySelector("#nsRows .card"));
 document.getElementById("nsRowAdd").addEventListener("click", () => {
   const rows = document.getElementById("nsRows");
   rows.insertAdjacentHTML("beforeend", nsRowHtml(++nsRowN));
-  bindChips(rows.lastElementChild);
-  renderNsAsserts(rows.lastElementChild);
+  const card = rows.lastElementChild;
+  bindChips(card);
+  renderNsAsserts(card);
+  nsRevealRow(card);   // 旧行收成摘要，新行独占编辑区
 });
 document.getElementById("nsRows").addEventListener("click", e => {
+  const head = e.target.closest(".ns-row-head");
+  if (head && !e.target.closest("button")) {
+    const card = head.closest(".ns-row");
+    nsSetCollapsed(card, card.dataset.collapsed !== "1");
+    return;
+  }
   const addBtn = e.target.closest(".ns-add-var");
-  if (addBtn) { nsAddVar(addBtn.closest(".card"), addBtn.dataset.kind); return; }
+  if (addBtn) { nsAddVar(addBtn.closest(".card"), addBtn.dataset.kind); nsUpdateSummary(addBtn.closest(".ns-row")); return; }
   const delVar = e.target.closest(".ns-var-del");
   if (delVar) {
     const v = delVar.closest(".ns-var"), card = delVar.closest(".card");
-    card.querySelector("textarea").value = card.querySelector("textarea").value.replaceAll("{" + v.dataset.name + "}", "");
+    card.querySelector(".ns-req").value = card.querySelector(".ns-req").value.replaceAll("{" + v.dataset.name + "}", "");
     v.remove();
+    nsUpdateSummary(card);
+    return;
+  }
+  const tpl = e.target.closest(".ns-tpl");
+  if (tpl) {
+    const ta = tpl.closest(".card").querySelector(".ns-req");
+    if (ta.value.trim() && !confirm("用模板覆盖当前 request？")) return;
+    ta.value = JSON.stringify(NS_REQ_TEMPLATE, null, 2);
+    nsUpdateSummary(tpl.closest(".ns-row"));
     return;
   }
   const pv = e.target.closest(".ns-preview-btn");
@@ -1147,9 +1251,11 @@ document.getElementById("nsRows").addEventListener("click", e => {
       if (el.type === "checkbox") d.checked = el.checked;
       else d.value = el.value;
     });
+    clone.querySelector(".ns-rid").value = "";   // 行 id 场景内唯一：副本留空自动生成
     src.insertAdjacentElement("afterend", clone);
     bindChips(clone);
     nsRenumber();
+    nsRevealRow(clone);   // 副本 = 新的编辑行，其余收成摘要
     if (typeof fapiToast === "function") fapiToast("已复制一行——改参数即可成新变体");
     return;
   }
@@ -1157,14 +1263,15 @@ document.getElementById("nsRows").addEventListener("click", e => {
   const chip = e.target.closest(".chip[data-multi]");
   if (chip) { renderNsAsserts(chip.closest(".card")); return; }   // 勾选变化 → 重绘参数行
   if (!e.target.closest(".ns-row-del")) return;
-  if (document.querySelectorAll("#nsRows .card").length <= 1) {
+  if (document.querySelectorAll("#nsRows .ns-row").length <= 1) {
     if (typeof fapiToast === "function") fapiToast("至少保留 1 行数据（数据行 1..N）", true);
     return;
   }
   e.target.closest(".card").remove();
   nsRenumber();
 });
-/* 从 jsonl 导入行：解析（带行号报错）→ 全部行卡重建回填（可审阅后再保存） */
+/* 从 jsonl 导入行：解析（带行号报错）→ 全部行卡重建回填（可审阅后再保存）；
+   nsFillRowFromData 由 api32.js 提供（与编辑脚本回填共用） */
 document.getElementById("nsJsonlBtn").addEventListener("click", () => {
   const area = document.getElementById("nsJsonlArea");
   area.hidden = !area.hidden;
@@ -1200,14 +1307,19 @@ document.getElementById("nsJsonlParse").addEventListener("click", () => {
     bindChips(card);
     nsFillRowFromData(card, row);
   }
+  nsCollapseForReview();
   document.getElementById("nsJsonlArea").hidden = true;
   document.getElementById("nsJsonlText").value = "";
-  if (typeof fapiToast === "function") fapiToast(`已解析 ${rows.length} 行——审阅无误后点「保存」`);
+  if (typeof fapiToast === "function") fapiToast(`已解析 ${rows.length} 行${rows.length > 1 ? "（已折叠为摘要，点行头展开核对）" : ""}——审阅无误后点「保存」`);
 });
 
 /* 通用「＋ 新建脚本」入口（v1.js 只负责 unhide）随后重置为干净态 */
 document.querySelectorAll('[data-open-drawer="newScriptDrawer"]').forEach(b =>
-  b.addEventListener("click", () => setTimeout(() => { if (typeof nsReset === "function") nsReset(); }, 0)));
+  b.addEventListener("click", () => setTimeout(() => {
+    const scen = b.closest("#scriptMgrDrawer")?.dataset.scenario;   // 场景内入口 → 锁定当前场景
+    if (scen && typeof openNewScript === "function") openNewScript(scen);
+    else if (typeof nsReset === "function") nsReset();
+  }, 0)));
 
 /* ---------- 版本结果库（任务终态自动归档 · 大屏数据源） ---------- */
 const VRESULTS = [
@@ -1334,6 +1446,6 @@ document.getElementById("scnDimOk").addEventListener("click", scnDimConfirm);
 document.getElementById("scnDimName").addEventListener("keydown", e => { if (e.key === "Enter") scnDimConfirm(); });
 renderScnDims();
 </script>
-<script src="api32.js?v=1"></script>
+<script src="api32.js?v=20"></script>
 </body>
 </html>
