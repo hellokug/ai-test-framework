@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(os.environ.get("AITE_HOOK_PROJECT_DIR")
                    or Path(__file__).resolve().parents[2])
+CLAIMS = PROJECT_DIR / "docs" / "session-claims.md"
 DEFER_MARKER = "<!--commit-deferred:"
 STALE_MINUTES = 45
 GIT_TIMEOUT = 10
@@ -53,6 +55,67 @@ def _stdin() -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _expand_braces(token: str) -> list[str]:
+    """一层花括号展开：aite/storage/{models,repositories}.py → 两个具体路径。"""
+    match = re.search(r"\{([^{}]+)\}", token)
+    if not match:
+        return [token]
+    head, tail = token[:match.start()], token[match.end():]
+    return [f"{head}{option}{tail}" for option in match.group(1).split(",")]
+
+
+def _scope_tokens(scope: str) -> list[str]:
+    """按 +/、/逗号/空白切分认领范围；花括号内的逗号不切（留给花括号展开）。"""
+    tokens: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for char in scope:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        if depth == 0 and char in "+、,， \t":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+        else:
+            buf.append(char)
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
+
+
+def _claimed_prefixes() -> list[str]:
+    """「## 在认领」段各行的路径前缀（花括号展开后）；表缺失/无路径 → 空表。
+
+    mtime 老 ≠ 写它的会话已收尾：在途会话靠认领表声明「正在写什么」，
+    命中认领范围的文件一律豁免，避免长任务会话被自己的早期文件卡住收尾。
+    """
+    try:
+        text = CLAIMS.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    section = text.split("## 在认领", 1)[-1].split("## ", 1)[0]
+    prefixes: list[str] = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        parts = line[2:].split("｜")
+        if len(parts) < 3:
+            continue
+        for token in _scope_tokens(parts[2]):
+            token = token.strip().replace("\\", "/").rstrip("*")
+            if "/" in token or "." in token:
+                prefixes.extend(_expand_braces(token))
+    return prefixes
+
+
+def _is_claimed(path: str, prefixes: list[str]) -> bool:
+    posix = path.replace("\\", "/")
+    return any(posix.startswith(prefix) for prefix in prefixes)
 
 
 def _dirty_entries() -> list[tuple[str, str]]:
@@ -111,7 +174,9 @@ def main() -> None:
     if DEFER_MARKER in text:
         _release()
     try:
-        entries = [entry for entry in _dirty_entries() if entry[1] not in NOISE]
+        claimed = _claimed_prefixes()
+        entries = [entry for entry in _dirty_entries()
+                   if entry[1] not in NOISE and not _is_claimed(entry[1], claimed)]
     except Exception:
         _release()
     if not entries:
@@ -120,11 +185,14 @@ def main() -> None:
     if stale is None or stale[0] < STALE_MINUTES:
         _release()
     age, oldest_path = stale
-    _block(f"提交门禁：工作树积压 {len(entries)} 个未提交改动（{_grouped(entries)}），"
-           f"最老的 {oldest_path} 已躺 {age / 60:.1f} 小时。把测试通过的完整单元按域提交"
+    in_flight = f"（另有 {len(claimed)} 条认领路径下的在途文件已豁免）" if claimed else ""
+    _block(f"提交门禁：工作树有 {len(entries)} 个不在任何活认领范围、且最老改动已超 "
+           f"{STALE_MINUTES} 分钟的未提交文件（{_grouped(entries)}；最老的 {oldest_path} "
+           f"躺了 {age / 60:.1f} 小时）{in_flight}。把测试通过的完整单元按域提交"
            "（git add <该域文件> && git commit；新文件别忘 untracked）；确认现在不宜提交"
-           f"（如其余是并行会话在途文件）则在最终回复加 {DEFER_MARKER} 原因--> 显式延后。"
-           "不要代提交别的会话认领中的文件（docs/session-claims.md）。")
+           f"则在最终回复加 {DEFER_MARKER} 原因--> 显式延后。若是并行会话在写而没登记，"
+           "让它先在 docs/session-claims.md 登记认领（登记即豁免）；不要代提交别的会话"
+           "认领中的文件。")
 
 
 if __name__ == "__main__":

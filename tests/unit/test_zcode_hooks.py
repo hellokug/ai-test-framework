@@ -331,6 +331,42 @@ def test_commit_gate_cli_blocks_stale_and_defer_marker_releases(tmp_path):
                               input=b'{"responseText": "defer <!--commit-deferred: \xe5\x9c\xa8\xe9\x80\x94-->"}')
     assert plain.returncode == 2 and "提交门禁" in plain.stderr.decode("utf-8")
     assert deferred.returncode == 0
+    claims = repo / "docs" / "session-claims.md"
+    claims.parent.mkdir(parents=True, exist_ok=True)
+    claims.write_text("## 在认领\n\n- t｜s｜aite/web/x.py｜later\n", encoding="utf-8")
+    claimed = subprocess.run([sys.executable, script], timeout=60, capture_output=True, env=env,
+                             input=json.dumps({"responseText": "做了"},
+                                              ensure_ascii=False).encode("utf-8"))
+    assert claimed.returncode == 0                     # 认领范围内的在写文件豁免
+
+
+def test_commit_gate_claim_scope_parsing_and_exclusion(tmp_path, monkeypatch):
+    gate = _load("commit_gate_claims", SCRIPTS / "hooks" / "stop_commit_gate.py")
+    assert gate._expand_braces("aite/storage/{models,repositories}.py") == [
+        "aite/storage/models.py", "aite/storage/repositories.py"]
+    repo = _git_repo(tmp_path)
+    past = time.time() - 3600
+    for rel in ("aite/core/taskkit.py", "aite/web/x.py"):      # 一在写（认领中）一积压
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("wip", encoding="utf-8")
+        os.utime(path, (past, past))
+    claims = repo / "docs" / "session-claims.md"
+    claims.parent.mkdir(parents=True, exist_ok=True)
+    claims.write_text(
+        "# 认领\n\n## 在认领\n\n"
+        "- 2026-11-12 10:00｜会话 A 改任务历史｜aite/core/taskkit.py + "
+        "aite/storage/{models,repositories}.py｜预计 1-2 天\n\n## 已释放\n\n",
+        encoding="utf-8")
+    monkeypatch.setattr(gate, "PROJECT_DIR", repo)
+    monkeypatch.setattr(gate, "CLAIMS", claims)
+    prefixes = gate._claimed_prefixes()
+    assert "aite/storage/models.py" in prefixes                # 花括号展开进认领范围
+    pool = [e for e in gate._dirty_entries()
+            if e[1] not in gate.NOISE and not gate._is_claimed(e[1], prefixes)]
+    assert [e[1] for e in pool] == ["aite/web/x.py"]           # 在写文件排除，剩积压可催
+    stale = gate._oldest_age_minutes(pool)
+    assert stale is not None and stale[1] == "aite/web/x.py"
 
 
 # ---------------------------------------------------------------- stop_teach_gate
