@@ -61,6 +61,8 @@ class TaskRunContext:
         self.spec = spec
         self.repo = repo
         self.history = history or []   # 本轮开启的执行历史（终态收口用）
+        self.run_id: str | None = None  # 引擎建 run 行后经 run_cb 回填（失败/取消轮也要有）
+        self.run_cb: Any = None         # executor 透传给执行引擎：建 run 行即回调
         self.cancel_event = asyncio.Event()
         self._kit = kit
 
@@ -160,9 +162,11 @@ class DomainTaskKit:
 
     @staticmethod
     def _close_round(history: list[dict] | None, status: str,
-                     result: dict | None = None,
-                     error: str | None = None) -> dict | None:
-        """收最后一轮（状态机保证单任务同时只有一个在途运行，无并发写）。"""
+                     result: dict | None = None, error: str | None = None,
+                     run_id: str | None = None) -> dict | None:
+        """收最后一轮（状态机保证单任务同时只有一个在途运行，无并发写）。
+
+        run_id：失败/取消路径经 ctx.run_id 补记（成功路径随 result 带回）。"""
         if not history:
             return None                     # 旧数据无历史列，维持原样
         rounds = [dict(r) for r in history]
@@ -171,6 +175,8 @@ class DomainTaskKit:
         last["finished_at"] = utcnow().isoformat()
         if error:
             last["error"] = error[:2000]
+        if run_id and not last.get("run_id"):
+            last["run_id"] = run_id
         if result:
             for key in ("run_id", "pass_rate", "total_cases", "evaluated_cases"):
                 if result.get(key) is not None:
@@ -189,6 +195,19 @@ class DomainTaskKit:
             raise TaskStateError("run 仅限 pending 或终态任务（运行中不可重复发起）")
         ctx = TaskRunContext(self, task_id, dict(started["spec"]), repo,
                              started.get("history"))
+
+        async def _note_run_id(run_id: str) -> None:
+            """引擎建 run 行即回填本轮 run_id（失败/取消轮收口也能对上留痕）。"""
+            ctx.run_id = run_id
+            current = await repo.get_domain_task(self.table, task_id)
+            hist = [dict(r) for r in (current or {}).get("history") or []]
+            if hist and not hist[-1].get("run_id"):
+                hist[-1]["run_id"] = run_id
+                await repo.update_domain_task(self.table, task_id,
+                                              expect_status=TASK_RUNNING,
+                                              history=hist)
+
+        ctx.run_cb = _note_run_id
         self._contexts[task_id] = ctx
         self._handles[task_id] = asyncio.create_task(self._drive(repo, ctx))
         self._watchers[task_id] = asyncio.create_task(self._watch_stop(repo, ctx))
@@ -222,7 +241,7 @@ class DomainTaskKit:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await handle
         await self._finish_cancelled(
-            repo, task_id,
+            repo, task_id, ctx=ctx,
             error="stop timed out; cancelled forcibly" if timed_out else None)
         return await self._require(repo, task_id)
 
@@ -250,7 +269,7 @@ class DomainTaskKit:
                 handle = self._handles.get(task_id)
                 if handle is not None and not handle.done():
                     handle.cancel()
-                await self._finish_cancelled(repo, task_id)
+                await self._finish_cancelled(repo, task_id, ctx=ctx)
                 return
         except asyncio.CancelledError:
             raise
@@ -258,15 +277,18 @@ class DomainTaskKit:
             self._watchers.pop(task_id, None)
 
     async def _finish_cancelled(self, repo: Any, task_id: str,
-                                *, error: str | None = None) -> None:
+                                ctx: TaskRunContext | None = None, *,
+                                error: str | None = None) -> None:
         """stopping → cancelled 终态落库 + cancelled 帧 + 关频道（唯一出口）。
-        expect 守卫下多调用方（本进程 stop / 跨进程轮询桥）竞态安全。"""
+        expect 守卫下多调用方（本进程 stop / 跨进程轮询桥）竞态安全；
+        执行进程内 ctx 必有（桥从 _contexts 取），收轮时用它补本轮 run_id。"""
         fields: dict[str, Any] = {"status": TASK_CANCELLED, "finished_at": utcnow()}
         if error:
             fields["error"] = error
         current = await repo.get_domain_task(self.table, task_id)
         closed = self._close_round((current or {}).get("history"),
-                                   TASK_CANCELLED, error=error)
+                                   TASK_CANCELLED, error=error,
+                                   run_id=ctx.run_id if ctx else None)
         if closed:
             fields["history"] = closed
         finished = await repo.update_domain_task(
@@ -343,7 +365,8 @@ class DomainTaskKit:
             await repo.update_domain_task(
                 self.table, task_id, expect_status=TASK_RUNNING,
                 status=TASK_FAILED, error=str(exc)[:2000], finished_at=utcnow(),
-                history=self._close_round(ctx.history, TASK_FAILED, error=str(exc)))
+                history=self._close_round(ctx.history, TASK_FAILED, error=str(exc),
+                                          run_id=ctx.run_id))
             self._publish(task_id, {"type": "failed", "error": str(exc)})
             self.bus.close(self.channel(task_id))
         finally:

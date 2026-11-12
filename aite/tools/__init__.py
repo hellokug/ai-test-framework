@@ -400,13 +400,15 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
 
 
 async def run_tool_suite(raw: dict, repo: Any,
-                         event_cb: Callable[[dict], None] | None = None
+                         event_cb: Callable[[dict], None] | None = None,
+                         run_cb: Any = None,
                          ) -> RunReport:
     """本地执行工具型 suite：先建 run 行（running 可见）→ 执行 → 入库。
 
     event_cb：运行期进度事件出口（Web SSE / CLI 打印共用）；适配器经
     req.progress_cb 回传（如 evalscope 日志解析出的 done/total），total
-    已知即回写 run 行 total_cases。"""
+    已知即回写 run 行 total_cases。run_cb：run 行建好即回调（域任务用它把
+    run_id 记进执行历史轮，失败/取消轮也能对上留痕）。"""
     engine_name = raw.get("engine")
     req, cfg_snapshot = parse_tool_suite(raw)
     report = RunReport(
@@ -416,6 +418,8 @@ async def run_tool_suite(raw: dict, repo: Any,
     suite_id = await repo.upsert_suite(req.run_name, cfg_snapshot)
     run_id = await repo.create_run(req.run_name, cfg_snapshot, suite_id)
     report.run_id = run_id
+    if run_cb:
+        await run_cb(run_id)
     last_total: int | None = None
     bg_updates: set[asyncio.Task] = set()
 

@@ -1152,4 +1152,22 @@
   PATCH 409、终态 PATCH 200、列表不裂变全过（retry 同配置触发 pytest 断点续推，
   只补缺失样本——正向协同）。
 
+## 2026-11-13 · owner 三连反馈修复：重跑真执行 / 切轮串轮 / 执行历史卡重排
+
+- ①重跑没跑成功：根因 resume=auto 对「未完成且同身份」历史目录就地续推（只补缺失
+  样本，全齐则瞬完成不跑）→ SuiteTaskExecutor 强制 resume=False（重跑永远真执行；
+  续推语义保留给 CLI `aite run --resume`）。②切轮只能看最新轮：失败/取消轮收口时
+  不带 run_id → 前端回退最新轮 → 串轮。修：run_cb 回调链（tools/run_service/engine
+  建 run 行即回调 → taskkit `_note_run_id` 即时写进历史轮；close_round/取消路径补
+  ctx.run_id）；前端 runId 严格取所选轮自身（仅无 history 的旧数据回退 result）。
+- ③执行历史卡重排（owner 嫌丑：chips+表格同信息两遍）：整卡压成单行——「执行历史」
+  标签 + 轮次 pills（#n 触发 · 时间 · 色点状态 · pass_rate，点切轮）+ 右侧「复制该
+  轮 spec」；该轮错误/旧链提示降为卡内小字。api32 bump v21。
+- 验证：101 tests（taskkit/CLI/四域集成/tools/迁移）+ render_check + mockup_symbols
+  + ruff 全绿；iab_sandbox 新代码实测：取消轮带 run_id、重跑开新输出目录且 15s 仍
+  running（真执行）、双轮 run_id 齐全、切轮 crumb「第 1/2 轮」+ 选中态正确；截图目
+  检新版式。注：首轮验证曾误判通过——被 TaskStop 杀剩的旧后端与新版双监听 8310 串
+  请求（端口先 netstat 核实干净再起实例，验证断言要以「第 1 轮自己的目录」为基线）。
+
+
 

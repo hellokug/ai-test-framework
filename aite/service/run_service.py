@@ -77,12 +77,14 @@ async def execute_suite(
     report_formats: str | None = None,
     chaos_raw: list[dict] | None = None,
     resume: str | bool | None = None,
+    run_cb: Any = None,
 ) -> RunReport:
     """统一执行入口：engine 路由 → 工具适配层 / 自研引擎。
 
     chaos_raw 非空时（工具域）故障注入包裹业务执行，注入事件写入
     run details.chaos_events（I5 业务观测时间线）。resume（工具域断点续推
     档位 auto/true/false）仅工具域生效，None = 用 yaml 值/缺省 auto。
+    run_cb：run 行建好即回调 run_id（域任务记执行历史轮用，引擎/工具两路都接）。
     """
     sreq = resolve_suite(raw)
     if sreq.is_tool:
@@ -91,7 +93,8 @@ async def execute_suite(
         from aite.tools import run_tool_suite
 
         if not chaos_raw:
-            return await run_tool_suite(raw, repo, event_cb=event_cb)
+            return await run_tool_suite(raw, repo, event_cb=event_cb,
+                                        run_cb=run_cb)
 
         from aite.chaos import run_with_chaos
         from aite.tools import execute_tool, persist_tool_result
@@ -113,7 +116,8 @@ async def execute_suite(
     if report_formats:
         suite.report = [f.strip() for f in report_formats.split(",") if f.strip()]
     engine = ExecutionEngine(repo, progress=progress, event_cb=event_cb)
-    return await engine.run_suite(suite, limit=limit, dataset_ids=dataset_ids)
+    return await engine.run_suite(suite, limit=limit, dataset_ids=dataset_ids,
+                                  run_cb=run_cb)
 
 
 async def close_interrupted_runs(repo: Any) -> int:

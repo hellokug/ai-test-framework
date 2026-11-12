@@ -1112,12 +1112,15 @@ async function showLiveTask(taskId, roundSel) {
   let result = null;
   try { result = await FAPI.get(`/functional/tasks/${taskId}/result`); }
   catch (e) { /* 409 非终态 */ }
-  // 轮次选择：默认看最新一轮；roundSel 由「执行历史」chips 传入切换
+  // 轮次选择：默认看最新一轮；roundSel 由「执行历史」chips 传入切换。
+  // run_id 严格取所选轮自己的——fail-fast 轮没有运行记录，绝不回退最新轮；
+  // 旧数据（无 history）沿用 result 快照的 run_id
   const rounds = t.history || [];
   const sel = rounds.length
     ? rounds[Math.min(Math.max(roundSel || rounds.length, 1), rounds.length) - 1]
     : null;
-  const runId = sel?.run_id || t.result?.run_id || result?.result?.run_id || null;
+  const runId = sel?.run_id || (rounds.length ? null
+    : (t.result?.run_id || result?.result?.run_id || null));
   let run = null;
   if (runId) {
     try { run = await FAPI.get(`/runs/${runId}`); }   // DB 唯一权威（原则 8）
@@ -1346,30 +1349,29 @@ async function showLiveTask(taskId, roundSel) {
       </div>
     </div>`;
   };
-  // —— 执行历史（同一任务的每轮运行；每轮留当时 spec 快照，审计可追）——
+  // —— 执行历史（同一任务的每轮运行；紧凑单行：轮次 pills + 该轮 spec 复制）——
+  const dot = s => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${
+    s === "succeeded" ? "var(--ok)" : s === "failed" ? "var(--bad)"
+      : s === "running" ? "var(--ac)" : "var(--tx3)"};margin:0 4px 0 0;vertical-align:1px"></span>`;
+  const stTxt = s => s === "running" ? "进行中" : s === "succeeded" ? "通过"
+    : s === "failed" ? "失败" : s === "cancelled" ? "已停止" : s === "stale" ? "已中断" : s;
   const rateOf = r => r.pass_rate != null ? pp(r.pass_rate) : "—";
   const roundChips = rounds.map(r => `
       <span class="chip${sel && r.n === sel.n ? " on" : ""}" style="cursor:pointer"
         title="查看该轮结果（spec 快照随轮留档）"
         onclick="showLiveTask('${taskId}', ${r.n})">#${r.n}
-        ${r.trigger === "retry" ? "重试" : "运行"} · ${fapiShortTime(r.started_at)}
-        · ${taskBadge(r.status)} · ${rateOf(r)}</span>`).join("");
+        ${r.trigger === "retry" ? "重试" : "运行"} ${fapiShortTime(r.started_at).slice(6)}
+        ${dot(r.status)}${stTxt(r.status)} ${rateOf(r)}</span>`).join("");
   const histSec = `
-    <section class="card" style="margin-bottom:14px">
-      <div class="card-head"><div><h3>执行历史</h3>
-        <div class="sub">同一任务的每轮运行在此累积（重试/重跑不新建任务）；点轮次切换下方结果视图，「复制」是独立分支变体不在此列</div></div></div>
-      ${roundChips ? `<div class="chips" style="margin-bottom:8px">${roundChips}</div>` : ""}
-      ${sel ? `<table class="sumtable">
-        <thead><tr><th>轮次</th><th>触发</th><th>状态</th><th>pass_rate</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-        <tbody><tr>
-          <td class="mono">#${sel.n}</td><td>${sel.trigger === "retry" ? "重试" : "运行"}</td>
-          <td>${taskBadge(sel.status)}</td><td class="num">${rateOf(sel)}</td>
-          <td class="dim">${fapiShortTime(sel.started_at)}</td>
-          <td style="text-align:right">${copyBtn(JSON.stringify(sel.spec || {}, null, 2), "复制该轮 spec")}</td>
-        </tr></tbody>
-      </table>
-      ${sel.error ? `<div class="hint" style="color:var(--bad);margin-top:6px">该轮错误：${esc(sel.error)}</div>` : ""}` : '<div class="ds-empty">尚无运行记录 —— 发起运行后在此累积每一轮</div>'}
-      ${t.retry_of ? `<div class="hint" style="margin-top:6px">旧版重试链来源：<span class="mono">${esc(String(t.retry_of))}</span>（兼容保留，新语义重跑不再产生）</div>` : ""}
+    <section class="card" style="margin-bottom:14px;padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-weight:650;font-size:12.5px;color:var(--tx3)">执行历史</span>
+        ${roundChips || '<span class="faint" style="font-size:12px">尚无运行记录 —— 发起运行后在此累积每一轮</span>'}
+        <span style="flex:1"></span>
+        ${sel ? copyBtn(JSON.stringify(sel.spec || {}, null, 2), "复制该轮 spec") : ""}
+      </div>
+      ${sel && sel.error ? `<div class="hint" style="color:var(--bad);margin:6px 0 0">该轮错误：${esc(sel.error)}</div>` : ""}
+      ${t.retry_of ? `<div class="hint" style="margin:6px 0 0">旧版重试链来源：<span class="mono">${esc(String(t.retry_of))}</span>（兼容保留，新语义重跑不再产生）</div>` : ""}
     </section>`;
   detail.innerHTML = `
     <header class="topbar">

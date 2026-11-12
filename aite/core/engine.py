@@ -146,6 +146,7 @@ class ExecutionEngine:
         dataset_ids: list[str] | None = None,
         render: bool = True,
         connector_override: Any = None,
+        run_cb: Any = None,
     ) -> RunReport:
         load_plugins(config.plugins)
         report = RunReport(
@@ -156,6 +157,8 @@ class ExecutionEngine:
         suite_id = await self.repo.upsert_suite(config.run_name, config.snapshot())
         run_id = await self.repo.create_run(config.run_name, config.snapshot(), suite_id)
         report.run_id = run_id
+        if run_cb:
+            await run_cb(run_id)
 
         gateway = build_gateway(config)
         ctx = build_context(config, gateway, run_id)

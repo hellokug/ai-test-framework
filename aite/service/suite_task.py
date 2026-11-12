@@ -41,8 +41,9 @@ def evaluation_stats(report) -> dict:
         return {}
     total = sum(s.count or 0 for s in rows)
     rate = (sum((s.value or 0) * (s.count or 0) for s in rows) / total) if total else None
+    passed = sum(round((s.value or 0) * (s.count or 0)) for s in rows)
     return {"pass_rate": round(rate, 6) if rate is not None else None,
-            "evaluated_cases": total}
+            "evaluated_cases": total, "passed_cases": passed}
 
 
 class SuiteTaskExecutor(TaskExecutor):
@@ -51,8 +52,11 @@ class SuiteTaskExecutor(TaskExecutor):
     标注才归档；失败仅告警，见 version_results.archive_maybe）。"""
 
     async def execute(self, ctx: TaskRunContext) -> dict:
+        # resume=False：任务域重跑必须真执行（断点续推复用会让重跑瞬完成不跑样本，
+        # owner 2026-11-12 反馈「重跑没跑成功」）；续推语义保留给 CLI `aite run --resume`
         report = await execute_suite(ctx.spec, ctx.repo,
-                                     event_cb=ctx.emit_raw)
+                                     event_cb=ctx.emit_raw, resume=False,
+                                     run_cb=ctx.run_cb)
         await archive_maybe(ctx.repo, ctx.spec, report)
         return suite_summary(report)
 
