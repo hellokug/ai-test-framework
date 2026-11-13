@@ -61,14 +61,15 @@ function applyRoute() {
   const pages = JSON.parse(document.getElementById("page-list").textContent);
   const isTask = !!DOMAIN_FILES[module];
   const curPageId = (location.hash || "").replace("#", "") || pages[0].id;
-  const GROUP = { datasets: "数据集管理", models: "模型管理", agents: "执行机管理", tasks: "任务管理" };
+  const GROUP = { datasets: "数据集管理", models: "模型管理", versions: "模型管理",
+    secrets: "模型管理", agents: "执行机管理", tasks: "任务管理" };
   const grp = isTask ? "任务管理" : (GROUP[curPageId] || GROUP[pages[0].id]);
   if (module === "common") document.body.dataset.moduleLabel = grp;
   const activeLabel = isTask || grp === "任务管理" ? "任务管理" : grp;
   document.querySelectorAll("#mtabs .mtab").forEach(a => a.classList.toggle("active", a.dataset.label === activeLabel));
   const side = document.getElementById("sideNav");
   const sidePages = isTask ? pages : pages.filter(p => GROUP[p.id] === grp);
-  // 单页一级模块（用例/数据集/模型/执行机管理）：左侧栏冗余，隐藏并让内容通栏
+  // 单页一级模块（数据集/执行机管理）：左侧栏冗余，隐藏并让内容通栏；模型管理组 = 模型/版本/密钥三页自带侧栏
   const singlePage = !isTask && module === "common" && grp !== "任务管理" && sidePages.length <= 1;
   document.body.classList.toggle("no-side", singlePage);
   let sideHtml = "";
@@ -238,6 +239,115 @@ function bindModelCustom(selectId, paneId) {
   sync();
 }
 
+/* ---------- api_key_env 选择器：已归档密钥（密钥库）下拉 + 仅环境变量回退 ----------
+   页面约定：包一层容器，内放 <select data-keysel> 与 <input data-keyenv>；
+   wireKeySelect 用 GET /secrets 的 items=[{name,mask}] 灌选项（带掩码），
+   选中「仅环境变量」露出手填框；keyEnvValue 取最终 api_key_env 字符串。
+   __archive__ 选项由注册抽屉自行追加并处理（v1.js 不含网络与归档逻辑）。 */
+const KEY_ENV_OPT = "__env__";   // 仅环境变量（手填名字）：密钥在平台外维护
+
+function wireKeySelect(sel, items) {
+  const env = sel.parentElement.querySelector("input[data-keyenv]");
+  sel.innerHTML = items.map(s =>
+    `<option value="${s.name}">${s.name}${s.mask ? ` 🔑 ${s.mask}` : ""}</option>`).join("")
+    + `<option value="${KEY_ENV_OPT}">仅环境变量（手填名字）</option>`;
+  if (!env) return;
+  const sync = () => { env.hidden = sel.value !== KEY_ENV_OPT; };
+  if (!sel.dataset.ksyncBound) {   // wire 反复重建选项，监听只挂一次（幂等）
+    sel.dataset.ksyncBound = "1";
+    sel.addEventListener("change", sync);
+  }
+  sync();
+}
+
+function keyEnvValue(sel) {
+  if (sel.value === KEY_ENV_OPT) {
+    const env = sel.parentElement.querySelector("input[data-keyenv]");
+    return env ? env.value.trim() : "";
+  }
+  return sel.value;
+}
+
+/* 抽屉开合散落在各页与对接层（直写 hidden），这里用 MutationObserver 统一维护打开栈：
+   栈顶抽屉下垫遮罩，点遮罩（空白处）或头部 ✕ = 请求关闭，底栏「取消」仍直接关。
+   有改动（打开后用户在正文里真实输入 / 勾选 / 点选；程序回填不算，data-nodirty 排除搜索框等）
+   先问是否保存：保存 = 点底栏主按钮走原提交流程，成功由原流程关抽屉，失败留在抽屉里看原因。 */
+const DRAWER_Z = 45;   // = v1.css .drawer；叠开的抽屉逐层 +2，遮罩垫在栈顶抽屉下一层
+const drawerStack = [];
+let drawerMask = null;
+let saveAsk = null;    // 打开中的「是否保存」弹窗 { drawer, el }
+
+function drawerTop() { return drawerStack[drawerStack.length - 1]; }
+
+function syncDrawerMask() {
+  if (!drawerMask) {
+    drawerMask = document.createElement("div");
+    drawerMask.className = "drawer-mask";
+    drawerMask.addEventListener("click", () => { const d = drawerTop(); if (d) requestDrawerClose(d); });
+    document.body.appendChild(drawerMask);
+  }
+  const top = drawerTop();
+  drawerMask.hidden = !top;
+  if (top) drawerMask.style.zIndex = Number(top.style.zIndex) - 1;
+}
+
+function onDrawerToggle(d) {
+  const at = drawerStack.indexOf(d);
+  if (at >= 0) drawerStack.splice(at, 1);
+  delete d.dataset.dirty;   // 每次打开都是新一轮编辑
+  if (!d.hidden) {
+    drawerStack.push(d);
+    d.style.zIndex = DRAWER_Z + 2 * (drawerStack.length - 1);
+  } else if (saveAsk?.drawer === d) closeSaveAsk();
+  syncDrawerMask();
+}
+
+function markDrawerDirty(e) {
+  const t = e.target;
+  if (!e.isTrusted || !(t instanceof Element)) return;
+  const d = t.closest(".drawer");
+  if (!d || d.hidden || !t.closest(".drawer-body") || t.closest(".drawer-foot, [data-nodirty]")) return;
+  if (e.type === "click" && (!t.closest(".chip, .radio-card, .ds-row, button") || t.closest(".caret"))) return;
+  d.dataset.dirty = "1";
+}
+
+function requestDrawerClose(d) {
+  const primary = d.querySelector(".drawer-foot .btn.primary");
+  if (d.dataset.dirty && primary) openSaveAsk(d, primary);
+  else d.hidden = true;
+}
+
+function openSaveAsk(d, primary) {
+  closeSaveAsk();
+  const el = document.createElement("div");
+  el.className = "save-ask";
+  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="saveAskTitle">
+    <h3 id="saveAskTitle">是否保存当前修改？</h3><p class="save-ask-msg"></p>
+    <div class="row"><button class="btn danger" data-act="discard" style="margin-right:auto">不保存</button>
+      <button class="btn" data-act="stay">继续编辑</button><button class="btn primary" data-act="save"></button></div></div>`;
+  const title = d.querySelector(".drawer-head h3")?.textContent.trim() || "当前抽屉";
+  el.querySelector(".save-ask-msg").textContent = `「${title}」中有尚未保存的修改，不保存将直接关闭。`;
+  const save = el.querySelector('[data-act="save"]');
+  save.textContent = primary.textContent.trim();
+  save.disabled = primary.disabled;
+  if (primary.disabled) save.title = "表单尚未填完整，暂不能提交";
+  el.addEventListener("click", e => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act && e.target !== el) return;   // 点在弹窗正文上不处理；点弹窗外 = 继续编辑
+    closeSaveAsk();
+    if (act === "discard") d.hidden = true;
+    else if (act === "save") primary.click();
+  });
+  document.body.appendChild(el);
+  saveAsk = { drawer: d, el };
+  el.querySelector('[data-act="stay"]').focus();
+}
+
+function closeSaveAsk() {
+  saveAsk?.el.remove();
+  saveAsk = null;
+}
+
 function bindDrawers() {
   document.querySelectorAll("[data-open-drawer]").forEach(btn => btn.addEventListener("click", () => {
     const d = document.getElementById(btn.dataset.openDrawer); if (d) d.hidden = false;
@@ -245,8 +355,16 @@ function bindDrawers() {
   document.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", e => {
     if (el.classList.contains("mask") && e.target !== el) return;   // 点在内容上不关闭
     const host = el.classList.contains("mask") ? el : el.closest(".drawer, .mask");
-    host?.setAttribute("hidden", "");
+    if (host?.classList.contains("drawer") && el.closest(".drawer-head")) requestDrawerClose(host);
+    else host?.setAttribute("hidden", "");
   }));
+  const watch = new MutationObserver(recs => recs.forEach(r => onDrawerToggle(r.target)));
+  document.querySelectorAll(".drawer").forEach(d => {
+    watch.observe(d, { attributes: true, attributeFilter: ["hidden"] });
+    if (!d.hidden) onDrawerToggle(d);
+  });
+  ["input", "change", "click"].forEach(t => document.addEventListener(t, markDrawerDirty, true));
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && saveAsk) closeSaveAsk(); });
 }
 
 /* 任务列表筛选条：状态 chips(data-status) + 执行人([data-owner]) + 关键词([data-kw]) → render(status, owner, kw) */
@@ -266,6 +384,39 @@ function bindTaskFilter(boxId, render) {
   if (owner) owner.addEventListener("change", apply);
   if (kw) kw.addEventListener("input", apply);
   apply();
+}
+
+/* 导航徽章 = 真实计数：page-list JSON（applyRoute 重渲染侧栏后仍生效）+ 当前侧栏 DOM 双写。
+   page-list 不写死 count——静态稿曾写死演示数字，接真实后端后口径全错（2026-11-08）。 */
+function setNavCount(pageId, n) {
+  if (n === undefined || n === null) return;
+  try {
+    const el = document.getElementById("page-list");
+    const pages = JSON.parse(el.textContent);
+    const p = pages.find(x => x.id === pageId);
+    if (p) { p.count = String(n); el.textContent = JSON.stringify(pages); }
+  } catch (e) { /* 结构缺失不致命 */ }
+  const a = document.querySelector(`#sideNav nav a[data-page="${pageId}"]`);
+  if (!a) return;
+  let span = a.querySelector(".count");
+  if (!span) {   // 首次渲染 page-list 无 count → 侧栏没有徽章元素，按需补建
+    span = document.createElement("span");
+    span.className = "count";
+    a.appendChild(span);
+  }
+  span.textContent = n;
+}
+
+/* 状态筛选条计数 = 当前数据实算（演示/真实同口径；静态稿曾写死 23/128 等假数字）。
+   各页 render 函数内调用：syncStatusChips("runsFilter", RUNS, r => r[3]) */
+function syncStatusChips(boxId, rows, statusOf) {
+  document.querySelectorAll(`#${boxId} .chip[data-status]`).forEach(c => {
+    const st = c.dataset.status;
+    const n = st === "all" ? rows.length : rows.filter(r => statusOf(r) === st).length;
+    let s = c.querySelector("small");
+    if (!s) { s = document.createElement("small"); c.append(" ", s); }
+    s.textContent = n;
+  });
 }
 
 document.addEventListener("DOMContentLoaded", () => {

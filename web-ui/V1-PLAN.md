@@ -20,7 +20,7 @@
 |---|---|---|---|
 | 精度 | 运行总览 | P0 | ✅ |
 | 精度 | 运行详情 | P0 | ✅ |
-| 精度 | 脚本库 | P0 | ✅ 静态稿 + 后端已实装（2026-10-24）：GET/POST/PATCH/DELETE /accuracy/scripts（builtin = examples/accuracy 扫描只读 + 自定义落 data/accuracy/scripts），前端 accuracy2.html 已对接（api-acc1.js） |
+| 精度 | 脚本库 | P0 | ✅ 后端已实装（2026-10-24；2026-11-08 改版：无预置 + 场景维度）——/accuracy/scenarios CRUD + /accuracy/scripts CRUD（脚本 = 英文ID + 中文名称 + 固化 spec，场景/脚本全部用户自管无预置；清单瘦身口径 = 数据集 + 条数，无描述/spec），前端 accuracy2.html 已按新契约重对接（api-acc3.js：场景筛选/新建/删除、按场景分组复用、spec 详情懒加载、保存为脚本须选场景） |
 | 精度 | 趋势对比 | P0 | ✅ |
 | 精度 | 人工评测 | P1 | ✅ |
 | 功能 | 任务列表 / 详情（含被测版本） | P0 | ✅（复用精度组件）；version 归档 = §10.5 |
@@ -434,7 +434,7 @@ expect，断言白名单校验）的结构化编辑，前端零评估逻辑—�
 
 | 域 | 脚本库页 | 预置脚本（= 现有资产） | spec 固化物 | 运行时覆盖项 |
 |---|---|---|---|---|
-| 精度 | 侧栏「脚本库」 | examples/accuracy/*.yaml（17 个基准套件模板） | 数据集/抽样/seed/Judge/阈值/并发/超时/扩展参数 | 任务名、目标模型、被测版本*、执行方式 |
+| 精度 | 侧栏「脚本库」 | 无预置（2026-11-08 预置脚本全删，用户自建沉淀） | 数据集/抽样/seed/Judge/阈值/并发/超时/扩展参数（固化 spec，清单带数据集+条数） | 任务名、目标模型、被测版本*、执行方式 |
 | 功能 | 侧栏「脚本库」 | 无预置组合模板（2026-10-12 二轮：脚本下沉为用例原子，ft-full 类组合取消；场景快捷圈选预设保留为选择助手） | 场景 / 类型标签（基础/边界/异常）/ 1..N 数据行（content+params+断言）——1 脚本 = 1 jsonl | 任务名、目标模型、被测版本（任务创建直接选场景，无脚本发起） |
 | 性能 | 侧栏「脚本库」 | baseline / ramp / probe / soak 四类压测模板 | 引擎/模式/负载/压力参数/chaos 声明 | 任务名、目标模型 |
 | 可靠性 | 既有「故障场景库」（不另建页） | chaos/scenarios/ 目录 + manifest（缺口条目既有） | 对象/武器/观测/背景流量/预期 RTO | fault_duration、背景并发（既有「本次覆盖项」段） |
@@ -505,7 +505,9 @@ expect，断言白名单校验）的结构化编辑，前端零评估逻辑—�
    时间由前端按速率估算，无需后端；抽样复核 = 前端按 seed 从 cases 列表抽样
    （seed/N 写入任务 spec 留档即可复现）。
 8. **脚本管理 REST（2026-10-12 新增）**：⚠️ 契约提案见 §10.4——accuracy 域 **✅ 已实装（2026-10-24，
-   `service/accuracy_assets.py` + `routers/accuracy.py`，前端 accuracy2.html 已对接）**；
+   `service/accuracy_assets.py` + `routers/accuracy.py`；2026-11-08 改版：场景/脚本两层、
+   无预置（examples/accuracy 全删）、脚本英文ID+中文名称、清单瘦身（数据集+条数），
+   契约详见 `docs/domain-backends.md` §17）**；
    functional 域 ✅ 已实装（2026-10-13）；perf 域未实装。`POST /{D}/tasks` 增 `script_id` /
    `overrides` 键未做（精度前端经「脚本 spec 深拷贝 + 客户端覆盖」等价实现，契约键仍可后续补）。
 9. **功能域质量链路 REST（2026-10-12 新增）**：资产层 ✅ 已实装（2026-10-13，
@@ -637,19 +639,22 @@ perf 型登记自动发生于 `POST /perf/datasets`（既有）；精度型经 `
   契约不动。
 
 
-### 10.6 全局版本管理 REST（2026-10-24 实装）
+### 10.6 全局版本管理 REST（2026-10-24 实装；2026-11-11 措辞定稿「创建版本」；同日版本与模型解耦）
 
-> 「公共 · 版本管理」：被测系统/模型的全局版本登记表（`model_version` 新表，
-> (model, version) 唯一），跨域共享——精度/功能任务发起时「被测版本」从这里
-> 选择（同一模型逐版本执行的结果才可做版本间对比）。与 version_result
-> （域 × 版本 × 模型的结果归档，§10.5）是两层：登记先行，归档随后。
+> 「公共 · 版本管理」：被测版本号的全局登记表（`model_version` 表，version
+> 唯一；model 为遗留列恒空串），跨域共享、与模型无关——精度/功能任务发起时
+> 「被测版本」从这里选择，与目标模型自由组合（同一脚本逐版本执行的结果才可
+> 做版本间对比）。与 version_result（域 × 版本 × 模型的结果归档，§10.5）是
+> 两层：创建先行，归档随后。
 
 | 方法与路径 | 语义 | 状态码 |
 |---|---|---|
-| `GET /api/v1/versions?model=` | 登记清单（可选按模型过滤；created_at 倒序） | 200 |
-| `POST /api/v1/versions` | 登记 `{model, version, description?}`；(model, version) 重复 409 | 201 / 409 / 422 |
-| `DELETE /api/v1/versions/{id}` | 删除登记（历史任务/归档持版本字符串不受影响） | 200 / 404 |
+| `GET /api/v1/versions` | 版本清单（created_at 倒序） | 200 |
+| `POST /api/v1/versions` | 创建版本 `{version, description?}`；version 重复 409（旧客户端传 model 兼容忽略） | 201 / 409 / 422 |
+| `DELETE /api/v1/versions/{id}` | 删除版本（历史任务/归档持版本字符串不受影响） | 200 / 404 |
 
-前端触点：common2 模型管理页「版本管理」卡（清单 + 登记/删除，api26.js）；
-精度创建抽屉被测版本 input+datalist = GET /versions（api-acc2.js，「＋ 新版本」
-就地登记）；功能域版本输入沿用功能归档历史 datalist（切全局登记待后续统一）。
+前端触点（2026-11-11 统一）：common2 模型管理组独立三页 = 模型/版本/密钥（左侧
+独立导航，v1.js GROUP 映射），「版本管理」页 = 清单 + 创建/删除（api32.js）；
+精度创建抽屉被测版本 input+datalist = GET /versions（api-acc3.js，「＋ 新版本」
+就地创建）；功能新建运行抽屉被测版本 = 全局版本下拉 +「＋ 新版本」就地创建
+（api32.js）。三处创建入口均只填版本号（+ 说明可选），不选模型。

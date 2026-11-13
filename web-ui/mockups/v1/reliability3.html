@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aite · 任务管理 · 可靠性</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=17">
+<link rel="stylesheet" href="assets/v1.css?v=20">
 </head>
 <body data-module="reliability" data-module-label="任务管理 · 可靠性">
 <script type="text/plain" id="page-list">[
-  {"id":"history","label":"任务列表","count":"12"},
+  {"id":"history","label":"任务列表"},
   {"id":"detail","label":"任务详情"},
-  {"id":"lib","label":"故障场景库","count":"5"},
+  {"id":"lib","label":"故障场景库"},
   {"id":"observe","label":"故障观测"}
 ]</script>
 
@@ -222,7 +222,7 @@
 
 <div class="ribbon">V1 静态稿 · 可靠性 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=13"></script>
+<script src="assets/v1.js?v=17"></script>
 <script>
 const HIST = [
   ["suspend-vllm-rto", "process:suspend → vllm(pid 4821)", "背景 locust 8 并发", "3.26s / ≤4s", "passed", "09-23 14:32", "zhimeng"],
@@ -255,7 +255,6 @@ const LIB = [
   ["token 限流风暴", "toxiproxy:bandwidth 256KB + 高并发", "推理端点", "locust 16 并发 · 300s", "错误率 ≤ 5%", "网络类"],
 ];
 function renderLib() {
-function renderLib() {
 document.getElementById("libTbl").innerHTML = `
   <thead><tr><th>场景</th><th>武器 / 目标</th><th>背景流量</th><th>预期</th><th>标签</th><th style="text-align:right">操作</th></tr></thead>
   <tbody>${LIB.map((x, idx) => `<tr class="clickable" onclick="showPage('detail')">
@@ -274,8 +273,6 @@ document.getElementById("saveSceneBtn").addEventListener("click", () => {
   const h = document.getElementById("saveSceneHint");
   h.hidden = false;
 });
-}
-renderLib();
 
 /* ---------- 发起实验：多场景串行 / 并行 ---------- */
 const expSel = new Set();
