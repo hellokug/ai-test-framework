@@ -91,7 +91,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
         <input class="in" id="dsFQ" placeholder="搜名称 / dataset_id / 标签 / notes…" style="flex:1;min-width:180px">
         <span class="hint" id="dsFCount"></span>
       </div>
-      <table id="dsTbl" class="sumtable"></table>
+      <table id="dsTbl" class="sumtable" style="width:100%;table-layout:fixed"></table>
       <div class="foot-note"><span>功能型：行为规约（请求+断言）· 精度型：题库（问题+标准答案）· 性能型：流量特征（分布语义无关）· 删除仅删登记，文件保留</span></div>
     </section>
 
@@ -506,6 +506,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=22"></script>
+<script src="api32.js?v=23"></script>
 </body>
 </html>

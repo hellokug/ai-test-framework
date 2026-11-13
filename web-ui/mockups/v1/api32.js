@@ -1941,6 +1941,12 @@ function dsAllRows() {
   return [...DS_ROWS.filter(r => r.kind !== "bench"),
     ...DS_BENCH.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))];
 }
+function dsEsc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+/* 行内截断单元：超宽省略 + hover 看全文；表格 table-layout:fixed，一律 100% 吃列宽不撑表 */
+function dsClip(text) {
+  const t = String(text ?? "");
+  return `<div style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${dsEsc(t)}">${dsEsc(t)}</div>`;
+}
 function dsRenderTable() {
   const rows = dsAllRows().filter(r => dsFilterMatch(r, window.DS_FILTERS));
   const cnt = document.getElementById("dsFCount");
@@ -1948,7 +1954,7 @@ function dsRenderTable() {
     `共 ${rows.length} 行 · 本机 ${DS_ROWS.filter(r => r.kind !== "bench").length}` +
     ` · 基准 ${DS_BENCH.length}（本机已有 ${DS_BENCH.filter(b => b.local).length}）`;
   document.getElementById("dsTbl").innerHTML = `
-    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>规模 / 概要</th><th>path · dataset_id</th><th style="text-align:right">操作</th></tr></thead>
+    <thead><tr><th style="width:7%">类型</th><th style="width:22%">名称</th><th style="width:18%;white-space:nowrap">来源</th><th style="width:15%">规模 / 概要</th><th style="width:18%">path · dataset_id</th><th style="width:20%;white-space:nowrap;text-align:right">操作</th></tr></thead>
     <tbody>${rows.map(r => r.kind === "bench" ? dsBenchRow(r) : dsLocalRow(r)).join("")
       || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
 }
@@ -1958,32 +1964,34 @@ function dsLocalRow(r) {
   const originCell = dsOriginTag(r) + (unreg
     ? ' <span class="badge pending" title="本机已有（注册表/目录），尚未登记 catalog；走一次导入即可入册"><i></i>未登记</span>'
     : "");
+  const sub = r.notes
+    ? `<div class="rid faint" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${dsEsc(r.notes)}">${dsEsc(r.notes)}</div>`
+    : '<div class="rid faint">&nbsp;</div>';
   return `<tr>
-  <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${r.name}</b>
-    <div class="rid mono faint">${(r.id || "").slice(0, 8)}</div></td>
+  <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${dsEsc(r.name)}</b>${sub}</td>
   <td style="white-space:nowrap">${originCell}</td>
   <td class="dim" style="white-space:normal">${r.statsText || dsStatsCell(r.stats)}</td>
-  <td class="mono faint" style="font-size:11px">${r.path || "—"}</td>
+  <td class="mono faint" style="font-size:11px">${r.path ? dsClip(r.path) : "—"}</td>
   <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="${dsRef(r)}" title="查看该数据集自己的来源/统计/notes">详情</button>
   <button class="btn sm" data-ds-dl="${ref}" title="下载数据集文件">下载</button>
   ${unreg ? "" : `<button class="btn sm danger" data-ds-del="${dsRef(r)}">删除</button>`}</td></tr>`;
 }
 function dsBenchRow(b) {
   const badge = b.local
-    ? `<span class="badge passed" title="本机已有同源/同名数据集，可直接用"><i></i>已有 · ${b.local}</span>`
+    ? `<span class="badge passed" title="本机已有同源/同名数据集，可直接用"><i></i>已有 · ${dsEsc(b.local)}</span>`
     : b.local_like
-      ? `<span class="badge pending" title="本机有近似名数据集（可能是同一基准的另一份转换）"><i></i>近似 · ${b.local_like}</span>`
+      ? `<span class="badge pending" title="本机有近似名数据集（可能是同一基准的另一份转换）"><i></i>近似 · ${dsEsc(b.local_like)}</span>`
       : '<span class="dim" title="本机没有：导入后完全离线可用，跑任务时也会自动下载">未下载</span>';
   return `<tr>
   <td><span class="tag">accuracy</span></td>
-  <td class="rname"><b class="mono">${b.name}</b>
-    <div class="rid faint">${b.pretty_name && b.pretty_name !== b.name ? b.pretty_name : ""}
-      ${(b.tags || []).slice(0, 3).map(t => `<span class="tag">${t}</span>`).join(" ")}</div></td>
+  <td class="rname"><b class="mono">${dsEsc(b.name)}</b>
+    <div class="rid faint" style="overflow:hidden;white-space:nowrap">${b.pretty_name && b.pretty_name !== b.name ? dsEsc(b.pretty_name) : ""}
+      ${(b.tags || []).slice(0, 3).map(t => `<span class="tag">${dsEsc(t)}</span>`).join(" ")}</div></td>
   <td style="white-space:nowrap"><span class="tag t-online">evalscope</span> ${badge}</td>
   <td class="dim" style="white-space:normal">${(b.metrics || []).join(", ") || "—"} · subsets ${(b.subsets || []).length}${b.few_shot_num ? ` · few-shot ${b.few_shot_num}` : ""}</td>
-  <td class="mono faint" style="font-size:11px">${b.dataset_id || "—"}</td>
-  <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="bench:${b.name}" title="基准信息与导入参数">详情</button>
-  <button class="btn sm" data-ds-import="${b.name}" title="打开导入抽屉并预填 dataset id">导入</button></td></tr>`;
+  <td class="mono faint" style="font-size:11px">${b.dataset_id ? dsClip(b.dataset_id) : "—"}</td>
+  <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="bench:${dsEsc(b.name)}" title="基准信息与导入参数">详情</button>
+  <button class="btn sm" data-ds-import="${dsEsc(b.name)}" title="打开导入抽屉并预填 dataset id">导入</button></td></tr>`;
 }
 function dsOpenDetail(ref) {
   if (String(ref).startsWith("bench:")) return dsOpenBenchDetail(String(ref).slice(6));

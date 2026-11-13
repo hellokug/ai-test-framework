@@ -1189,6 +1189,13 @@
   AITE_DATASETS_DIR/HF_HOME 到 .tmp（沙箱灌数不再写 owner 的 data/ 托管根），
   down 一并清临时数据根。IAB 实测：全集渲染/三维筛选/搜索/导入预填/详情跳转全过；
   全集首次列举 21.7s（evalscope 子进程，进程内缓存后秒回，列表先出本机行不等它）。
+- 同日 v23（owner 发截图打回「丑」）：①操作列被 auto 布局推到最右、path 列后大片
+  空白 → 目录表改 table-layout:fixed + 百分比列宽（7/22/18/15/18/20）；②本机行副行
+  的 id 截断（local:ce/file:sam）无信息量 → 改显 notes（截断+hover 全文），无 notes
+  占位对齐行高；③长 notes/dataset_id 的无空格拉丁串不可断行，把表撑出容器（1280
+  视口操作列被挤出）→ path/dataset_id/notes 截断一律 max-width:100%；④基准行 tags
+  穿到来源列 → 副行 overflow:hidden 裁剪。IAB 1280 视口实测：无溢出、操作列常驻、
+  行高对齐；render_check + mockup_symbols 过。common2/functional2 同 bump v23。
 
 
 
