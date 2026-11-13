@@ -7,8 +7,8 @@
 
 | 项 | 值 |
 |---|---|
-| 安装位置 | `C:\Users\朱智铭\AppData\Local\Programs\Ollama\` |
-| ollama.exe | `C:\Users\朱智铭\AppData\Local\Programs\Ollama\ollama.exe`（**未加入 PATH**） |
+| 安装位置 | `C:\Users\<用户名>\AppData\Local\Programs\Ollama\` |
+| ollama.exe | `C:\Users\<用户名>\AppData\Local\Programs\Ollama\ollama.exe`（**未加入 PATH**） |
 | 版本 | 0.33.1 |
 | 服务端口 | `http://localhost:11434`（OpenAI 兼容端点为 `/v1`） |
 | GPU | RTX 2050 4GB，驱动 531.88 / CUDA 12.1，推理后端 Vulkan |
@@ -27,14 +27,14 @@ curl -s --max-time 3 http://localhost:11434/api/version
 # 返回 {"version":"0.33.1"} 即正常；超时/拒绝则未启动
 
 # 2. 未启动时，用全路径启动（二选一）
-"C:/Users/朱智铭/AppData/Local/Programs/Ollama/ollama app.exe"   # 图形模式，托盘常驻
-"C:/Users/朱智铭/AppData/Local/Programs/Ollama/ollama.exe" serve  # 纯命令行模式
+"C:/Users/<用户名>/AppData/Local/Programs/Ollama/ollama app.exe"   # 图形模式，托盘常驻
+"C:/Users/<用户名>/AppData/Local/Programs/Ollama/ollama.exe" serve  # 纯命令行模式
 ```
 
 可选：把安装目录加入 PATH 后可直接敲 `ollama`：
 
 ```powershell
-setx PATH "$env:PATH;C:\Users\朱智铭\AppData\Local\Programs\Ollama"   # 对新开的终端生效
+setx PATH "$env:PATH;C:\Users\<用户名>\AppData\Local\Programs\Ollama"   # 对新开的终端生效
 ```
 
 ## 2. GPU 使用确认与"切换"
@@ -46,7 +46,7 @@ Ollama **默认自动用 GPU**，无需手动切换。要确认的是"装进去�
 nvidia-smi
 
 # 2. 看模型加载时卸载到 GPU 的层数（判断是否完整进显存）
-#    日志位置：C:\Users\朱智铭\AppData\Local\Ollama\server.log
+#    日志位置：C:\Users\<用户名>\AppData\Local\Ollama\server.log
 #    找关键行：
 #      offloaded 37/37 layers to GPU   ← 完整进显存（qwen2.5:3b，理想状态）
 #      offloaded 13/33 layers to GPU   ← 只装下部分（r1:8b，剩余层在 CPU 拖速度）
@@ -66,7 +66,7 @@ nvidia-smi
 ## 3. 模型管理流程
 
 ```bash
-OLLAMA="C:/Users/朱智铭/AppData/Local/Programs/Ollama/ollama.exe"
+OLLAMA="C:/Users/<用户名>/AppData/Local/Programs/Ollama/ollama.exe"
 
 "$OLLAMA" list              # 查看已装模型
 "$OLLAMA" pull qwen2.5:3b   # 拉取新模型（约 2GB，看网速）

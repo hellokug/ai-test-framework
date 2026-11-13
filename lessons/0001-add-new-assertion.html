@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>第 1 课：给 expect DSL 新增一种断言</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">aite 教学工作区 · 功能测试域 · 第 1 课</div>
+  <h1>给 expect DSL 新增一种断言</h1>
+  <p class="meta">预计 15 分钟 · 3 道自测 + 1 个动手练习 · 前置：无 ·
+  所有代码引用真实文件行号</p>
+
+  <h2>先决策：真的要改代码吗？</h2>
+  <p>「新增一个断言」有三条路，<strong>先走 A，A 走不通再考虑 C</strong>。
+  B 是给一次性需求的泄压阀：</p>
+  <div class="cards">
+    <div class="card">
+      <span class="tag">路线 A · 零代码</span>
+      <h4>现有谓词组合</h4>
+      <p>结构类需求大概率已被 <code>resp</code> / <code>json</code> 覆盖，直接写用例：</p>
+      <pre><code>{"resp": {"path": "model",
+          "eq": "gpt-4o-mini"}}</code></pre>
+    </div>
+    <div class="card">
+      <span class="tag">路线 B · 逃生门</span>
+      <h4>手写 test_*.py</h4>
+      <p>一次性、无法用谓词表达的复杂逻辑，写成普通 pytest 文件。
+      这是刻意设计（YAGNI，docs/functional-testing.md 取舍表）。</p>
+    </div>
+    <div class="card">
+      <span class="tag">路线 C · 本课主线</span>
+      <h4>给 DSL 加新键</h4>
+      <p>当新断言<strong>通用、要跨用例复用</strong>、且现有谓词表达不了时，
+      才给引擎加键——五步清单见下。</p>
+    </div>
+  </div>
+
+  <h2>原理：断言键的一生（加载期 → 执行期）</h2>
+  <p>读懂这张时间线，五步清单每一步的「为什么」就自明了：</p>
+  <pre><code>load_cases()            Case.__init__（加载期，fail fast）        Case.check()（执行期）
+────────────           ─────────────────────────────           ──────────────────────
+读 jsonl 每行     →     ① 必填字段 / expect 是对象               按 _status 分流：
+                        ② 未知键？对照 _EXPECT_KEYS 白名单         错误响应→只跑 http_status+resp
+                        ③ 各键形状校验（类型/取值范围）            正常响应→内容→结构→工具
+                        挂了抛 ValueError，整批不进执行池          挂了抛 AssertionError</code></pre>
+  <div class="callout">
+    <strong>为什么是封闭集合？</strong>键名写错（如 <code>contins</code>）在
+    <strong>加载期立即报错</strong>（harness.py:677-679），而不是执行期静默跳过。
+    如果白名单开放，一个拼写错误会让用例「看起来在测、实际什么都没断」——
+    这比崩溃危险得多。
+  </div>
+
+  <h2>五步清单（以 no_repeat 为实物范例）</h2>
+  <p>下面每一步都对照 <code>no_repeat</code>（复读检测）当年是怎么加进来的：</p>
+  <ol class="steps">
+    <li><strong>白名单加键</strong> — <span class="loc">harness.py:68</span>
+      <p>把键名放进 <code>_EXPECT_KEYS</code>。就这一行，加载期校验自动生效。</p>
+      <pre><code>_EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool",
+                "tool_args_contains", "no_garbled", "no_leak", "no_repeat",
+                ...}</code></pre>
+    </li>
+    <li><strong>带参数则加形状校验</strong> — <span class="loc">harness.py:682-684</span>
+      <p>布尔开关键（如 <code>no_repeat</code>）不需要这步；带参数的键（如
+      <code>chunks_min</code>）要校验类型与取值范围，非法值加载期拒绝：</p>
+      <pre><code>cm = expect.get("chunks_min")
+if cm is not None and (not isinstance(cm, int) or cm &lt; 1):
+    raise ValueError(f"{source}: chunks_min 须为 ≥1 的整数")</code></pre>
+    </li>
+    <li><strong>写检测函数</strong>（复杂检测才需要）— <span class="loc">harness.py:364</span>
+      <p>约定：<strong>返回 <code>证据串 | None</code></strong>，None 表示通过。
+      证据串会被拼进失败消息（「检测到 …」），比布尔值多告诉用户「哪里坏了」。
+      简单断言（如长度比较）跳过这步直接内联：</p>
+      <pre><code>def _repeat_evidence(text: str) -&gt; str | None:
+    ...
+    if n &gt;= 5:
+        return f"整行重复 ×{n}: {line[:40]!r}"   # 非None = 失败证据
+    return None</code></pre>
+    </li>
+    <li><strong>接线</strong> — <span class="loc">harness.py:794 / 818 / 847</span>
+      <p>按域放进 <code>_check_content</code>（内容质量）、
+      <code>_check_shape</code>（结构/流式）、<code>_check_tool</code>（工具行为）。
+      失败消息固定「期望 X，实际 Y（<code>_brief()</code> 截断）」句式：</p>
+      <pre><code>if expect.get("no_repeat"):
+    ev = _repeat_evidence(content)
+    assert ev is None, f"期望无复读，检测到 {ev}（回复: {_brief(content)}）"</code></pre>
+    </li>
+    <li><strong>单测正反例</strong> — <span class="loc">tests/unit/test_functional_cases.py:28-43</span>
+      <p>夹具 <code>_case(expect)</code> + <code>_response(content)</code> 三行一条：
+      合法值过、非法响应挂、非法参数加载期报 ValueError。</p>
+      <pre><code>def test_no_repeat(self):
+    _case({"no_repeat": True}).check(_response("正常回复"))       # 过
+    with pytest.raises(AssertionError):
+        _case({"no_repeat": True}).check(_response("哈哈哈哈...×10"))  # 挂</code></pre>
+    </li>
+  </ol>
+  <div class="callout">
+    <strong>影响面小到只有 harness + 测试</strong>：expect 对象在落库时原样进
+    <code>result.raw</code>（storage 层不解析键名），前端只展示不校验——
+    新增键<strong>不需要动 storage / 前端</strong>。
+  </div>
+
+  <h2>自测三题</h2>
+  <div class="quiz" id="quiz1"></div>
+
+  <h2>动手练习：加一个 max_len 断言</h2>
+  <div class="exercise">
+    <p><strong>需求</strong>：限制回复长度上限（比如防跑飞的
+    <code>{"max_len": 200}</code>）。现有谓词没有「内容长度上限」，值得加键。</p>
+    <ol>
+      <li>照五步清单实现（带参数，别忘了第 2 步形状校验）。</li>
+      <li>在 <code>tests/unit/test_functional_cases.py</code> 补正反例。</li>
+      <li>跑验证命令（这是你的即时反馈闭环）：
+        <pre><code>.venv/Scripts/python.exe -m pytest tests/unit/test_functional_cases.py</code></pre></li>
+    </ol>
+    <details>
+      <summary>做完再看：参考实现</summary>
+      <pre><code># ① harness.py:68   _EXPECT_KEYS 加 "max_len"
+
+# ② Case.__init__（仿 chunks_min，harness.py:682 旁）
+ml = expect.get("max_len")
+if ml is not None and (not isinstance(ml, int) or ml &lt; 1):
+    raise ValueError(f"{source}: max_len 须为 ≥1 的整数")
+
+# ③④ _check_content 末尾接线（简单断言，跳过检测函数直接内联）
+if "max_len" in expect:
+    assert len(content) &lt;= expect["max_len"], (
+        f"期望回复 ≤ {expect['max_len']} 字，实际 {len(content)}"
+        f"（{_brief(content)}）")
+
+# ⑤ tests/unit/test_functional_cases.py
+def test_max_len(self):
+    _case({"max_len": 5}).check(_response("hello"))         # 过
+    with pytest.raises(AssertionError, match="期望回复"):
+        _case({"max_len": 5}).check(_response("hello world"))  # 挂
+    with pytest.raises(ValueError, match="max_len"):
+        _case({"max_len": 0})                                  # 加载期拒绝</code></pre>
+    </details>
+  </div>
+
+  <h2>继续学</h2>
+  <ul>
+    <li>速查（建议打印）：<a href="../reference/assertion-dsl-cheatsheet.html">expect 断言 DSL 全集参考卡</a></li>
+    <li>主推荐阅读（本课一手资料）：<code>docs/functional-testing.md</code> 的
+        「执行链」与「设计取舍」两节——所有架构决定都记在那里。</li>
+    <li>有哪里没跟上？<strong>直接在会话里问 AI 老师</strong>——比如「为什么检测函数
+        返回证据串而不是抛异常」「resp 和 json 什么时候选哪个」，随问随答。</li>
+  </ul>
+
+  <div class="footnav">
+    下一课候选（做完练习后选）：<code>vars 生成器与占位符</code> ·
+    <code>repeat 数据驱动展开</code> · <code>错误响应模式（http_status）</code>
+  </div>
+</div>
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz("quiz1", [
+  { q: "在 cases.jsonl 里把断言键拼错（写成 contins），会发生什么？",
+    opts: ["跑完请求才报错误", "加载时就立即报错", "静默跳过不断言它", "覆盖掉已有断言键"],
+    answer: 1,
+    why: "Case.__init__ 对照 _EXPECT_KEYS 白名单（harness.py:677-679），未知键抛 ValueError，整批用例不进执行池——fail fast，杜绝「看似在测实际没断」。" },
+  { q: "检测函数（如 _repeat_evidence）通过时返回什么？",
+    opts: ["None", "True", "空字符串", "数字 0"],
+    answer: 0,
+    why: "约定「None = 通过，非 None = 失败证据串」。证据串直接拼进失败消息「检测到 …」，比布尔值多告诉用户哪里坏了。" },
+  { q: "check() 里三个域断言的固定执行顺序是？",
+    opts: ["结构 → 工具 → 内容", "工具 → 内容 → 结构", "内容 → 结构 → 工具", "内容 → 工具 → 结构"],
+    answer: 2,
+    why: "内容质量 → 结构/流式 → 工具行为（harness.py:788-792）。例外：响应带 _status 时只跑 http_status 和 resp（harness.py:781-783）。" }
+]);
+</script>
+</body>
+</html>

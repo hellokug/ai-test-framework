@@ -1,0 +1,99 @@
+/* aite 教学工作区共享样式：所有 lesson / reference 统一链接本文件 */
+:root {
+  --ink: #1f2933; --paper: #fbf9f4; --accent: #9a3412; --rule: #d9d2c5;
+  --code-bg: #f3efe6; --ok: #1a7f37; --bad: #b42318;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 17px/1.75 "Noto Serif SC", "Source Han Serif SC", Georgia, "Microsoft YaHei", serif;
+}
+.wrap { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+.kicker {
+  font-family: ui-monospace, Consolas, monospace; font-size: .8rem;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--accent);
+}
+h1 { font-size: 1.9rem; line-height: 1.3; margin: .4rem 0 .3rem; }
+.meta { color: #6b7280; font-size: .9rem; margin-bottom: 2rem; }
+h2 { font-size: 1.25rem; margin-top: 2.6rem; padding-bottom: .3rem;
+     border-bottom: 1px solid var(--rule); }
+h3 { font-size: 1.05rem; margin-top: 1.8rem; }
+p, li { margin: .6rem 0; }
+code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: .86em; background: var(--code-bg); padding: .1em .35em; border-radius: 4px;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--rule);
+  border-left: 4px solid var(--accent); border-radius: 6px;
+  padding: .9rem 1rem; overflow-x: auto; line-height: 1.55;
+}
+pre code { background: none; padding: 0; font-size: .84rem; }
+.loc {
+  float: right; color: #8a8378; font-size: .78rem;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.callout {
+  background: #fff; border: 1px solid var(--rule); border-left: 4px solid #2f6f8f;
+  border-radius: 6px; padding: .8rem 1rem; margin: 1.2rem 0;
+}
+.callout.warn { border-left-color: var(--bad); }
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: .8rem; margin: 1.2rem 0;
+}
+.card {
+  background: #fff; border: 1px solid var(--rule); border-radius: 8px;
+  padding: .9rem 1rem;
+}
+.card h4 { margin: 0 0 .4rem; font-size: .98rem; }
+.card .tag {
+  font-size: .75rem; color: var(--accent);
+  font-family: ui-monospace, Consolas, monospace;
+}
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+th, td { border: 1px solid var(--rule); padding: .45rem .6rem;
+         text-align: left; vertical-align: top; }
+th { background: #f1ede3; }
+ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+ol.steps > li { counter-increment: step; position: relative;
+                padding-left: 2.6rem; margin: 1.4rem 0; }
+ol.steps > li::before {
+  content: counter(step); position: absolute; left: 0; top: .15rem;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font-family: ui-monospace, Consolas, monospace; font-size: .9rem;
+  display: flex; align-items: center; justify-content: center;
+}
+.quiz { margin: 1rem 0; }
+.q {
+  background: #fff; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 1rem 1.1rem; margin: 1rem 0;
+}
+.q p.qtext { font-weight: 600; margin: 0 0 .6rem; }
+.opt {
+  display: block; width: 100%; text-align: left; margin: .35rem 0;
+  padding: .5rem .8rem; background: var(--paper);
+  border: 1px solid var(--rule); border-radius: 6px; font: inherit; cursor: pointer;
+}
+.opt:hover { border-color: var(--accent); }
+.opt:disabled { cursor: default; opacity: .85; }
+.opt.correct { border-color: var(--ok); background: #ecf7ee; }
+.opt.wrong { border-color: var(--bad); background: #fbeeea; }
+.qwhy {
+  display: none; margin-top: .6rem; font-size: .9rem; color: #4b5563;
+  border-top: 1px dashed var(--rule); padding-top: .5rem;
+}
+.qwhy.show { display: block; }
+.exercise {
+  background: #f0f6f0; border: 1px solid #cfe3cf; border-radius: 8px;
+  padding: 1rem 1.2rem; margin: 1.4rem 0;
+}
+details { margin: .8rem 0; }
+summary { cursor: pointer; color: var(--accent); }
+.footnav {
+  margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+  font-size: .9rem; color: #6b7280;
+}
+a { color: var(--accent); }
+@media print { .qwhy { display: block; } }

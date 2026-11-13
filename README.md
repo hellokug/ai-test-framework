@@ -43,17 +43,14 @@ aite run -c quickstart.yaml     # 退出码 0=passed / 1=failed（CI 直接可�
 aite serve                      # Web 平台 http://127.0.0.1:8300
 ```
 
-评测四类对象（示例见 `examples/`）：
+评测四类对象（示例见 `examples/`；精度域无预置脚本，场景/脚本经
+Web「脚本库」或 `aite ascenario`/`aite ascript` 自建沉淀）：
 
 | 示例 | 说明 |
 |---|---|
-| `examples/accuracy/quickstart_openai.yaml` | MVP 冒烟：GSM8K 采样 + exact_match(数字抽取) + p95 延迟 |
-| `examples/accuracy/judge_example.yaml` | LLM-as-a-Judge：score / pairwise(位置偏差双向) / multi(一致性) |
-| `examples/accuracy/rag_eval.yaml` | RAG：context precision/recall、hit@k、faithfulness、引用准确率 |
-| `examples/accuracy/agent_eval.yaml` | Agent：tool_call_correctness、task_completion、效率（HTTP trace 约定） |
-| `examples/accuracy/swebench.yaml` | SWE-bench 离线打分：predictions_file + swe_resolution（金补丁冒烟，需 Docker） |
+| `examples/functional/functional_pytest.yaml` | 功能域：pytest 适配引擎跑托管评估场景 |
+| `examples/perf/` | 性能：evalscope-perf / locust 双引擎（含 DeepSeek 实弹版） |
 | `examples/reliability/reliability.yaml` | 可靠性：repeats 重跑一致率 + 扰动鲁棒性 |
-| `examples/accuracy/safety.yaml` | 安全：越狱 ASR、提示注入抗性、PII 泄露、毒性 |
 
 ## 评测维度（内置 65 指标 + 3 类 Judge）
 
@@ -161,7 +158,7 @@ aite run -c examples/swebench.yaml               # predictions_file → swe_reso
 
 值语义：1.0 resolved / 0.0 未解或空补丁（缺预测按未解）；harness 失败或基础设施
 错误记 None 跳过（宁缺毋错）。打分产物落 `data/runs/swebench/<run>/`（predictions/
-logs/report），参数见 `examples/accuracy/swebench.yaml` 注释（dataset_name/timeout_s/
+logs/report），参数注释（dataset_name/timeout_s/
 work_dir/python_exe）。金补丁冒烟：predictions 只放一案 gold patch，预期该案
 resolve=1、其余缺预测=0。
 
@@ -174,7 +171,7 @@ suite 带 `engine` 字段即路由到工具适配层（无 engine 走自研引�
 RAGEval 四个后端，`tools.extra_args.eval_backend` 切换）：
 
 ```yaml
-# examples/accuracy/tool_evalscope.yaml
+# tool_evalscope（精度跑分最小例；沉淀为脚本：aite ascript create <id> --scenario <场景> --file <yaml>）
 engine: evalscope
 target:                       # 复用平台统一 target（OpenAI 兼容端点直连）
   type: openai_compatible
@@ -207,44 +204,26 @@ Python API 同名 `aite.tools.get_tool("evalscope").list_tasks()`，返回每个
 `pass_rate` 统一入 `run_metric_summary`，与精度跑分在 Web 趋势中并列可比。
 依赖：`pip install "aite[functional]"`（pytest>=8.2）。
 
-内置 9 场景（64 例，`aite tool benchmarks pytest` 可查），分两个域：
-
-**模型能力域**（5 场景 26 例）：
-
-| 场景 | 例数 | 覆盖 |
-|---|---|---|
-| `basic_chat` | 4 | 回复非空 / 关键词包含 / 语言+格式约束 / 简单算术 |
-| `structured_output` | 4 | JSON 可解析 / 定长数组 / 枚举字段 / 两层嵌套 |
-| `tool_calling` | 3 | 正确选工具 / arguments 可解析含关键参数 |
-| `long_context` | 3 | needle-in-a-haystack（确定性填充，4k/16k/尾部） |
-| `agent_tasks` | 12 | **Agent 评测集**：工具选择与语义区分 / 参数抽取（含中文、订单号精确抽取）/ 多轮续作（工具结果→最终回答、补参二次调用）/ 能力边界拒答（no_tool）——每例带 tools 定义与客观断言（tool/tool_args_contains/no_tool/finish_reason） |
-
-**API 契约域**（4 场景 38 例，测 OpenAI 兼容层本身的协议正确性，断言严格按
-OpenAI 规范）：
-
-| 场景 | 例数 | 覆盖 |
-|---|---|---|
-| `api_params` | 22 | 请求侧：参数校验（缺字段/坏 role/content/tools → 4xx、未知 model → 404、GET → 405、text/plain）；可选参数（temperature/top_p/penalties/n=2/system 生效/tools=[]）；json_mode；tool_choice 控制；输入鲁棒性（emoji/中日韩/超上下文 → 400） |
-| `api_stream` | 4 | 流式：SSE 拼接非空 / finish_reason / `[DONE]` 收尾 / chunk 分块 |
-| `api_limits` | 7 | 输出侧：max_tokens / max_completion_tokens → finish_reason=length；stop 序列；tool_calls 信号；长输出完整性 |
-| `api_shape` | 5 | 响应体契约：规范字段存在与类型 / usage 算术自洽 / assistant role |
-
-> 注意：API 契约域在非完全兼容的服务端（如 Ollama）会暴露**真实规范差异**
->（n 多候选、参数校验缺失、超上下文静默截断、tool_choice 强制等，实测 9 例
-> 差异用例 FAIL，desc 均已标注「已知差异，换标准端点应转绿」）——这是功能
-> 测试的价值而非误报；换 vLLM/OpenAI 端点后应全绿。
+场景**全部用户自管**（内置演示场景已移除，2026-11-08）：托管根
+`./data/functional/scenarios`（经资产接口维护：Web `/functional/scenarios` 或
+CLI `aite fscenario` / `aite fscript`），或 `tools.tests_dir` 指向任意自建目录。
+`aite tool benchmarks pytest` 枚举托管根下已有场景。
+**命名约定**：场景 id / 脚本 id = 英文编号（小写字母开头，允许数字/-/_，机器
+寻址：目录名、jsonl 路径、`tools.cases` 前缀）；显示名 / 脚本名称 = 中文名称
+（人看：卡片标题、质量大屏维度行名、报告结论）。
 
 ```yaml
 # examples/functional/functional_pytest.yaml
 engine: pytest
 target: {type: openai_compatible, base_url: http://localhost:11434/v1, model: qwen2.5:3b}
 tools:
-  datasets: [agent_tasks, basic_chat, structured_output, tool_calling, long_context]
+  datasets: [<托管场景名>]              # 非空 = 场景名筛选；可空 = 跑全部场景子目录
   metric_thresholds: {pass_rate: 1.0}   # auto 等价 1.0（零容忍）；不配则无判定
 ```
 
-两种用法：**内置场景**（`tools.datasets` = 场景名）或**自建目录**（`tools.tests_dir`
-指向自己的功能测试目录；datasets 可空 = 跑全部场景子目录，非空时作为子目录名筛选）。
+两种用法：**托管根场景**（`tools.datasets` = 场景名，引擎缺省即托管根）或
+**自建目录**（`tools.tests_dir` 指向自己的功能测试目录；datasets 可空 = 跑全部
+场景子目录，非空时作为子目录名筛选）。
 **用例级过滤** `tools.cases: [用例 id]`（默认全部）——单用例问题复现：精确定向
 `cases.jsonl::<id>`（非子串匹配，打错 id 显式报错并列出可用 id），无匹配用例的场景
 自动跳过，仅支持数据驱动场景。

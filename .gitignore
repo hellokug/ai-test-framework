@@ -266,3 +266,6 @@ logs/
 
 # 本地临时验证目录（隔离实例/冒烟脚本）
 .tmp/
+
+# aite serve 在 mockups 目录下运行时落下的运行时 common 配置
+web-ui/mockups/v1/data/

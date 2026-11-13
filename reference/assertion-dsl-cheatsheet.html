@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>速查：expect 断言 DSL 全集（aite 功能测试域）</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">aite 教学工作区 · 参考卡</div>
+  <h1>expect 断言 DSL 全集</h1>
+  <p class="meta">权威源：<code>aite/functional/harness.py</code>（行号以当前版本为准） ·
+  打印友好，建议常备</p>
+
+  <h2>一句话模型</h2>
+  <p><code>cases.jsonl</code> 每行一条用例，<code>expect</code> 对象里放断言键；
+  键是<strong>封闭集合</strong>（<code>_EXPECT_KEYS</code> 白名单，harness.py:68），
+  加载期就校验，写错立即报错；执行期 <code>Case.check()</code> 按域顺序跑，
+  失败抛 AssertionError，消息固定「期望 X，实际 Y」句式。</p>
+
+  <h2>断言键全集（按域分组）</h2>
+  <table>
+    <tr><th>域 / 接线点</th><th>键</th><th>语义</th><th>expect 示例</th></tr>
+    <tr><td rowspan="6">内容域<br><code>_check_content</code><br><span class="loc">harness.py:794</span></td>
+        <td><code>nonempty</code></td><td>回复非空</td><td><code>{"nonempty": true}</code></td></tr>
+    <tr><td><code>contains</code></td><td>包含子串（受 <code>ignore_case</code> 影响）</td>
+        <td><code>{"contains": "PASSED", "ignore_case": true}</code></td></tr>
+    <tr><td><code>not_contains</code></td><td>不含子串</td><td><code>{"not_contains": "违禁词"}</code></td></tr>
+    <tr><td><code>no_garbled</code></td><td>无乱码（mojibake/多语区段采样检测）</td>
+        <td><code>{"no_garbled": true}</code></td></tr>
+    <tr><td><code>no_leak</code></td><td>无内部标签泄露；传数组可追加自定义正则</td>
+        <td><code>{"no_leak": ["内部研?发?"]}</code></td></tr>
+    <tr><td><code>no_repeat</code></td><td>无复读（句级/行级重复检测）</td>
+        <td><code>{"no_repeat": true}</code></td></tr>
+
+    <tr><td rowspan="5">结构域<br><code>_check_shape</code><br><span class="loc">harness.py:818</span></td>
+        <td><code>finish_reason</code></td><td>∈ stop / length / tool_calls / content_filter</td>
+        <td><code>{"finish_reason": "stop"}</code></td></tr>
+    <tr><td><code>chunks_min</code></td><td>流式 chunk 数下限</td>
+        <td><code>{"chunks_min": 3}</code></td></tr>
+    <tr><td><code>sse_done</code></td><td>SSE 收尾 <code>data: [DONE]</code> 是否出现</td>
+        <td><code>{"sse_done": true}</code></td></tr>
+    <tr><td><code>resp</code></td><td>响应体字段断言（对象或数组=多字段）；
+        谓词 <code>path / type / eq / len / nonempty / contains</code>，path 支持数字索引
+        <code>choices.0</code></td>
+        <td><code>{"resp": {"path": "model", "eq": "gpt-4o-mini"}}</code></td></tr>
+    <tr><td><code>json</code></td><td>回复内容解析 JSON 后按规格断言；谓词含
+        <code>path / type / eq / neq / in / len / contains / nonempty / item_type /
+        item_nonempty / fields</code>（fields 递归）</td>
+        <td><code>{"json": {"path": "usage.total_tokens", "type": "int"}}</code></td></tr>
+
+    <tr><td rowspan="3">工具域<br><code>_check_tool</code><br><span class="loc">harness.py:847</span></td>
+        <td><code>no_tool</code></td><td>不发起工具调用</td><td><code>{"no_tool": true}</code></td></tr>
+    <tr><td><code>tool</code></td><td>首个 tool_call 的名字等于</td>
+        <td><code>{"tool": "get_weather"}</code></td></tr>
+    <tr><td><code>tool_args_contains</code></td><td>arguments(JSON) 序列化后包含（忽略大小写）</td>
+        <td><code>{"tool_args_contains": "Tokyo"}</code></td></tr>
+
+    <tr><td>错误模式<br><code>_check_error_response</code><br><span class="loc">harness.py:867</span></td>
+        <td><code>http_status</code></td><td>整数精确值，或关系形式
+            <code>{"eq|neq|gte|lte|in": v}</code>；此时 <code>resp</code> 断的是
+            <code>_body</code></td>
+        <td><code>{"http_status": {"gte": 400}}</code></td></tr>
+  </table>
+  <p><strong>修饰键</strong>：<code>ignore_case</code>（作用于内容域与 json/resp 的部分谓词）。
+  同一 expect 多键<strong>可叠加</strong>，全部执行。</p>
+
+  <h2>执行期两条路径</h2>
+  <ol>
+    <li>响应带 <code>_status</code>（参数校验类错误用例）→ <strong>只跑</strong>
+        <code>http_status</code> 和 <code>resp</code>（harness.py:781-783）。</li>
+    <li>正常响应 → 内容 → 结构 → 工具，三域顺序固定（harness.py:788-792）。</li>
+  </ol>
+
+  <h2>新增断言键：五步清单</h2>
+  <ol class="steps">
+    <li><strong>白名单加键</strong>：<code>_EXPECT_KEYS</code>（harness.py:68）加新键名。</li>
+    <li><strong>带参数则加形状校验</strong>：仿 <code>chunks_min</code>
+        （harness.py:682-684），非法值在 <code>Case.__init__</code> 抛
+        <code>ValueError</code>。</li>
+    <li><strong>写检测函数</strong>（复杂检测才需要）：约定返回
+        <code>证据串 | None</code>，仿 <code>_repeat_evidence</code>（harness.py:364）；
+        简单断言直接内联即可。</li>
+    <li><strong>接线</strong>：按域放 <code>_check_content / _check_shape /
+        _check_tool</code>；失败消息用「期望 X，实际 Y（<code>_brief()</code> 截断）」句式。</li>
+    <li><strong>单测正反例</strong>：<code>tests/unit/test_functional_cases.py</code>，
+        夹具 <code>_case()</code> / <code>_response()</code>（L28-43）；加载期非法用
+        <code>pytest.raises(ValueError)</code>。</li>
+  </ol>
+
+  <h2>验证命令</h2>
+  <pre><code>.venv/Scripts/python.exe -m pytest tests/unit/test_functional_cases.py   # 单测（勿再加 -q）
+.venv/Scripts/python.exe -m ruff check aite tests                        # lint
+.venv/Scripts/python.exe scripts/audit_func_len.py                       # 函数 ≤80 行</code></pre>
+
+  <div class="footnav">
+    返回课程：<a href="../lessons/0001-add-new-assertion.html">0001 给 expect DSL 新增一种断言</a>
+    · 权威文档：<a href="../../docs/functional-testing.html">docs/functional-testing.md</a>
+  </div>
+</div>
+</body>
+</html>
