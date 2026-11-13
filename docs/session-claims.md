@@ -11,6 +11,5 @@ docs/efficiency-log.md / HANDOVER，本文件只留活跃租约。同一域同�
 
 ## 在认领
 
-- 2026-11-13 | 性能域前端对接：perf2.html + 新建 api-perf.js（任务/详情/大屏 timeseries/数据集真读写） | web-ui/mockups/v1/perf2.html + api-perf.js + web-ui/HANDOVER.md | 本轮内
 - 2026-11-13 | perf 真实负载导入：csv/jsonl/ShareGPT 对话数组 → perf 型数据集上传 + 语料池对话格式适配 | aite/datasets/local.py + aite/tools/perf_dataset.py + aite/service/dataset_files.py + aite/web/routers + tests + docs/dataset-guide.md + roadmap | 本轮内
 
