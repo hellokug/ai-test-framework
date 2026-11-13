@@ -147,7 +147,98 @@ def load_run_timeseries(run: dict) -> dict | None:
         raise RuntimeError(f"corrupted timeseries: {exc}") from exc
 
 
+# 逐样本字段截断上限：详情页只需要可判定 + 可定位的量，全文走 work_dir 落盘产物
+_SAMPLE_CLIP = {"question": 300, "prediction": 2000, "explanation": 500}
+
+
+def _clip(text: Any, limit: int) -> str:
+    if text is None:
+        return ""
+    s = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+def _sample_message_text(messages: Any) -> str:
+    """messages 首条 user 内容 → 纯文本摘要（content 可能是字符串或分块列表）。"""
+    for m in messages or []:
+        if (m or {}).get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            content = "\n".join(str(b.get("text") or "") for b in content
+                                if isinstance(b, dict))
+        return str(content or "")
+    return ""
+
+
+def _sample_row(raw: dict, dataset: str) -> dict:
+    """reviews jsonl 行（evalscope 逐样本评分）→ 详情页行；缺字段全部容忍。"""
+    ss = raw.get("sample_score") or {}
+    sc = ss.get("score") or {}
+    values = sc.get("value") if isinstance(sc.get("value"), dict) else {}
+    main = sc.get("main_score_name")
+    value = values.get(main) if main else None
+    if value is None and values:
+        value = next(iter(values.values()), None)
+    meta = ss.get("sample_metadata") or raw.get("sample_metadata") or {}
+    return {
+        "dataset": dataset,
+        "index": raw.get("index"),
+        "sample_id": ss.get("sample_id"),
+        "score": value,
+        "status": sc.get("status"),
+        "passed": (value >= 1.0) if isinstance(value, (int, float)) else None,
+        "extracted_prediction": _clip(sc.get("extracted_prediction"), 200),
+        "prediction": _clip(sc.get("prediction"), _SAMPLE_CLIP["prediction"]),
+        "judge_summary": sc.get("judge_summary"),
+        "explanation": _clip(sc.get("explanation"), _SAMPLE_CLIP["explanation"]),
+        "target": _clip(raw.get("target"), 200),
+        "correct_answer": _clip(meta.get("correct_answer"), 200),
+        "question": _clip(_sample_message_text(raw.get("messages")),
+                          _SAMPLE_CLIP["question"]),
+    }
+
+
+def load_run_samples(run: dict, *, limit: int = 200, offset: int = 0,
+                     wrong_only: bool = False) -> dict | None:
+    """读 run.details.work_dir 下 reviews/**/*.jsonl（evalscope 逐样本评分契约）。
+
+    返回 {items, total, wrong, datasets}；run 无 work_dir 或无逐样本产物
+    返回 None（404 语义由路由定——自研引擎域与旧运行没有该产物）。坏行跳过
+    不致命（单行损坏不该拖垮整页）。wrong_only 只留 passed=False 的行。
+    """
+    work_dir = (run.get("details") or {}).get("work_dir")
+    if not work_dir:
+        return None
+    files = sorted(Path(work_dir).glob("reviews/**/*.jsonl"))
+    if not files:
+        return None
+    rows: list[dict] = []
+    wrong = 0
+    for p in files:
+        dataset = p.stem.removesuffix("_default")
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except ValueError:
+                    continue
+                row = _sample_row(raw, dataset)
+                if row["passed"] is False:
+                    wrong += 1
+                elif wrong_only:
+                    continue
+                rows.append(row)
+    return {"items": rows[offset:offset + limit], "total": len(rows),
+            "wrong": wrong,
+            "datasets": sorted({r["dataset"] for r in rows})}
+
+
 __all__ = ["compute_platform_stats", "filter_runs_by_domain",
-           "import_functional_dataset", "load_run_timeseries",
+           "import_functional_dataset", "load_run_samples",
+           "load_run_timeseries",
            "parse_jsonl_records", "run_domain", "select_manual_tasks",
            "to_import_cases"]

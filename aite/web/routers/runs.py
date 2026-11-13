@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from aite import config
 from aite.service import execute_suite, resolve_suite
-from aite.service.web_service import filter_runs_by_domain, load_run_timeseries
+from aite.service.web_service import filter_runs_by_domain, load_run_samples, load_run_timeseries
 from aite.web.deps import get_state
 from aite.web.sse import stream_events
 
@@ -162,6 +162,28 @@ async def run_timeseries(run_id: str, state: Any = Depends(get_state)):
         raise HTTPException(500, str(exc)) from exc
     if data is None:
         raise HTTPException(404, "no perf timeseries for this run")
+    data["run_id"] = run_id
+    data["status"] = run["status"]
+    return data
+
+
+@router.get("/runs/{run_id}/samples")
+async def run_samples(run_id: str, state: Any = Depends(get_state),
+                      limit: int = Query(200, ge=1, le=1000),
+                      offset: int = Query(0, ge=0),
+                      wrong_only: bool = False):
+    """逐样本明细（精度诊断数据源）：读 run.details.work_dir 下
+    reviews/**/*.jsonl（evalscope 逐样本评分契约），行含 score/passed、
+    模型提取答案 vs 标准答案、预测原文与判定说明。工具域跑分 run 的
+    test_case_result 恒为空（引擎不逐例驱动），逐样本真值只在此处。
+    无 work_dir 或无逐样本产物（自研域/旧运行）→ 404。"""
+    run = await state.repo.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "run not found")
+    data = load_run_samples(run, limit=limit, offset=offset,
+                            wrong_only=wrong_only)
+    if data is None:
+        raise HTTPException(404, "no per-sample data for this run")
     data["run_id"] = run_id
     data["status"] = run["status"]
     return data

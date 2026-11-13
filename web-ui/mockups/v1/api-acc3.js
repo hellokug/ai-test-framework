@@ -267,6 +267,13 @@ async function showAccTask(taskId) {
         <div class="detail-stack">${failures.length ? failures.map(failBlock).join("")
           : '<div class="ds-empty">无失败样本记录</div>'}</div>
       </section>
+      ${runId ? `<section class="card">
+        <div class="card-head"><div><h3>逐样本明细 <span class="dim" id="accSamplesMeta">加载中…</span></h3>
+          <div class="sub">逐样本评分 vs 标准答案 · reviews/*.jsonl（work_dir 落盘，接口 /runs/{id}/samples）
+            <label style="margin-left:10px;cursor:pointer;font-size:12px"><input type="checkbox" id="accSamplesWrong"
+              onchange="accLoadSamples('${runId}', this.checked, ${seq})"> 只看答错</label></div></div></div>
+        <div class="detail-stack" id="accSamplesBody"><div class="ds-empty">加载中…</div></div>
+      </section>` : ""}
       <section class="card">
         <div class="card-head"><div><h3>报告产物</h3>
           <div class="sub">落盘 work_dir（产物下载端点为后续缺口 §8.7，路径可服务器直取）</div></div></div>
@@ -279,10 +286,56 @@ async function showAccTask(taskId) {
         </div>
       </section>
     </div>`;
+  if (runId) accLoadSamples(runId, false, seq);
   if (running && t.status === "running") {
     accDetailTimer = setTimeout(() => {
       if (seq === showAccTask.seq) showAccTask(taskId);
     }, 5000);
+  }
+}
+
+/* 逐样本明细（详情卡懒加载）：数据源 /runs/{id}/samples（reviews/*.jsonl）。
+   seq 防串页：详情快速切换时旧请求不得回填新页面。 */
+const accSampleBlock = (s) => {
+  const mark = s.passed === true ? '<span style="color:var(--good)">✓</span>'
+    : s.passed === false ? '<span style="color:var(--bad)">✕</span>'
+      : '<span class="faint">—</span>';
+  const score = s.score == null ? "—"
+    : (typeof s.score === "number" ? s.score.toFixed(2) : String(s.score));
+  const q1 = (s.question || "").replace(/\s+/g, " ").slice(0, 90);
+  return `<details style="border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-top:8px">
+    <summary style="cursor:pointer;font-size:12.5px" class="mono">${mark} ${s.dataset || "—"}
+      #${s.index ?? s.sample_id ?? "?"} · 得分 ${score}${s.extracted_prediction ? ` · 答 ${s.extracted_prediction}` : ""}${s.target ? ` · 标 ${s.target}` : ""}
+      ${q1 ? `<span class="dim" style="font-weight:400"> · ${q1}</span>` : ""}</summary>
+    ${s.question ? `<div class="kv" style="margin-top:8px"><span>问题</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.question}</pre></div>` : ""}
+    ${s.correct_answer && s.correct_answer !== s.target ? `<div class="kv"><span>标准答案全文</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.correct_answer}</pre></div>` : ""}
+    <div class="kv"><span>模型原始输出</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.prediction || "—"}</pre></div>
+    ${s.explanation ? `<div class="kv"><span>判定说明</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.explanation}</pre></div>` : ""}
+    ${s.judge_summary ? `<div class="kv"><span>评委</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${JSON.stringify(s.judge_summary)}</pre></div>` : ""}
+    ${s.status && s.status !== "success" ? `<div class="kv"><span>评分状态</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.status}</pre></div>` : ""}
+  </details>`;
+};
+
+async function accLoadSamples(runId, wrongOnly, seq) {
+  const box = document.getElementById("accSamplesBody");
+  const meta = document.getElementById("accSamplesMeta");
+  if (!box || !runId) return;
+  try {
+    const d = await AAPI.get(`/runs/${runId}/samples?limit=200${wrongOnly ? "&wrong_only=1" : ""}`);
+    if (seq !== undefined && seq !== showAccTask.seq) return;
+    if (meta) meta.textContent = `（共 ${d.total} 条 · 答错 ${d.wrong} 条）`;
+    box.innerHTML = d.items.length ? d.items.map(accSampleBlock).join("")
+      : `<div class="ds-empty">${wrongOnly ? "没有答错样本（全部正确）" : "无逐样本记录"}</div>`;
+  } catch (e) {
+    if (seq !== undefined && seq !== showAccTask.seq) return;
+    if (meta) meta.textContent = "";
+    box.innerHTML = '<div class="ds-empty">无逐样本明细（自研引擎或旧版运行无 reviews 产物）</div>';
   }
 }
 

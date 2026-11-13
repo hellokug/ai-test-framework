@@ -65,9 +65,19 @@ def _normalize_metric_names(metric_list: list) -> list[str]:
 
 def _threshold_aliases(name: str) -> tuple[str, ...]:
     """阈值键容错序列：各基准报告指标名不一（gsm8k 报 ``mean_acc``，有的基准
-    报原始名 ``acc``），suite 阈值按任一写法都不该静默失效成「不判定」。"""
+    报原始名 ``acc``，schema v2 报告报 ``accuracy``），suite 阈值按任一写法
+    都不该静默失效成「不判定」。"""
     return {"acc": ("acc", "mean_acc"),
-            "mean_acc": ("mean_acc", "acc")}.get(name, (name,))
+            "mean_acc": ("mean_acc", "acc"),
+            "accuracy": ("accuracy", "mean_acc", "acc")}.get(name, (name,))
+
+
+def _metric_name(m: dict) -> str:
+    """报告指标行取名：schema v2 把名字放在 identity.name（如 ``accuracy``），
+    旧版平铺在 name；聚合基准无名行兜底 ``score``。只读旧字段时 v2 报告
+    指标全部记成 score，auto 阈值与显式阈值别名都会静默失效。"""
+    ident = m.get("identity")
+    return str((ident or {}).get("name") or m.get("name") or "score")
 
 
 _PROGRESS_RE = re.compile(
@@ -397,7 +407,7 @@ print(json.dumps(out, ensure_ascii=False))
             if data.get("score") is None and len(metrics) == 1:
                 out.raw_score[ds_name] = float(metrics[0]["score"])
             for m in metrics:
-                name = str(m.get("name") or "score")
+                name = _metric_name(m)
                 thr = next((req.metric_thresholds[a]
                             for a in _threshold_aliases(name)
                             if req.metric_thresholds.get(a) is not None), None)
