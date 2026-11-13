@@ -3,13 +3,13 @@
 > 写给前端 agent（2026-10-01，用户指示「先把参数加到静态 HTML，后续前后端直接对接」）。
 > 读法：本文档 = 精度创建表单每个控件 → 后端 suite raw 字典键的映射 + 支持状态。
 > 地位：**参数级契约**，后端已全部实装并实弹验证；「支持状态」列以外的不许编。
-> 实弹样例（每参数都有可跑注释）：`examples/accuracy/*.yaml`（同构字典，YAML 只是序列化形态）。
+> 样例沉淀：精度预置脚本已下线（2026-11-08 起 场景/脚本全部用户自建，`aite ascript create --file <spec.yaml>` 沉淀为脚本）；本文各键即字典口径，YAML 只是序列化形态。
 
 ## 0. 对接形态
 
 精度任务 spec = **suite raw 字典**（`docs/domain-backends.md §6`：accuracy spec =
 suite raw，engine=evalscope）。`POST /api/v1/accuracy/tasks` body `{name?, spec}`，
-`spec` 就是下文的字典；YAML 文件（如 `examples/accuracy/ceval.yaml`）load 后即这个 dict。
+`spec` 就是下文的字典；等价的 spec YAML 文件 load 后即这个 dict。
 
 ```json
 {
@@ -64,7 +64,7 @@ suite raw，engine=evalscope）。`POST /api/v1/accuracy/tasks` body `{name?, sp
 
 **dataset_args 实弹教训（写进提示文案）**：humaneval 判分 spawn 子进程需重新 import
 evalscope（Windows 实测 ~9s），默认 review_timeout=4s 必超时出**假 0 分**——样例已配
-`{humaneval: {review_timeout: 60}}`（examples/accuracy/humaneval.yaml）。
+`{humaneval: {review_timeout: 60}}`（脚本内固化，见 §4）。
 
 ## 3. 执行与观测对接
 
@@ -77,8 +77,9 @@ evalscope（Windows 实测 ~9s），默认 review_timeout=4s 必超时出**假 0
 - 报告产物：run 详情 reports 列表（json/html/txt），样例路径见
   `reports/tool/evalscope/<run_name>/<stamp>/`。
 
-## 4. 样例 yaml 即 ground truth
+## 4. 样例 spec 即 ground truth
 
-`examples/accuracy/`：mmlu/ceval（多子集钉科）、gsm8k/math_500（CoT 长生成）、
-humaneval（review_timeout 教训）、aime26（judge 类必须配判官）、aa_lcr（判官+阈值全配）。
-改静态稿有疑问时对照同参数的 yaml 注释，注释即验收标准。
+examples/accuracy 预置已下线（2026-11-08）；经典配置要点：mmlu/ceval（多子集钉科
+subset_list）、gsm8k/math_500（CoT 长生成 max_tokens 8192+）、humaneval
+（review_timeout 60 教训）、aime26（judge 类必须配判官）、aa_lcr（判官+阈值全配）。
+本节要点即验收口径；沉淀样例用 `aite ascript create --file <spec.yaml>`。

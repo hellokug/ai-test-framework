@@ -14,6 +14,11 @@
 
 - ``id``：用例 id（场景内唯一，即测试名）
 - ``desc``：场景说明（这个请求体测什么）
+- ``repeat``（可选，默认 1，上限 100）：该行重复执行的次数（稳定性/波动复测）。
+  加载期展开为 N 个独立用例：首轮沿用原 id，后续轮 id 为 ``id[r2]`` / ``id[r3]``…；
+  每轮独立渲染 vars（seed 缺省 = 每轮取新随机值，给定 seed 则每轮一致）；
+  junit 与结果记录按轮次各记一条（external_key 带轮次后缀，落库不互相覆盖）。
+  ``tools.cases`` 过滤指定原 id 选中其全部轮次，指定 ``id[r3]`` 只复现该轮
 - ``messages`` / ``tools``（可选）/ ``params``（可选）：请求体
 - ``vars``（可选）：占位符变量，messages 中 ``{NAME}`` 被替换为生成值。生成器：
   ``haystack{chars,key_at,key}``（确定性长文埋码，needle 取回测试）/
@@ -57,12 +62,13 @@ import pytest
 RETRYABLE_TIMEOUT = 120.0   # 单请求超时（本地小模型推理可能较慢）
 _COMPLETIONS = "/chat/completions"
 CASES_FILENAME = "cases.jsonl"
+_REPEAT_MAX = 100   # 单条用例 repeat 上限（防手误大数拖垮整个场景）
 
 _TYPES = {"str": str, "int": int, "list": list, "dict": dict}
 _EXPECT_KEYS = {"contains", "ignore_case", "nonempty", "json", "tool",
                 "tool_args_contains", "no_garbled", "no_leak", "no_repeat",
                 "not_contains", "no_tool", "http_status", "finish_reason", "resp",
-                "chunks_min", "sse_done"}
+                "chunks_min", "sse_done", "max_len"}
 _JSON_SPEC_KEYS = {"path", "type", "eq", "neq", "in", "len", "contains", "nonempty",
                    "item_type", "item_nonempty", "fields"}
 _RESP_SPEC_KEYS = {"path", "type", "eq", "len", "nonempty", "contains"}   # 响应体断言（无递归 fields）
@@ -87,6 +93,11 @@ _REPLY_BRIEF = 160   # 失败信息里实际回复的截断长度
 _INPUT_EDGE = 200    # 失败详情：输入每条消息头/尾各保留的字符数（长文 16k 等截断）
 _OUTPUT_BRIEF = 300  # 失败详情：输出保留的字符数
 _ARGS_BRIEF = 120    # 失败详情：tool_call arguments 保留的字符数
+# _headers 控制：敏感头落库打码（结果 jsonl 会被复制复现，header 可能带真凭证）。
+# 子串匹配宁滥勿缺——打码只影响展示，漏打码泄露凭证。
+_SENSITIVE_HEADER_PARTS = ("authorization", "api-key", "apikey", "token", "secret",
+                           "cookie", "password", "key")
+_HEADER_MASK = "******"
 
 
 # ---------------------------------------------------------------- 模型访问层
@@ -108,17 +119,53 @@ def _request_url() -> str:
     return base if base.endswith(_COMPLETIONS) else base + _COMPLETIONS
 
 
+def _merge_headers(custom: dict | None) -> dict:
+    """默认鉴权头 ⊕ 用例 ``_headers``：同键覆盖（键大小写不敏感）、null = 删除该头。"""
+    headers = {"Authorization": f"Bearer {os.environ.get('AITE_FT_API_KEY') or 'EMPTY'}"}
+    for key, value in (custom or {}).items():
+        existing = next((k for k in headers if k.lower() == key.lower()), None)
+        if value is None:
+            if existing:
+                del headers[existing]
+        else:
+            headers[existing or key] = value
+    return headers
+
+
+def _mask_headers(headers: dict) -> dict:
+    """敏感头值统一打码（键保留供人识别，值不可逆；子串规则宁滥勿缺）。
+
+    复现请求时凭证经环境注入（AITE_FT_API_KEY），落库值无需保真。
+    """
+    return {k: (_HEADER_MASK if any(s in k.lower() for s in _SENSITIVE_HEADER_PARTS) else v)
+            for k, v in headers.items()}
+
+
+def _redact_params(params: dict) -> dict:
+    """落库前脱敏：``_headers`` 中敏感头值打码（规则同 _mask_headers）。"""
+    headers = params.get("_headers")
+    if not isinstance(headers, dict):
+        return params
+    return {**params, "_headers": _mask_headers(headers)}
+
+
 def _post(client: httpx.Client, messages: list, *, tools: list | None,
           params: dict, expect_error: bool = False) -> dict:
     """发 chat/completions 请求。
 
+    - 返回 dict 一律附 ``_request``（{url, method, headers, body} 请求留痕，
+      body 为实际发出的原文：普通/流式 = 合并后的 payload，_raw_body = 原始字符串；
+      headers 为实际发送的头（默认鉴权 ⊕ _headers 合并后），敏感值打码），
+      平台详情页据此原样展示请求头/体
     - ``stream: true`` 走 SSE 流式：逐块拼接，返回伪响应（finish_reason 取末块），
       额外带 ``_chunks``（块数）与 ``_sse_ok``（data: [DONE] 正常收尾）
     - ``expect_error=True``（用例配了 http_status）：错误响应是被测对象，
       不重试、不 raise，原样返回 ``{"_status": 码, "_body": ...}``
     - 请求构造控制（params 下划线前缀，不进 payload）：``_omit_messages``
       （省略 messages 字段）、``_http_method``（改用 GET 等）、``_raw_body``
-      （以 text/plain 发原始字符串）
+      （以 text/plain 发原始字符串）、``_headers``（自定义请求头：与默认头合并，
+      同键覆盖（键大小写不敏感），值 null = 删除该头，如去掉 Authorization
+      测 401；落库时敏感头值自动打码）
     """
     url = _request_url()
     ctl = {k: params[k] for k in params if str(k).startswith("_")}
@@ -127,18 +174,31 @@ def _post(client: httpx.Client, messages: list, *, tools: list | None,
         **({"messages": messages} if not ctl.get("_omit_messages") else {}),
         **{k: v for k, v in params.items() if not str(k).startswith("_")},
     }
-    if tools:
+    # 空数组也要发（参数校验用例 tools=[] → 400），None（未配置）才省略字段
+    if tools is not None:
         payload["tools"] = tools
-    headers = {"Authorization": f"Bearer {os.environ.get('AITE_FT_API_KEY') or 'EMPTY'}"}
-    if ctl.get("_http_method") == "GET":
+    headers = _merge_headers(ctl.get("_headers"))
+    is_get = ctl.get("_http_method") == "GET"
+    # 请求留痕（详情页原样展示请求头/体，前端不再自行拼装）：body 必须是
+    # 实际发出的原文——_raw_body/GET 模式下 payload 不等于请求体；headers 为
+    # 合并后的实际发送头（含默认鉴权），落库前敏感值打码
+    request_meta = {"url": url, "method": "GET" if is_get else "POST",
+                    "headers": _mask_headers(headers),
+                    "body": str(ctl["_raw_body"]) if "_raw_body" in ctl
+                    else None if is_get else payload}
+    if is_get:
         resp = client.get(url, headers=headers)
-        return {"_status": resp.status_code, "_body": _safe_json(resp)}
+        return {"_status": resp.status_code, "_body": _safe_json(resp),
+                "_request": request_meta}
     if "_raw_body" in ctl:
-        resp = client.post(url, content=str(ctl["_raw_body"]),
-                           headers={**headers, "Content-Type": "text/plain"})
-        return {"_status": resp.status_code, "_body": _safe_json(resp)}
+        # 用户自带 Content-Type 时以用例为准（测 Content-Type 校验需可换值）
+        ct = {} if any(k.lower() == "content-type" for k in headers) \
+            else {"Content-Type": "text/plain"}
+        resp = client.post(url, content=str(ctl["_raw_body"]), headers={**headers, **ct})
+        return {"_status": resp.status_code, "_body": _safe_json(resp),
+                "_request": request_meta}
     if payload.get("stream"):
-        return _post_stream(client, url, payload, headers)
+        return {**_post_stream(client, url, payload, headers), "_request": request_meta}
     last_error = ""
     for attempt in (1, 2):
         try:
@@ -150,10 +210,11 @@ def _post(client: httpx.Client, messages: list, *, tools: list | None,
             last_error = f"server error {resp.status_code}"
             continue
         if expect_error:                      # 预期错误模式：原样返回不抛
-            return {"_status": resp.status_code, "_body": _safe_json(resp)}
+            return {"_status": resp.status_code, "_body": _safe_json(resp),
+                    "_request": request_meta}
         if resp.status_code >= 400:
             resp.raise_for_status()           # 非预期的 4xx/5xx（已重试）直接抛出
-        return resp.json()
+        return {**resp.json(), "_request": request_meta}
     if expect_error:   # 两次都没拿到响应（网络错误）→ 预期错误模式下按最终态返回
         raise AssertionError(f"预期收到 HTTP 错误码，实际网络失败：{last_error}")
     pytest.fail(f"模型服务请求失败（已重试 1 次）：{last_error}")  # pragma: no cover
@@ -398,6 +459,36 @@ def _ellipsize(text: str, edge: int) -> str:
     return flat[:edge] + f" ……（共 {len(flat)} 字符，中段省略）…… " + flat[-edge:]
 
 
+def _compact_longrepr(longrepr: str | None, limit: int = 2000) -> str | None:
+    """落库错误摘要：短文本原样；超长 traceback 提取 E 行并保尾。
+
+    pytest 默认 longrepr 前大半是 pytest/pluggy 框架帧，带真实原因的
+    ``E   异常: 消息`` 行在末尾——按头截断会把它丢掉（页面上只剩框架
+    代码，看不出失败原因）。超长时：E 行去重保序置顶（过多只留末 3 条，
+    最贴近根因），剩余预算全给原文尾部（最终帧 + 异常段），总长 ≤ limit。
+    """
+    if not longrepr:
+        return None
+    text = longrepr.strip()
+    if len(text) <= limit:
+        return text
+    keys: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("E ") and stripped not in keys:
+            keys.append(stripped)
+    if not keys:                                   # 非典型 traceback：保尾与 CLI 汇总口径一致
+        return text[-limit:]
+    sep = "\n\n……(traceback 中段略)……\n"
+    joined = "\n".join(keys)
+    if len(joined) > limit // 2:
+        joined = "\n".join(keys[-3:])
+    head = f"关键信息(异常/断言行):\n{joined}"
+    budget = limit - len(head) - len(sep)
+    tail = text[-budget:] if budget > 0 else ""
+    return f"{head}{sep}{tail}"
+
+
 def failure_detail(case: Case, response: dict | None, exc: AssertionError) -> str:
     """断言失败详情：断言 → 输入 → 输出（逐项截断，控制日志/junit/CLI 体积）。
 
@@ -468,6 +559,41 @@ def _validate_status(hs, source: str) -> None:
     if not isinstance(hs, int) or isinstance(hs, bool) or not 100 <= hs <= 599:
         raise ValueError(f"{source}: http_status 须为 100-599 的整数"
                          f"或 {sorted(_STATUS_OPS)} 关系对象")
+
+
+def _parse_repeat(raw: dict, source: str) -> int:
+    """repeat 字段（缺省/null = 1）：单条用例重复执行次数，上限 _REPEAT_MAX。"""
+    repeat = raw.get("repeat")
+    if repeat is None:
+        return 1
+    if not isinstance(repeat, int) or isinstance(repeat, bool) \
+            or not 1 <= repeat <= _REPEAT_MAX:
+        raise ValueError(f"{source}: repeat 须为 1-{_REPEAT_MAX} 的整数，实际: {repeat!r}")
+    return repeat
+
+
+def _validate_no_leak(expect: dict, source: str) -> list[str]:
+    """no_leak 形状校验（true 或 {extra_patterns: [...]}，正则可编译）→ 扩展正则原文。"""
+    if "no_leak" not in expect:
+        return []
+    leak = expect["no_leak"]
+    if leak is True:
+        return []
+    if isinstance(leak, dict):
+        unknown = set(leak) - {"extra_patterns"}
+        if unknown:
+            raise ValueError(f"{source}: no_leak 未知配置 {sorted(unknown)}")
+        eps = leak.get("extra_patterns") or []
+        if not isinstance(eps, list) or not all(
+                isinstance(p, str) and p for p in eps):
+            raise ValueError(f"{source}: no_leak.extra_patterns 须为非空正则字符串列表")
+        try:
+            for p in eps:
+                re.compile(p)
+        except re.error as exc:
+            raise ValueError(f"{source}: no_leak.extra_patterns 非法正则: {exc}") from None
+        return eps
+    raise ValueError(f"{source}: no_leak 只接受 true 或 {{extra_patterns: [...]}}")
 
 
 def _type_ok(value, type_name: str) -> bool:
@@ -554,6 +680,9 @@ class Case:
             raise ValueError(f"{source}: 未知断言键 {sorted(unknown)}（可用: {sorted(_EXPECT_KEYS)}）")
         _validate_json_spec(expect.get("json") or {}, f"{source}: json")
         _validate_status(expect.get("http_status"), source)
+        ml = expect.get("max_len")
+        if ml is not None and (not isinstance(ml, int) or ml < 1):
+            raise ValueError(f'{source}: max_len 须为 ≥1 的整数')
         cm = expect.get("chunks_min")
         if cm is not None and (not isinstance(cm, int) or cm < 1):
             raise ValueError(f"{source}: chunks_min 须为 ≥1 的整数")
@@ -576,39 +705,31 @@ class Case:
                     raise ValueError(f"{source}: resp[{i}].type 须 ∈ {sorted(_TYPES)}")
                 if not any(k in spec for k in _RESP_SPEC_KEYS):
                     raise ValueError(f"{source}: resp[{i}] 至少含一个断言键")
-        if "no_leak" in expect:
-            leak = expect["no_leak"]
-            if leak is True:
-                extra: list[str] = []
-            elif isinstance(leak, dict):
-                unknown = set(leak) - {"extra_patterns"}
-                if unknown:
-                    raise ValueError(f"{source}: no_leak 未知配置 {sorted(unknown)}")
-                eps = leak.get("extra_patterns") or []
-                if not isinstance(eps, list) or not all(
-                        isinstance(p, str) and p for p in eps):
-                    raise ValueError(f"{source}: no_leak.extra_patterns 须为非空正则字符串列表")
-                try:
-                    for p in eps:
-                        re.compile(p)
-                except re.error as exc:
-                    raise ValueError(f"{source}: no_leak.extra_patterns 非法正则: {exc}") from None
-                extra = eps
-            else:
-                raise ValueError(f"{source}: no_leak 只接受 true 或 {{extra_patterns: [...]}}")
-        else:
-            extra = []
+        extra = _validate_no_leak(expect, source)
         self.id = str(raw["id"])
         self.desc = str(raw["desc"])
+        self.repeat = _parse_repeat(raw, source)
+        self.repeat_index = 1     # repeat 展开后的轮次（expand_repeats 改写）
         self.messages = raw["messages"]
         self.tools = raw.get("tools")
         self.params: dict = raw.get("params") or {}
         self.vars: dict = raw.get("vars") or {}
         self.expect = expect
+        # 用例级标签（外部用例 id / 类型 / 等级）：引擎不消费，随执行记录透传供回填与质量聚合
+        self.meta = {k: raw[k] for k in ("case_id", "type", "level") if raw.get(k)}
         self._extra_leak = [re.compile(p) for p in extra]
         self._rendered: list | None = None       # messages 渲染缓存
         self._rendered_params: dict | None = None  # params 渲染缓存
         self._values: dict | None = None         # 同一次执行内各字段共享同一组生成值
+        if not isinstance(self.params, dict):
+            raise ValueError(f"{source}: params 须为对象，实际 {type(self.params).__name__}")
+        headers_ctl = self.params.get("_headers")
+        if headers_ctl is not None and (
+                not isinstance(headers_ctl, dict)
+                or not all(isinstance(k, str) and (v is None or isinstance(v, str))
+                           for k, v in headers_ctl.items())):
+            raise ValueError(
+                f"{source}: params._headers 须为对象（键 str，值 str，null = 删除该头）")
         for spec in self.vars.values():
             _build_var(spec)   # 加载期校验生成器规格
 
@@ -697,6 +818,10 @@ class Case:
             needle = str(expect["not_contains"])
             hit = (needle.lower() in content.lower()) if ic else (needle in content)
             assert not hit, f"期望回复不包含 {needle!r}，实际: {_brief(content)}"
+        if "max_len" in expect:
+            assert len(content) <= expect["max_len"], (
+                f"期望回复 ≤ {expect['max_len']} 字，实际 {len(content)}"
+                f"（{_brief(content)}）")
 
     def _check_shape(self, response: dict, choice0: dict, content: str) -> None:
         """结构域断言：finish_reason/流式分块/SSE 收尾/响应体/JSON。"""
@@ -817,9 +942,48 @@ class Case:
                 and self.expect.get("ignore_case") else data
             assert got == expected, f"{where}: 期望 == {expected!r}，实际 {_brief(data)}"
 
+    def _repeat_copy(self, index: int) -> Case:
+        """第 index 轮执行副本（浅拷贝共享请求/断言定义，重置渲染缓存）。
+
+        渲染缓存重置后每轮独立生成 vars 值：seed 缺省 = 每轮新随机值
+        （repeat 的核心语义：多次执行观测稳定性），给定 seed 则各轮一致。
+        """
+        dup = copy.copy(self)
+        dup.id = f"{self.id}[r{index}]"
+        dup.repeat_index = index
+        dup._rendered = None
+        dup._rendered_params = None
+        dup._values = None
+        return dup
+
+
+def expand_repeats(cases: list[Case]) -> list[Case]:
+    """按 ``repeat`` 字段展开执行实例：首轮沿用原 id，后续轮 ``id[r2]``…。
+
+    展开产物与 pytest 收集、junit 计数、结果落库（external_key 唯一）共用
+    同一份列表；展开后 id 冲突（用例原 id 形如 ``x[r2]`` 撞上 ``x`` 的展开
+    产物）显式报错。
+    """
+    out: list[Case] = []
+    seen: dict[str, str] = {}
+    for case in cases:
+        for index in range(1, case.repeat + 1):
+            run = case if index == 1 else case._repeat_copy(index)
+            origin = f"用例 {case.id} 第 {index} 轮"
+            if run.id in seen:
+                raise ValueError(
+                    f"repeat 展开后 id 冲突: {run.id!r}（{origin} 与 {seen[run.id]} 重名）；"
+                    "含 [rN] 后缀的用例 id 会与 repeat 展开产物相撞，请改名或调整 repeat")
+            seen[run.id] = origin
+            out.append(run)
+    return out
+
 
 def load_cases(path) -> list[Case]:
-    """加载 cases.jsonl → Case 列表（校验必填项 / id 唯一 / 断言键合法）。"""
+    """加载 cases.jsonl → 执行实例列表（校验必填项 / id 唯一 / 断言键合法）。
+
+    repeat > 1 的行在加载期展开为多轮独立实例（见 expand_repeats）。
+    """
     cases: list[Case] = []
     seen: dict[str, int] = {}
     with open(path, encoding="utf-8") as fh:
@@ -839,7 +1003,7 @@ def load_cases(path) -> list[Case]:
                 raise ValueError(f"{source}: id {case.id!r} 与第 {seen[case.id]} 行重复")
             seen[case.id] = lineno
             cases.append(case)
-    return cases
+    return expand_repeats(cases)
 
 
 # ------------------------------------------------- pytest 收集（cases.jsonl）
@@ -896,7 +1060,8 @@ class CaseItem(pytest.Item):
     def record_result(self, outcome: str, longrepr: str | None = None) -> None:
         """逐用例原始记录 → AITE_FT_RESULTS 指向的 jsonl（平台用例级落库数据源）。
 
-        输入 = 渲染后的 messages + params，输出 = 模型响应，断言结果 = passed；
+        输入 = 渲染后的 messages + params（``_headers`` 敏感头值经 _redact_params
+        打码），输出 = 模型响应（含 ``_request`` 请求留痕），断言结果 = passed；
         AITE_FT_RESULTS 未设置（用户手跑 pytest）时不写——平台链路专属。
         """
         import json
@@ -907,13 +1072,14 @@ class CaseItem(pytest.Item):
         entry = {
             "external_key": self.case.id,
             "desc": self.case.desc,
+            "meta": self.case.meta,
             "messages": self.case.rendered_messages(),
-            "params": self.case.rendered_params(),
+            "params": _redact_params(self.case.rendered_params()),
             "tools": self.case.tools,
             "expect": self.case.expect,
             "response": self._last_response,
             "passed": outcome == "passed",
-            "error": (longrepr or "")[:2000] or None,
+            "error": _compact_longrepr(longrepr),
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a", encoding="utf-8", newline="\n") as f:

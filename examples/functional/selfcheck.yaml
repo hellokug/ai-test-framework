@@ -1,0 +1,20 @@
+# 断言自检数据集的平台集成入口：先起假模型（见 assertion_selfcheck/README），
+# 再 aite run -c examples/functional/selfcheck.yaml。
+# 注意：数据集含设计失败例（bad_*），场景 pass_rate ≈ 0.58 是正常值，勿配 1.0 阈值。
+
+module: functional
+run_name: assertion-selfcheck
+description: 断言自检（假模型 + expect DSL 全断言正反向回归）
+
+engine: pytest
+
+target:
+  type: openai_compatible
+  base_url: http://127.0.0.1:8391/v1
+  model: FAKE-MODEL-X
+
+tools:
+  tests_dir: ./examples/functional
+  datasets: [assertion_selfcheck]   # 过滤掉旁边的 functional_pytest.yaml 之外的同目录场景
+
+storage: {url: sqlite+aiosqlite:///./aite.db}

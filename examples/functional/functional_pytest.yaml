@@ -11,18 +11,21 @@ target:                           # 复用平台统一 target 配置
   stream: false
 
 tools:
-  # 用法一（内置场景）：datasets = 场景名，可用 `aite tool benchmarks pytest` 查看
-  datasets: [api_limits]
+  # 用法一（托管根场景）：datasets = 场景名筛选；可空 = 跑托管根全部场景。
+  # 托管根 = ./data/functional/scenarios（config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR），
+  # 经资产接口维护（Web /functional/scenarios 或 CLI `aite fscenario` / `aite fscript`），
+  # `aite tool benchmarks pytest` 可查看已有场景。
+  datasets: [<托管场景名>]
   metric_thresholds: {pass_rate: 1.0}   # auto 等价于 1.0（零容忍）；不配则无判定
-  #  cases: [yes_no]           # 用例级过滤（默认全部）：单用例问题复现；id 取自
+  #  cases: [<用例 id>]        # 用例级过滤（默认全部）：单用例问题复现；id 取自
   #                            # cases.jsonl，仅支持数据驱动场景；无匹配用例的场景自动跳过
   # extra_args:
   #   timeout: 1800              # 单场景总超时（秒），默认 1800
 
-  # 用法二（自建场景目录）：tests_dir 指向自己的功能测试目录，与 datasets 二选一。
-  # 目录下每个场景子目录 = 一个场景；datasets 留空 = 跑全部子目录，非空时作为
-  # 子目录名筛选。场景两种形态：cases.jsonl（推荐，一行 = 一例请求体+断言，加用例
-  # 只加行不写代码）或手写 test_*.py（chat / chat_raw fixture），详见 README。
+  # 用法二（自建场景目录）：tests_dir 指向自己的功能测试目录。目录下每个场景
+  # 子目录 = 一个场景；datasets 留空 = 跑全部子目录，非空时作为子目录名筛选。
+  # 场景两种形态：cases.jsonl（推荐，一行 = 一例请求体+断言，加用例只加行不写
+  # 代码）或手写 test_*.py（chat / chat_raw fixture），详见 README。
   # tests_dir: ./my_ft_tests
 
 storage: {url: sqlite+aiosqlite:///./aite.db}

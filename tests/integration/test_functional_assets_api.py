@@ -1,6 +1,6 @@
 """功能域评估场景 / 脚本 / 维度标签 REST 集成测试（V1-PLAN §10.4/§10.5）。
 
-用户场景根 monkeypatch 到 tmp（builtin 场景为包内只读真实目录）；脚本 CRUD
+托管场景根 monkeypatch 到 tmp（场景全部用户自管，无内置）；脚本 CRUD
 验证派生 cases.jsonl 与 legacy 收编；标签库走临时 SQLite（create_all 建表）。
 """
 
@@ -41,7 +41,7 @@ class TestFunctionalAssetsApi:
 
     # ------------------------------------------------------------- 场景
     def test_delete_scenario_removes_directory(self, client):
-        """删除用户场景 = 整目录移除；列表消失；builtin/不存在走 409/404。"""
+        """空场景（仅 manifest）直接删除；不存在走 404。"""
         c, scen_root = client
         self._make_scenario(c, sid="gone", name="待删场景")
         resp = c.delete("/api/v1/functional/scenarios/gone")
@@ -50,18 +50,34 @@ class TestFunctionalAssetsApi:
         assert all(s["id"] != "gone" for s in
                    c.get("/api/v1/functional/scenarios").json()["items"])
         assert c.delete("/api/v1/functional/scenarios/gone").status_code == 404
-        assert c.delete("/api/v1/functional/scenarios/basic_chat").status_code == 409
 
-    def test_delete_scenario_cascades_scripts(self, client):
-        """删场景连带脚本登记/行文件/派生 cases.jsonl（整目录语义）。"""
+    def test_delete_scenario_gated_then_force_cascade(self, client):
+        """删除保护：有脚本默认 409 拒删；force=true 二次确认级联整目录。"""
         c, scen_root = client
         self._make_scenario(c, sid="withscripts")
         body = {"scenario_id": "withscripts", "script_id": "sc_a", "name": "脚本A",
                 "case_type": "基础", "rows": [_case("r1")]}
         assert c.post("/api/v1/functional/scripts", json=body).status_code == 201
-        assert c.delete("/api/v1/functional/scenarios/withscripts").status_code == 200
-        assert not (scen_root / "withscripts").exists()
+        gated = c.delete("/api/v1/functional/scenarios/withscripts")
+        assert gated.status_code == 409
+        assert "仍有 1 个脚本 / 1 条用例" in gated.json()["detail"]
+        assert (scen_root / "withscripts").exists()      # 拒删 = 目录原封不动
+        ok = c.delete("/api/v1/functional/scenarios/withscripts",
+                      params={"force": "true"})
+        assert ok.status_code == 200
+        assert not (scen_root / "withscripts").exists()  # 级联：整目录移除
         assert c.get("/api/v1/functional/scripts/sc_a").status_code == 404
+
+    def test_delete_scenario_gated_on_legacy_cases(self, client):
+        """无脚本登记但有无主 cases.jsonl → 同样拒删（用例行也是资产）。"""
+        c, root = client
+        self._make_scenario(c, sid="legacy-only")
+        (root / "legacy-only" / "cases.jsonl").write_text(
+            json.dumps(_case("old-1"), ensure_ascii=False) + "\n",
+            encoding="utf-8")
+        assert c.delete("/api/v1/functional/scenarios/legacy-only").status_code == 409
+        assert c.delete("/api/v1/functional/scenarios/legacy-only",
+                        params={"force": "true"}).status_code == 200
 
     def test_import_overwrites_same_id(self, client):
         """同 id 重导 = 覆盖（同场景整体重写；跨场景迁移；新 id 标记 false）。"""
@@ -96,12 +112,14 @@ class TestFunctionalAssetsApi:
         items = c.get("/api/v1/functional/scripts?scenario=ri").json()["items"]
         assert items[0]["row_index"] == [["r1", "用例 r1"], ["r2", "用例 r2"]]
 
-    def test_scenarios_merge_builtin_and_user(self, client):
+    def test_scenarios_list_user_root_only(self, client):
+        """场景全部用户自管：空根 → 空清单；建卡即出现（目录即注册表）。"""
         c, _ = client
+        assert c.get("/api/v1/functional/scenarios").json()["items"] == []
+        self._make_scenario(c, sid="u1", name="自建场景")
         items = c.get("/api/v1/functional/scenarios").json()["items"]
-        ids = {i["id"]: i for i in items}
-        assert ids["basic_chat"]["source"] == "builtin"
-        assert all(i["display_name"] for i in items)
+        assert [i["id"] for i in items] == ["u1"]
+        assert items[0]["display_name"] == "自建场景"
 
     def test_create_scenario_manifest_and_detail(self, client):
         c, root = client
@@ -111,20 +129,72 @@ class TestFunctionalAssetsApi:
             encoding="utf-8"))["dimension"] == ""
         dup = c.post("/api/v1/functional/scenarios", json={"id": "s1"})
         assert dup.status_code == 409
-        builtin_dup = c.post("/api/v1/functional/scenarios",
-                             json={"id": "basic_chat"})
-        assert builtin_dup.status_code == 409
         bad = c.post("/api/v1/functional/scenarios", json={"id": "Bad Id"})
         assert bad.status_code == 422
+        assert "英文编号" in bad.json()["detail"]
+        dash = c.post("/api/v1/functional/scenarios", json={   # 连字符编号合法
+            "id": "fc-01", "display_name": "连字符编号场景"})
+        assert dash.status_code == 201
+        assert dash.json()["display_name"] == "连字符编号场景"
         detail = c.get("/api/v1/functional/scenarios/s1").json()
         assert detail["script_entries"] == []
 
-    def test_scenario_source_filter(self, client):
-        c, _ = client
-        self._make_scenario(c, sid="u1")
-        items = c.get("/api/v1/functional/scenarios",
-                      params={"source": "user"}).json()["items"]
-        assert {i["id"] for i in items} == {"u1"}
+    # ------------------------------------------------------------- 用例级字段
+    def test_row_meta_stored_validated_and_counted(self, client):
+        """行级 用例 id / 类型 / 等级：落行文件；非法枚举 422；覆盖按行类型统计。"""
+        c, root = client
+        self._make_scenario(c)
+        rows = [{**_case("r-1"), "case_id": "TC-1", "type": "边界", "level": "P0"},
+                {**_case("r-2"), "case_id": "TC-1", "type": "bad case", "level": ""}]
+        ok = c.post("/api/v1/functional/scripts", json={
+            "scenario_id": "s1", "script_id": "meta", "name": "标签", "rows": rows})
+        assert ok.status_code == 201
+        saved = c.get("/api/v1/functional/scripts/meta").json()["rows"]
+        assert saved[0]["case_id"] == "TC-1" and saved[0]["level"] == "P0"
+        assert "level" not in saved[1]                    # 空值剔除
+        scen = c.get("/api/v1/functional/scenarios/s1").json()
+        assert scen["coverage"] == {"边界": 1, "bad case": 1}   # 行类型优先于脚本类型
+        assert scen["levels"] == {"P0": 1}
+        listed = c.get("/api/v1/functional/scripts?scenario=s1").json()["items"][0]
+        assert listed["row_types"] == {"边界": 1, "bad case": 1}
+        bad = c.post("/api/v1/functional/scripts", json={
+            "scenario_id": "s1", "script_id": "badlv", "name": "n",
+            "rows": [{**_case("x"), "level": "P9"}]})
+        assert bad.status_code == 422 and "非法等级" in bad.json()["detail"]
+
+    # ------------------------------------------------------------- 工具库
+    def test_tool_library_refs_expand_and_delete_guard(self, client):
+        """工具库：行内按名引用 → 行文件存名、派生 cases.jsonl 展开；被引用拒删。"""
+        c, root = client
+        tool = {"type": "function", "function": {
+            "name": "get_weather", "description": "查天气",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}
+        assert c.post("/api/v1/functional/tools", json=tool).status_code == 201
+        assert c.post("/api/v1/functional/tools", json=tool).status_code == 409
+        assert c.post("/api/v1/functional/tools",
+                      json={"type": "function", "function": {"name": "bad name"}}).status_code == 422
+        self._make_scenario(c)
+        row = {**_case("fc-1"), "tools": ["get_weather"]}
+        unknown = c.post("/api/v1/functional/scripts", json={
+            "scenario_id": "s1", "script_id": "fc0", "name": "n",
+            "rows": [{**_case("u"), "tools": ["nope"]}]})
+        assert unknown.status_code == 422 and "未知工具" in unknown.json()["detail"]
+        assert c.post("/api/v1/functional/scripts", json={
+            "scenario_id": "s1", "script_id": "fc", "name": "FC", "rows": [row]}).status_code == 201
+        stored = json.loads((root / "s1" / "scripts" / "fc.jsonl").read_text(encoding="utf-8"))
+        assert stored["tools"] == ["get_weather"]          # 行文件保留引用名
+        derived = json.loads((root / "s1" / "cases.jsonl").read_text(encoding="utf-8"))
+        assert derived["tools"][0]["function"]["name"] == "get_weather"   # 派生展开
+        assert c.get("/api/v1/functional/tools").json()["items"][0]["used_by"] == ["fc"]
+        # 改定义 → 引用场景重派生
+        tool2 = {**tool, "function": {**tool["function"], "description": "查天气 v2"}}
+        assert c.put("/api/v1/functional/tools/get_weather", json=tool2).status_code == 200
+        derived = json.loads((root / "s1" / "cases.jsonl").read_text(encoding="utf-8"))
+        assert derived["tools"][0]["function"]["description"] == "查天气 v2"
+        # 被引用拒删；移除引用后可删
+        assert c.delete("/api/v1/functional/tools/get_weather").status_code == 409
+        assert c.delete("/api/v1/functional/scripts/fc").status_code == 200
+        assert c.delete("/api/v1/functional/tools/get_weather").status_code == 200
 
     # ------------------------------------------------------------- 标签库
     def test_dim_tags_builtin_and_custom(self, client):
@@ -158,12 +228,12 @@ class TestFunctionalAssetsApi:
         assert [r["id"] for r in derived_rows] == ["basic_two.1", "basic_two.2"]
         assert "\r" not in derived                     # LF 强制（Windows 教训）
 
-    def test_script_create_rejects_builtin_and_bad_rows(self, client):
+    def test_script_create_rejects_missing_scenario_and_bad_rows(self, client):
         c, root = client
-        readonly = c.post("/api/v1/functional/scripts", json={
-            "scenario_id": "basic_chat", "script_id": "x1",
+        missing = c.post("/api/v1/functional/scripts", json={
+            "scenario_id": "no-such", "script_id": "x1",
             "name": "n", "rows": [_case()]})
-        assert readonly.status_code == 409
+        assert missing.status_code == 404
         self._make_scenario(c)
         bad = c.post("/api/v1/functional/scripts", json={
             "scenario_id": "s1", "script_id": "x1", "name": "n",
@@ -267,7 +337,7 @@ class TestFunctionalAssetsApi:
         items = c.get("/api/v1/functional/scripts").json()["items"]
         ids = {i["id"] for i in items}
         assert "keep-me" in ids                     # 用户自建脚本在列表中
-        assert not any(i.get("readonly") for i in items if i["id"] == "keep-me")
+        assert not any(i.get("readonly") for i in items)
 
     def test_legacy_bad_row_blocks_adoption(self, client):
         """既有 cases.jsonl 坏行 → 收编显式报错（原则 9），不静默入派生。"""

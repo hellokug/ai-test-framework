@@ -11,12 +11,15 @@ import pytest
 
 from aite.functional.harness import (
     Case,
+    _merge_headers,
     _post,
+    _redact_params,
     build_garbled,
     build_haystack,
     build_random_choice,
     build_random_number,
     build_random_string,
+    expand_repeats,
     failure_detail,
     load_cases,
 )
@@ -105,6 +108,60 @@ class TestLoadCases:
         ])
         with pytest.raises(ValueError, match="cases.jsonl:2"):
             load_cases(p)
+
+
+class TestRepeat:
+    """repeat 字段：单条 jsonl 行按指定次数展开为多轮独立执行实例。"""
+
+    def _case(self, **kw):
+        raw = {"id": "t", "desc": "测试", "messages": [{"role": "user", "content": "hi"}],
+               "expect": {"nonempty": True}}
+        raw.update(kw)
+        return Case(raw, "cases.jsonl:1")
+
+    def test_default_and_null_mean_single_run(self):
+        assert self._case().repeat == 1
+        assert self._case(repeat=None).repeat == 1
+
+    def test_bad_values_rejected(self):
+        for bad in (0, -1, 1.5, True, "3", 101):
+            with pytest.raises(ValueError, match="repeat"):
+                self._case(repeat=bad)
+
+    def test_expand_ids_and_indexes(self):
+        runs = expand_repeats([self._case(repeat=3), self._case(id="u")])
+        assert [r.id for r in runs] == ["t", "t[r2]", "t[r3]", "u"]
+        assert [r.repeat_index for r in runs[:3]] == [1, 2, 3]
+        assert runs[2].expect == runs[0].expect         # 请求/断言定义共享
+        assert runs[2] is not runs[0]
+
+    def test_expand_collision_detected(self):
+        # 原 id 形如 x[r2] 会与 x 的展开产物相撞，加载期显式报错
+        with pytest.raises(ValueError, match="冲突"):
+            expand_repeats([self._case(id="x", repeat=3), self._case(id="x[r2]")])
+
+    def test_load_cases_expands_repeat_lines(self, tmp_path):
+        p = _write(tmp_path, [
+            {"id": "a", "desc": "d", "repeat": 2,
+             "messages": [{"role": "user", "content": "hi"}], "expect": {"nonempty": True}},
+            {"id": "b", "desc": "d",
+             "messages": [{"role": "user", "content": "hi"}], "expect": {"nonempty": True}},
+        ])
+        assert [c.id for c in load_cases(p)] == ["a", "a[r2]", "b"]
+
+    def test_each_run_renders_vars_independently(self):
+        # seed 缺省：每轮新随机值（先渲染原实例也不串轮——副本缓存已重置）
+        def _var_case(spec):
+            return self._case(repeat=2, vars={"N": spec},
+                              messages=[{"role": "user", "content": "code {N}"}])
+
+        fresh = _var_case({"random_string": {"length": 32}})
+        assert fresh.rendered_messages()[0]["content"].startswith("code ")
+        r1, r2 = expand_repeats([fresh])
+        assert r1.rendered_messages()[0]["content"] != r2.rendered_messages()[0]["content"]
+        seeded = _var_case({"random_string": {"length": 32, "seed": 7}})
+        s1, s2 = expand_repeats([seeded])
+        assert s1.rendered_messages() == s2.rendered_messages()   # 固定 seed 每轮一致
 
 
 class TestHaystack:
@@ -296,8 +353,54 @@ class TestRecordResultSnapshot:
         assert entry["params"] == {"tool_choice": "auto"}
         assert entry["tools"][0]["function"]["name"] == "get_weather"
 
+    def test_record_redacts_sensitive_headers(self, tmp_path, monkeypatch):
+        """落库快照里 _headers 敏感头值打码（复现凭证走环境注入）。"""
+        results_file = tmp_path / "results.jsonl"
+        monkeypatch.setenv("AITE_FT_RESULTS", str(results_file))
+        from aite.functional.harness import CaseItem
+        case = _case({"http_status": 401},
+                     params={"_headers": {"Authorization": "Bearer bad", "X-Tag": "t"}})
+        item = CaseItem.__new__(CaseItem)
+        item.case = case
+        item._last_response = {"_status": 401, "_body": {"error": {"message": "auth"}}}
+        CaseItem.record_result(item, "passed", None)
+        entry = json.loads(results_file.read_text(encoding="utf-8").strip())
+        assert entry["params"]["_headers"] == {"Authorization": "******", "X-Tag": "t"}
+
+    def test_error_compact_keeps_exception_lines(self, tmp_path, monkeypatch):
+        """超长 traceback 落库：E 行置顶 + 保尾，真实失败原因不被框架代码淹没。"""
+        from aite.functional.harness import CaseItem, _compact_longrepr
+        results_file = tmp_path / "results.jsonl"
+        monkeypatch.setenv("AITE_FT_RESULTS", str(results_file))
+        case = _case({"http_status": 401})
+        item = CaseItem.__new__(CaseItem)
+        item.case = case
+        item._last_response = None
+        frame = "".join(f"    framework filler line {i}\n" for i in range(300))
+        longrepr = (f"{frame}>   result = func()\n"
+                    "E   AssertionError: 预期收到 HTTP 错误码，实际网络失败："
+                    "transport error: Illegal header value b' Bearer x '")
+        CaseItem.record_result(item, "failed", longrepr)
+        entry = json.loads(results_file.read_text(encoding="utf-8").strip())
+        err = entry["error"]
+        assert "关键信息" in err and "Illegal header value" in err
+        assert len(err) <= 2000 + 100                  # 总长受控
+        assert err.rstrip().endswith("Bearer x '")     # 尾部完整保留到最终异常行
+        # 纯函数边界：短文本原样、None、无 E 行保尾
+        assert _compact_longrepr("短错误") == "短错误"
+        assert _compact_longrepr(None) is None
+        blob = "x" * 3000
+        assert _compact_longrepr(blob) == blob[-2000:]
+
 
 class TestCheck:
+    def test_max_len(self):
+        _case({"max_len": 5}).check(_response("hello"))
+        with pytest.raises(AssertionError, match="期望回复"):
+            _case({"max_len": 5}).check(_response("hello world"))
+        with pytest.raises(ValueError, match="max_len"):
+            _case({"max_len": 0})
+
     def test_nonempty(self):
         _case({"nonempty": True}).check(_response(content="ok"))
         with pytest.raises(AssertionError, match="非空"):
@@ -653,7 +756,17 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
     """按 stream/错误码分流的最小 chat/completions 端点。"""
 
     def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        self.server.last_headers = {k.lower(): v for k, v in self.headers.items()}
+        if self.headers.get("Authorization") != "Bearer EMPTY":
+            self._send(401, {"error": {"message": "Authentication Fails"}})
+            return
         if body.get("model") == "no-such-model":
             self._send(404, {"error": {"type": "model_not_found"}})
             return
@@ -733,6 +846,155 @@ class TestPostAgainstFakeServer:
             _post(env, [{"role": "user", "content": "hi"}], tools=None,
                   params={"model": "no-such-model"})
 
+    def test_request_trace_is_actual_body(self, env):
+        """_request 留痕 = 实际发出的请求体（详情页原样展示的数据源）；控制键不进 body。"""
+        msgs = [{"role": "user", "content": "hi"}]
+        tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+        resp = _post(env, msgs, tools=tools,
+                     params={"temperature": 0, "_headers": {"X-Trace": "1"}})
+        req = resp["_request"]
+        assert req["method"] == "POST" and req["url"].endswith("/v1/chat/completions")
+        assert req["body"] == {"model": "fake-model", "messages": msgs,
+                               "temperature": 0, "tools": tools}
+        assert resp["choices"][0]["message"]["content"] == "hi"
+
+    def test_empty_tools_sent(self, env):
+        """tools=[] 是显式配置：必须原样发出（空数组 → 400 类参数校验用例依赖）。"""
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=[], params={})
+        assert resp["_request"]["body"]["tools"] == []
+
+    def test_request_trace_headers_masked(self, env, server):
+        """_request.headers = 实际发送的合并头（默认鉴权 ⊕ 自定义），敏感值留痕打码。"""
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"_headers": {"X-Trace": "1", "X-Api-Key": "secret-value"}})
+        hdr = resp["_request"]["headers"]
+        assert hdr["Authorization"] == "******"   # 默认鉴权头是敏感头，留痕打码
+        assert hdr["X-Api-Key"] == "******"       # 自定义敏感头同样打码
+        assert hdr["X-Trace"] == "1"              # 非敏感自定义头保真
+        assert server.last_headers["authorization"] == "Bearer EMPTY"    # 实际发送不脱敏
+        assert server.last_headers["x-api-key"] == "secret-value"
+        assert server.last_headers["x-trace"] == "1"
+
+    def test_request_trace_stream_error_and_raw_body(self, env):
+        msgs = [{"role": "user", "content": "hi"}]
+        stream = _post(env, msgs, tools=None, params={"stream": True})
+        assert stream["_request"]["body"]["stream"] is True
+        _case({"sse_done": True}).check(stream)
+        err = _post(env, msgs, tools=None, params={"model": "no-such-model"},
+                    expect_error=True)
+        assert err["_status"] == 404
+        assert err["_request"]["body"]["model"] == "no-such-model"
+        raw = _post(env, msgs, tools=None, params={"_raw_body": "not json{"})
+        assert raw["_request"]["body"] == "not json{"   # 原始字符串，不是 payload
+
+
+class TestHeadersControl:
+    """_headers 请求构造控制：合并/覆盖/null 删除 + 加载校验 + 落库脱敏。"""
+
+    @pytest.fixture()
+    def env_key(self, monkeypatch):
+        monkeypatch.setenv("AITE_FT_API_KEY", "test-key")
+
+    def test_merge_default_only(self, env_key):
+        assert _merge_headers(None) == {"Authorization": "Bearer test-key"}
+
+    def test_merge_override_case_insensitive(self, env_key):
+        """小写键覆盖默认 Authorization：不产生重复头。"""
+        headers = _merge_headers({"authorization": "Bearer bad"})
+        assert list(headers) == ["Authorization"]
+        assert headers["Authorization"] == "Bearer bad"
+
+    def test_merge_null_deletes(self, env_key):
+        assert _merge_headers({"Authorization": None}) == {}
+
+    def test_merge_extra_headers(self, env_key):
+        headers = _merge_headers({"X-Trace": "t"})
+        assert headers == {"Authorization": "Bearer test-key", "X-Trace": "t"}
+
+    def test_invalid_headers_rejected_at_load(self):
+        for bad in (["Authorization"], {"Authorization": 123}):
+            with pytest.raises(ValueError, match="params._headers"):
+                _case({"nonempty": True}, params={"_headers": bad})
+
+    def test_params_must_be_object(self):
+        with pytest.raises(ValueError, match="params 须为对象"):
+            _case({"nonempty": True}, params="temperature=0")
+
+    def test_redact_masks_sensitive_keeps_plain(self):
+        params = {"_headers": {"Authorization": "Bearer real-key", "X-Api-Key": "k",
+                               "x-api-key": "k2", "X-Tag": "t"}}
+        masked = _redact_params(params)
+        assert masked["_headers"] == {"Authorization": "******", "X-Api-Key": "******",
+                                      "x-api-key": "******", "X-Tag": "t"}
+        assert params["_headers"]["Authorization"] == "Bearer real-key"   # 原始不改动
+
+    def test_redact_untouched_without_headers(self):
+        params = {"temperature": 0.5}
+        assert _redact_params(params) is params
+
+
+class TestPostHeadersEndToEnd:
+    """_headers 端到端（fake server 按鉴权分流 401/200，捕获实际收到头）。"""
+
+    @pytest.fixture()
+    def server(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _FakeApiHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        yield srv
+        srv.shutdown()
+
+    @pytest.fixture()
+    def env(self, server, monkeypatch):
+        import httpx
+
+        monkeypatch.setenv("AITE_FT_BASE_URL",
+                           f"http://127.0.0.1:{server.server_address[1]}/v1")
+        monkeypatch.setenv("AITE_FT_MODEL", "fake-model")
+        monkeypatch.setenv("AITE_FT_API_KEY", "EMPTY")
+        client = httpx.Client(timeout=10)
+        yield client
+        client.close()
+
+    def test_override_auth_fails_401(self, env):
+        """坏 key 覆盖 Authorization → 401（认证负向用例主路径）。"""
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"_headers": {"Authorization": "Bearer bad-key"}},
+                     expect_error=True)
+        assert resp["_status"] == 401
+        _case({"http_status": 401,
+               "resp": {"path": "error.message", "eq": "Authentication Fails"}}).check(resp)
+
+    def test_removed_auth_fails_401(self, env):
+        """Authorization: null 删头 → 401（覆盖语义表达不了删头）。"""
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"_headers": {"Authorization": None}},
+                     expect_error=True)
+        assert resp["_status"] == 401
+
+    def test_stream_inherits_merged_headers(self, env):
+        """流式路径同样吃合并后的头。"""
+        resp = _post(env, [{"role": "user", "content": "hi"}], tools=None,
+                     params={"stream": True, "_headers": {"Authorization": None}},
+                     expect_error=True)
+        assert resp["_status"] == 401
+
+    def test_custom_header_sent_and_default_auth_kept(self, env, server):
+        _post(env, [{"role": "user", "content": "hi"}], tools=None,
+              params={"_headers": {"X-Trace-Id": "t-1"}})
+        assert server.last_headers["authorization"] == "Bearer EMPTY"
+        assert server.last_headers["x-trace-id"] == "t-1"
+
+    def test_raw_body_content_type_overridable(self, env, server):
+        """_raw_body 的 text/plain 让位于用户自带 Content-Type。"""
+        _post(env, [{"role": "user", "content": "hi"}], tools=None,
+              params={"_raw_body": "not json", "_headers": {"Content-Type": "application/xml"}})
+        assert server.last_headers["content-type"] == "application/xml"
+
+    def test_raw_body_default_content_type(self, env, server):
+        _post(env, [{"role": "user", "content": "hi"}], tools=None,
+              params={"_raw_body": "not json"})
+        assert server.last_headers["content-type"] == "text/plain"
+
 
 class TestRespContains:
     """resp 断言 contains 关系（错误体模糊匹配，低代码「错误体字段」芯片）。"""
@@ -747,3 +1009,11 @@ class TestRespContains:
     def test_resp_contains_non_string_target(self):
         case = _case({"http_status": 422, "resp": {"path": "error.param", "contains": "temperature"}})
         case.check({"_status": 422, "_body": {"error": {"param": ["temperature", "top_p"]}}})
+
+
+def test_case_meta_passthrough_for_backfill():
+    """用例级标签（用例 id/类型/等级）引擎不消费，随执行记录透传；空值不带。"""
+    from aite.functional.harness import Case
+    case = Case({"id": "r1", "desc": "d", "messages": [], "expect": {"nonempty": True},
+                 "case_id": "TC-9", "type": "边界", "level": ""}, "t")
+    assert case.meta == {"case_id": "TC-9", "type": "边界"}

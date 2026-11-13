@@ -109,14 +109,16 @@ def test_metrics_auto_without_builtin_errors(qa_file, tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_tool_case_record_raw_exposes_params_tools(repo):
-    """工具域用例落库：raw 快照（params/tools）随 cases 接口透出（复现 curl 数据源）。"""
+    """工具域用例落库：raw 快照（params/tools）随 cases 接口透出（复现 curl 数据源）；
+    行级 dataset 收敛为场景名（适配器只带 scenario 键）——用例明细回跳脚本行依赖。"""
     record = {
-        "external_key": "oc03", "dataset": "pytest:demo",
+        "external_key": "oc03", "scenario": "demo",
         "messages": [{"role": "user", "content": "hi"}],
         "params": {"tool_choice": {"type": "function", "function": {"name": "get_weather"}},
                    "stream": False},
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
         "expect": {"tool": "get_weather"},
+        "meta": {"case_id": "TC-9", "type": "边界", "level": "P1"},
         "response": {"choices": [{"message": {"role": "assistant", "content": ""},
                                   "finish_reason": "tool_calls"}]},
         "passed": False, "error": None,
@@ -128,6 +130,14 @@ async def test_tool_case_record_raw_exposes_params_tools(repo):
     assert items[0]["raw"]["params"]["tool_choice"]["function"]["name"] == "get_weather"
     assert items[0]["raw"]["tools"][0]["function"]["name"] == "get_weather"
     assert items[0]["raw"]["expect"]["tool"] == "get_weather"
+    assert items[0]["dataset"] == "demo"          # scenario 键回退落库（回跳脚本行）
+    assert items[0]["metadata"] == {"case_id": "TC-9", "type": "边界", "level": "P1"}
+    # 显式 dataset 优先于 scenario（历史口径兼容）
+    await repo.save_tool_case_record(run_id, suite_id,
+                                     {**record, "external_key": "oc04",
+                                      "dataset": "pytest:other", "scenario": "demo2"})
+    items = await repo.list_case_results(run_id)
+    assert items[1]["dataset"] == "pytest:other"
 
 
 async def test_unknown_metric_fails_before_execution(repo, qa_file, tmp_path):

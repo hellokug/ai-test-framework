@@ -1,20 +1,21 @@
 """pytest 适配器（模块 D：功能测试执行引擎）。
 
 suite yaml 写 ``engine: pytest`` 即路由到本适配器；一个场景 = 一个子目录
-（数据驱动 ``cases.jsonl`` 或手写 ``test_*.py``，aite 内置
-``functional/scenarios/`` 或用户自建 ``tools.tests_dir``），逐场景 subprocess
+（数据驱动 ``cases.jsonl`` 或手写 ``test_*.py``），逐场景 subprocess
 跑 ``python -m pytest``，从 junit-xml 收集 ``pass_rate``，复用平台的
-入库 / 阈值 / 趋势链路。
+入库 / 阈值 / 趋势链路。场景全部用户自管：``tools.tests_dir`` 指定，
+缺省 = 平台托管场景根（``config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR``，
+与资产层同源）。
 
 - 模型访问经 ``-p aite.functional.harness`` 插件按导入路径加载（安装/源码环境
   行为一致，规避 conftest confcutdir 陷阱）
 - 退出码 0/1 = 正常（有失败用例）；2/3/4/5 = 执行异常，抛错走 run 级 error
-- ``tools.datasets``：内置模式 = 场景名列表；tests_dir 模式可空 = 跑全部子目录，
-  非空时作为子目录名筛选
+- ``tools.datasets``：可空 = 跑全部子目录，非空时作为子目录名筛选
 - ``tools.cases``：用例 id 数组（省略 = 全部），单用例问题复现。精确定向
   ``cases.jsonl::<id>`` nodeid（非 -k 子串匹配，打错 id 显式报错）；id 在任一
   选中场景存在即合法，无匹配 id 的场景整场景跳过（日志可见）；仅支持
-  cases.jsonl 数据驱动场景
+  cases.jsonl 数据驱动场景。repeat 用例：指定原 id 选中其全部轮次
+  （id / id[r2]…），``id[r3]`` 精确复现单轮
 - ``limit_per_subset`` 对 pytest 无语义，忽略
 - 阈值：显式 ``metric_thresholds: {pass_rate: x}`` 优先；``auto`` → 1.0
   （功能测试零容忍口径）；不配则无判定
@@ -27,7 +28,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from aite.functional import SCENARIOS_DIR
+from aite import config
 from aite.tools.base import (
     ToolAdapter,
     ToolMetricRow,
@@ -68,14 +69,15 @@ class PytestAdapter(ToolAdapter):
 
     def build_config(self, req: ToolRunRequest) -> dict:
         """解析场景目录 → 执行计划（纯函数：argv / env / 超时映射，可单测）。"""
-        root = Path(req.tests_dir) if req.tests_dir else SCENARIOS_DIR
+        root = Path(req.tests_dir) if req.tests_dir \
+            else Path(config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR)
         available = _available_scenarios(root)
         if req.datasets:
             unknown = [s for s in req.datasets if s not in available]
             if unknown:
                 raise ValueError(f"未知功能场景: {unknown}；可用: {available}")
             names = list(req.datasets)
-        else:   # 仅 tests_dir 模式可达（parse 层已保证二选一非空）
+        else:
             names = available
 
         model = str(req.target.get("model") or "").strip()
@@ -102,7 +104,12 @@ class PytestAdapter(ToolAdapter):
                         f"用例级过滤（tools.cases）仅支持 cases.jsonl 数据驱动场景: {root / n}")
                 ids_by_scenario[n] = [c.id for c in load_cases(jsonl)]
             all_ids = {i for ids in ids_by_scenario.values() for i in ids}
-            unknown = [c for c in case_filter if c not in all_ids]
+
+            def _hit(case_id: str, run_id: str) -> bool:
+                # 原 id 命中其全部 repeat 轮次（run_id / run_id[rN]），id[rN] 精确单轮
+                return run_id == case_id or run_id.startswith(f"{case_id}[r")
+
+            unknown = [c for c in case_filter if not any(_hit(c, i) for i in all_ids)]
             if unknown:
                 raise ValueError(f"未知用例 id: {unknown}；可用: {sorted(all_ids)}")
 
@@ -111,11 +118,12 @@ class PytestAdapter(ToolAdapter):
         for n in names:
             targets = [str(root / n)]
             if case_filter:
-                matched = [c for c in case_filter if c in ids_by_scenario[n]]
-                if not matched:   # 该场景没有要复现的用例 → 整场景跳过
+                wanted = [i for i in ids_by_scenario[n]
+                          if any(_hit(c, i) for c in case_filter)]
+                if not wanted:   # 该场景没有要复现的用例 → 整场景跳过
                     skipped.append(n)
                     continue
-                targets = [f"{root / n / 'cases.jsonl'}::{c}" for c in matched]
+                targets = [f"{root / n / 'cases.jsonl'}::{i}" for i in wanted]
             scenarios.append({
                 "name": n,
                 "targets": targets,
@@ -215,11 +223,16 @@ class PytestAdapter(ToolAdapter):
         return out
 
     def list_tasks(self) -> list[dict]:
-        """只枚举内置场景（tests_dir 用户场景运行时才解析）。"""
+        """枚举平台托管场景根（用户场景；根不存在/为空返回 []，列表不报错）。"""
+        root = Path(config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR)
+        if not root.is_dir():
+            return []
         return [{
             "name": n,
             "pretty_name": n,
             "metrics": [PASS_RATE],
             "tags": ["functional"],
             "few_shot_num": None,
-        } for n in _available_scenarios(SCENARIOS_DIR)]
+        } for n in sorted(d.name for d in root.iterdir()
+                          if d.is_dir() and (any(d.glob("test_*.py"))
+                                             or (d / "cases.jsonl").is_file()))]

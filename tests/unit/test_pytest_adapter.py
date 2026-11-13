@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from aite import config
 from aite.tools.base import ToolRunRequest
-from aite.tools.pytest_adapter import SCENARIOS_DIR, PytestAdapter
+from aite.tools.pytest_adapter import PytestAdapter
 
 FT_FIXTURES = Path(__file__).parent.parent / "fixtures" / "ft_scenarios"
 FT_JSONL = Path(__file__).parent.parent / "fixtures" / "ft_jsonl"
@@ -22,24 +23,44 @@ def make_request(**kw):
         run_name="ft",
         target={"type": "openai_compatible", "base_url": "http://localhost:11434/v1",
                 "model": "qwen2.5:3b"},
-        datasets=["basic_chat"],
+        tests_dir=str(FT_FIXTURES),
+        datasets=[],
         work_dir=Path("./outputs"),
     )
     base.update(kw)
     return ToolRunRequest(**base)
 
 
+def _jsonl_root(tmp_path, scenarios: dict[str, list[str]]) -> str:
+    """临时场景根：{场景名: [用例 id]}，每场景一个 cases.jsonl。"""
+    root = tmp_path / "ft"
+    for name, ids in scenarios.items():
+        d = root / name
+        d.mkdir(parents=True)
+        rows = "".join(
+            json.dumps({"id": i, "desc": "d",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "expect": {"nonempty": True}}, ensure_ascii=False) + "\n"
+            for i in ids)
+        (d / "cases.jsonl").write_text(rows, encoding="utf-8")
+    return str(root)
+
+
 class TestBuildConfig:
-    def test_builtin_scenario_mapping(self):
-        cfg = PytestAdapter().build_config(make_request(work_dir=Path("w")))
+    def test_default_root_is_managed_scenarios_dir(self, tmp_path, monkeypatch):
+        """tests_dir 缺省 = 平台托管场景根（config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR）。"""
+        root = Path(_jsonl_root(tmp_path, {"s1": ["a"]}))
+        monkeypatch.setattr(config, "DEFAULT_FUNCTIONAL_SCENARIOS_DIR", str(root))
+        cfg = PytestAdapter().build_config(make_request(
+            datasets=["s1"], tests_dir=None, work_dir=Path("w")))
         (sc,) = cfg["scenarios"]
-        assert sc["name"] == "basic_chat"
-        assert sc["targets"] == [str(SCENARIOS_DIR / "basic_chat")]
-        assert sc["junit_xml"] == str(Path("w/junit/basic_chat.xml"))
-        assert sc["log"] == str(Path("w/logs/basic_chat.log"))
-        argv = cfg["argv"]["basic_chat"]
+        assert sc["name"] == "s1"
+        assert sc["targets"] == [str(root / "s1")]
+        assert sc["junit_xml"] == str(Path("w/junit/s1.xml"))
+        assert sc["log"] == str(Path("w/logs/s1.log"))
+        argv = cfg["argv"]["s1"]
         assert argv[1:3] == ["-m", "pytest"]
-        assert str(SCENARIOS_DIR / "basic_chat") in argv
+        assert str(root / "s1") in argv
         assert f"--junitxml={sc['junit_xml']}" in argv
         assert "aite.functional.harness" in argv       # 插件按导入路径加载
         assert "norecursedirs=" in argv                # 显式目录不被 norecursedirs 拦
@@ -47,25 +68,47 @@ class TestBuildConfig:
         assert cfg["timeout"] == 1800
         assert cfg["skipped"] == []                    # 无 cases 过滤不跳过任何场景
 
-    def test_cases_filter_targets_exact_nodeids(self):
+    def test_cases_filter_targets_exact_nodeids(self, tmp_path):
         """cases 过滤 → cases.jsonl::<id> 精确 nodeid（非 -k 子串匹配）。"""
-        cfg = PytestAdapter().build_config(
-            make_request(cases=["keyword", "intro"], work_dir=Path("w")))
+        root = _jsonl_root(tmp_path, {"smoke": ["keyword", "intro"]})
+        cfg = PytestAdapter().build_config(make_request(
+            tests_dir=root, cases=["keyword", "intro"], work_dir=Path("w")))
         (sc,) = cfg["scenarios"]
-        assert sc["targets"] == [str(SCENARIOS_DIR / "basic_chat" / "cases.jsonl") + "::keyword",
-                                 str(SCENARIOS_DIR / "basic_chat" / "cases.jsonl") + "::intro"]
+        assert sc["targets"] == [str(Path(root) / "smoke" / "cases.jsonl") + "::keyword",
+                                 str(Path(root) / "smoke" / "cases.jsonl") + "::intro"]
 
-    def test_cases_filter_unknown_id_lists_available(self):
+    def test_cases_filter_unknown_id_lists_available(self, tmp_path):
+        root = _jsonl_root(tmp_path, {"smoke": ["intro", "yes_no"]})
         with pytest.raises(ValueError) as ei:
-            PytestAdapter().build_config(make_request(cases=["nope"]))
+            PytestAdapter().build_config(
+                make_request(tests_dir=root, cases=["nope"]))
         assert "nope" in str(ei.value)
         assert "intro" in str(ei.value) and "yes_no" in str(ei.value)  # 列出可用 id
 
-    def test_cases_filter_skips_scenarios_without_match(self):
+    def test_cases_filter_matches_repeat_runs(self, tmp_path):
+        """repeat 用例：原 id 选中其全部轮次，id[rN] 精确复现单轮。"""
+        root = tmp_path / "ft"
+        d = root / "smoke"
+        d.mkdir(parents=True)
+        base = {"desc": "d", "messages": [{"role": "user", "content": "hi"}],
+                "expect": {"nonempty": True}}
+        rows = "".join(json.dumps({**base, "id": i, **extra}, ensure_ascii=False) + "\n"
+                       for i, extra in [("intro", {"repeat": 3}), ("other", {})])
+        (d / "cases.jsonl").write_text(rows, encoding="utf-8")
+        cfg = PytestAdapter().build_config(make_request(tests_dir=str(root), cases=["intro"]))
+        targets = cfg["scenarios"][0]["targets"]
+        assert [t.split("::", 1)[1] for t in targets] == ["intro", "intro[r2]", "intro[r3]"]
         cfg = PytestAdapter().build_config(
-            make_request(datasets=["basic_chat", "long_context"], cases=["intro"]))
-        assert [s["name"] for s in cfg["scenarios"]] == ["basic_chat"]
-        assert cfg["skipped"] == ["long_context"]
+            make_request(tests_dir=str(root), cases=["intro[r3]", "other"]))
+        targets = cfg["scenarios"][0]["targets"]
+        assert [t.split("::", 1)[1] for t in targets] == ["intro[r3]", "other"]
+
+    def test_cases_filter_skips_scenarios_without_match(self, tmp_path):
+        root = _jsonl_root(tmp_path, {"s1": ["intro"], "s2": ["other"]})
+        cfg = PytestAdapter().build_config(make_request(
+            tests_dir=root, datasets=["s1", "s2"], cases=["intro"]))
+        assert [s["name"] for s in cfg["scenarios"]] == ["s1"]
+        assert cfg["skipped"] == ["s2"]
 
     def test_cases_filter_requires_jsonl_scenario(self, tmp_path):
         (tmp_path / "handwritten").mkdir()
@@ -81,11 +124,13 @@ class TestBuildConfig:
         assert cfg["env"]["AITE_FT_MODEL"] == "qwen2.5:3b"
         assert cfg["env"]["AITE_FT_API_KEY"] == "sk-x"
 
-    def test_unknown_scenario_lists_available(self):
+    def test_unknown_scenario_lists_available(self, tmp_path):
+        root = _jsonl_root(tmp_path, {"s1": ["a"], "s2": ["b"]})
         with pytest.raises(ValueError) as ei:
-            PytestAdapter().build_config(make_request(datasets=["nope"]))
+            PytestAdapter().build_config(
+                make_request(tests_dir=root, datasets=["nope"]))
         assert "nope" in str(ei.value)
-        assert "basic_chat" in str(ei.value) and "long_context" in str(ei.value)
+        assert "s1" in str(ei.value) and "s2" in str(ei.value)
 
     def test_tests_dir_all_scenarios_when_datasets_empty(self, tmp_path):
         (tmp_path / "s1").mkdir()
@@ -131,15 +176,20 @@ class TestBuildConfig:
                 make_request(target={"type": "openai_compatible",
                                      "base_url": "http://x/v1"}))
 
-    def test_list_tasks_builtin_only(self):
+    def test_list_tasks_from_managed_root(self, tmp_path, monkeypatch):
+        """list_tasks 枚举平台托管场景根（名字典序）。"""
+        root = Path(_jsonl_root(tmp_path, {"s2": ["a"], "s1": ["b"]}))
+        monkeypatch.setattr(config, "DEFAULT_FUNCTIONAL_SCENARIOS_DIR", str(root))
         tasks = PytestAdapter().list_tasks()
-        names = [t["name"] for t in tasks]
-        assert names == sorted([
-            "basic_chat", "long_context", "structured_output", "tool_calling",
-            "api_params", "api_stream", "api_limits", "api_shape", "agent_tasks",
-        ])
+        assert [t["name"] for t in tasks] == ["s1", "s2"]
         assert all(t["metrics"] == ["pass_rate"] and t["tags"] == ["functional"]
                    and t["few_shot_num"] is None for t in tasks)
+
+    def test_list_tasks_empty_when_root_missing(self, tmp_path, monkeypatch):
+        """托管根不存在（还没有任何场景）→ 空清单，不报错。"""
+        monkeypatch.setattr(config, "DEFAULT_FUNCTIONAL_SCENARIOS_DIR",
+                            str(tmp_path / "nope"))
+        assert PytestAdapter().list_tasks() == []
 
 
 JUNIT_MIXED = """<?xml version="1.0" encoding="utf-8"?>
@@ -152,57 +202,71 @@ JUNIT_MIXED = """<?xml version="1.0" encoding="utf-8"?>
 
 
 class TestCollect:
-    def _write_junit(self, tmp_path, name, content):
+    def _setup(self, tmp_path, name, content=JUNIT_MIXED):
+        """单场景临时根 + junit/log 落档（collect 只依赖场景名与 junit）。"""
+        scen = tmp_path / "ft" / name
+        scen.mkdir(parents=True, exist_ok=True)
+        (scen / "cases.jsonl").write_text(
+            '{"id": "a", "desc": "d", "messages": [], "expect": {"nonempty": true}}\n',
+            encoding="utf-8")
         p = tmp_path / "junit" / f"{name}.xml"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
-        (tmp_path / "logs" / f"{name}.log").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "logs").mkdir(exist_ok=True)
         (tmp_path / "logs" / f"{name}.log").write_text("log", encoding="utf-8")
 
+    def _req(self, tmp_path):
+        return make_request(work_dir=tmp_path, tests_dir=str(tmp_path / "ft"))
+
     def test_pass_rate_with_failures_errors_skipped(self, tmp_path):
-        self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
-        result = PytestAdapter().collect(make_request(work_dir=tmp_path))
+        self._setup(tmp_path, "s1")
+        result = PytestAdapter().collect(self._req(tmp_path))
         row = result.rows[0]
-        assert row.dataset == "pytest:basic_chat" and row.metric == "pass_rate"
+        assert row.dataset == "pytest:s1" and row.metric == "pass_rate"
         assert row.value == pytest.approx(2 / 4)   # (5-1-1-1)/(5-1)
         assert row.count == 4                       # 与分母同口径
         assert row.passed is None                   # 未配阈值无判定
-        assert result.raw_score == {"basic_chat": 2 / 4}
-        assert "basic_chat.xml" in result.report_files
-        assert "basic_chat.log" in result.report_files
+        assert result.raw_score == {"s1": 2 / 4}
+        assert "s1.xml" in result.report_files
+        assert "s1.log" in result.report_files
 
     def test_failures_extracted_from_junit(self, tmp_path):
         """失败/错误用例从 junit 提取为结构化详情（含断言文本，供 CLI 打印）。"""
-        self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
-        result = PytestAdapter().collect(make_request(work_dir=tmp_path))
+        self._setup(tmp_path, "s1")
+        result = PytestAdapter().collect(self._req(tmp_path))
         cases = {f["case"]: f for f in result.failures}
         assert set(cases) == {"fail", "err"}        # failure 与 error 都提取
-        assert cases["fail"]["dataset"] == "pytest:basic_chat"
+        assert cases["fail"]["dataset"] == "pytest:s1"
         assert "boom" in cases["fail"]["detail"]
 
     def test_threshold_judgement(self, tmp_path):
-        self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
+        self._setup(tmp_path, "s1")
         result = PytestAdapter().collect(
-            make_request(work_dir=tmp_path, metric_thresholds={"pass_rate": 0.6}))
+            make_request(work_dir=tmp_path, tests_dir=str(tmp_path / "ft"),
+                         metric_thresholds={"pass_rate": 0.6}))
         assert result.rows[0].threshold == 0.6
         assert result.rows[0].passed is False
 
     def test_auto_threshold_is_zero_tolerance(self, tmp_path):
-        self._write_junit(tmp_path, "basic_chat", JUNIT_MIXED)
-        result = PytestAdapter().collect(make_request(work_dir=tmp_path, auto_thresholds=True))
+        self._setup(tmp_path, "s1")
+        result = PytestAdapter().collect(
+            make_request(work_dir=tmp_path, tests_dir=str(tmp_path / "ft"),
+                         auto_thresholds=True))
         assert result.rows[0].threshold == 1.0
         assert result.rows[0].passed is False
 
     def test_missing_junit_raises(self, tmp_path):
+        self._setup(tmp_path, "s1")
+        (tmp_path / "junit" / "s1.xml").unlink()
         with pytest.raises(RuntimeError, match="junit"):
-            PytestAdapter().collect(make_request(work_dir=tmp_path))
+            PytestAdapter().collect(self._req(tmp_path))
 
     def test_zero_tests_raises(self, tmp_path):
-        self._write_junit(tmp_path, "basic_chat",
-                          '<testsuites><testsuite name="pytest" tests="0" failures="0"'
-                          ' errors="0" skipped="0"/></testsuites>')
+        self._setup(tmp_path, "s1",
+                    '<testsuites><testsuite name="pytest" tests="0" failures="0"'
+                    ' errors="0" skipped="0"/></testsuites>')
         with pytest.raises(RuntimeError, match="未收集到用例"):
-            PytestAdapter().collect(make_request(work_dir=tmp_path))
+            PytestAdapter().collect(self._req(tmp_path))
 
 
 async def test_run_offline_end_to_end(tmp_path):
@@ -278,3 +342,32 @@ async def test_run_cases_filter_end_to_end(tmp_path):
     assert row.value == 1.0 and row.passed is None     # 未配阈值无判定
     log = (tmp_path / "logs" / "smoke.log").read_text(encoding="utf-8")
     assert "1 passed" in log and "smoke_fail" not in log    # 未选中的用例不执行
+
+
+async def test_run_repeat_case_end_to_end(tmp_path):
+    """repeat 用例端到端：一行 repeat=2 → 两轮独立执行、两条记录（id / id[r2]）。"""
+    root = tmp_path / "ft"
+    d = root / "smoke"
+    d.mkdir(parents=True)
+    (d / "cases.jsonl").write_text(json.dumps(
+        {"id": "a", "desc": "d", "repeat": 2,
+         "messages": [{"role": "user", "content": "hi"}],
+         "expect": {"contains": "hello"}}) + "\n", encoding="utf-8")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeModelHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = make_request(
+            datasets=[], tests_dir=str(root), work_dir=tmp_path,
+            target={"type": "openai_compatible",
+                    "base_url": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    "model": "fake-model"})
+        result = await PytestAdapter().run(req)
+    finally:
+        server.shutdown()
+    row = result.rows[0]
+    assert row.count == 2 and row.value == 1.0         # 两轮各计一例，全过
+    records = [json.loads(x) for x in
+               (tmp_path / "results" / "smoke.jsonl").read_text(encoding="utf-8").splitlines()
+               if x.strip()]
+    assert [r["external_key"] for r in records] == ["a", "a[r2]"]   # 按轮次各记一条
+    assert all(r["passed"] for r in records)

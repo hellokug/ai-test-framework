@@ -2,7 +2,7 @@
 
 路由只做「参数校验 → service（functional_assets）→ 返回」，磁盘与派生逻辑
 全在 service 层（原则 1）；错误映射：FileNotFoundError→404、
-FileExistsError/ScenarioReadOnlyError→409、ValueError→422。
+FileExistsError→409、ValueError→422。
 """
 
 from __future__ import annotations
@@ -11,12 +11,11 @@ import asyncio
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from aite.service import functional_assets as assets
 from aite.service import version_results as vresults
-from aite.service.functional_assets import ScenarioReadOnlyError
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["functional"])
@@ -27,8 +26,6 @@ def _asset_errors():
     """资产层业务异常 → HTTP 语义（404/409/422），其余原样抛出。"""
     try:
         yield
-    except ScenarioReadOnlyError as exc:
-        raise HTTPException(409, str(exc)) from exc
     except FileExistsError as exc:
         raise HTTPException(409, str(exc)) from exc
     except FileNotFoundError as exc:
@@ -38,10 +35,12 @@ def _asset_errors():
 
 
 class ScenarioIn(BaseModel):
-    id: str
-    display_name: str = ""
-    dimension: str = ""
-    description: str = ""
+    id: str = Field(description="场景英文编号：小写字母开头，允许数字/-/_，2-64 位；"
+                                "目录名/接口寻址用，创建后不可改")
+    display_name: str = Field(default="", description="场景中文名称：卡片标题、"
+                                                      "场景树、质量大屏维度行名；缺省回退 id")
+    dimension: str = Field(default="", description="维度标签（选自共享标签库）")
+    description: str = Field(default="", description="一句话说明该场景测什么")
 
 
 class DimTagIn(BaseModel):
@@ -49,12 +48,12 @@ class DimTagIn(BaseModel):
 
 
 class ScriptIn(BaseModel):
-    scenario_id: str
-    script_id: str
-    name: str
-    case_type: str = "基础"
-    external_ref: str = ""
-    rows: list[dict[str, Any]]
+    scenario_id: str = Field(description="归属场景英文编号")
+    script_id: str = Field(description="脚本英文编号（= jsonl 文件名），全平台唯一")
+    name: str = Field(description="脚本中文名称（测试意图）")
+    case_type: str = Field(default="基础", description="类型标签：基础/边界/异常/兼容/迁移")
+    external_ref: str = Field(default="", description="外部用例平台编号（映射键）")
+    rows: list[dict[str, Any]] = Field(description="数据行（harness.Case 同构）")
 
 
 class ScriptPatch(BaseModel):
@@ -65,19 +64,19 @@ class ScriptPatch(BaseModel):
 
 
 class ScriptImportIn(BaseModel):
-    scenario_id: str
-    script_id: str
-    name: str
-    case_type: str = "基础"
-    external_ref: str = ""
-    jsonl: str = ""
-    dataset: str = ""
+    scenario_id: str = Field(description="目标场景英文编号")
+    script_id: str = Field(description="脚本英文编号（= jsonl 文件名）")
+    name: str = Field(description="脚本中文名称（测试意图）")
+    case_type: str = Field(default="基础", description="类型标签：基础/边界/异常/兼容/迁移")
+    external_ref: str = Field(default="", description="外部用例平台编号（映射键）")
+    jsonl: str = Field(default="", description="粘贴的 jsonl 文本（与 dataset 二选一）")
+    dataset: str = Field(default="", description="平台数据集名（与 jsonl 二选一）")
 
 
 @router.get("/functional/scenarios")
-async def list_scenarios(source: str | None = None):
+async def list_scenarios():
     with _asset_errors():
-        items = await asyncio.to_thread(assets.scan_scenarios, source)
+        items = await asyncio.to_thread(assets.scan_scenarios)
     return {"items": items, "count": len(items)}
 
 
@@ -95,9 +94,10 @@ async def get_scenario(scenario_id: str):
 
 
 @router.delete("/functional/scenarios/{scenario_id}")
-async def delete_scenario(scenario_id: str):
+async def delete_scenario(scenario_id: str, force: bool = False):
+    """默认有脚本/用例拒删（409）；`?force=true` 确认后级联删除整目录。"""
     with _asset_errors():
-        return await asyncio.to_thread(assets.delete_scenario, scenario_id)
+        return await asyncio.to_thread(assets.delete_scenario, scenario_id, force)
 
 
 @router.get("/functional/scripts")
@@ -136,6 +136,35 @@ async def delete_script(script_id: str):
 async def import_script(body: ScriptImportIn, state: Any = Depends(get_state)):
     with _asset_errors():
         return await assets.import_script(state.repo, **body.model_dump())
+
+
+@router.get("/functional/tools")
+async def list_tools():
+    """工具库（tool_calls 工具定义，OpenAI tools 条目）+ 被引用脚本。"""
+    with _asset_errors():
+        items = await asyncio.to_thread(assets.list_tools)
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/functional/tools", status_code=201)
+async def create_tool(body: dict[str, Any] = Body(...)):
+    """body = OpenAI tools 条目：{"type": "function", "function": {name, description, parameters}}。"""
+    with _asset_errors():
+        return await asyncio.to_thread(assets.create_tool, body)
+
+
+@router.put("/functional/tools/{name}")
+async def update_tool(name: str, body: dict[str, Any] = Body(...)):
+    """整体替换定义（不可改名）；引用该工具的场景自动重派生 cases.jsonl。"""
+    with _asset_errors():
+        return await asyncio.to_thread(assets.update_tool, name, body)
+
+
+@router.delete("/functional/tools/{name}")
+async def delete_tool(name: str):
+    """仍被数据行引用 → 409（先移除引用）。"""
+    with _asset_errors():
+        return await asyncio.to_thread(assets.delete_tool, name)
 
 
 @router.get("/functional/dim-tags")

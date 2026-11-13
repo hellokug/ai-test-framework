@@ -19,18 +19,11 @@
 断言、junit 报告与 `-k`/nodeid 过滤能力；路由、入库、阈值、趋势全部复用
 平台既有链路，不自建执行框架。
 
-内置 8 场景 52 例，分两个域（共享同一 harness 与链路，只是被测对象不同）：
-
-| 域 | 场景 | 被测对象 |
-|---|---|---|
-| 模型能力域 | basic_chat / structured_output / tool_calling / long_context | 模型本身答得对不对 |
-| API 契约域 | api_params / api_stream / api_limits / api_shape | OpenAI 兼容层协议是否正确 |
-
-API 契约域断言**严格按 OpenAI 规范**——在 Ollama 等非完全兼容服务端上，
-已知 9 例差异用例 FAIL（n 多候选被忽略、role/tools/tool_choice 不校验、
-超上下文静默截断、max_completion_tokens 不认、json_mode 无防呆），desc
-均已标注「已知差异，换标准端点应转绿」。**显性暴露服务端兼容性差异正是
-该域的价值**，不是误报。
+场景**全部用户自管**（内置演示场景已移除，2026-11-08）：托管根
+`config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR`（缺省 `./data/functional/scenarios`，
+经 Web/CLI 资产接口或手工建目录），suite yaml `tools.tests_dir` 可指向任意
+自建目录。一个子目录 = 一个场景，两种形态：数据驱动 `cases.jsonl`（推荐）或
+手写 `test_*.py`。
 
 ## 2. 全景数据流：一次任务从下发到入库
 
@@ -133,7 +126,9 @@ TransportError（连接失败/超时）→ 重试 1 次
   （`data: [DONE]` 正常收尾）；流式不重试（重放语义复杂）
 - **请求构造控制**（params 下划线前缀，不进 payload）：`_omit_messages`
   （省略字段测参数校验）、`_http_method`（GET 测 405）、`_raw_body`
-  （text/plain 发原始串测 Content-Type 校验）
+  （text/plain 发原始串测 Content-Type 校验）、`_headers`（自定义请求头：
+  与默认头合并、同键覆盖（键大小写不敏感）、值 null = 删头——发坏 key /
+  去 Authorization 测 401；落库时敏感头值自动打码）
 
 注意两级超时是不同东西：httpx 的 120s 是**单请求**超时；
 `tools.extra_args.timeout`（默认 1800s）是适配器给**整个场景 subprocess** 的
@@ -145,7 +140,8 @@ TransportError（连接失败/超时）→ 重试 1 次
 
 - `__init__(raw, source)`：**加载期全量校验**——必填字段（id/desc/messages/
   expect）、expect 键 ∈ `_EXPECT_KEYS`、json 规格递归校验、no_leak 形状
-  （true 或 `{extra_patterns: [...]}`，正则可编译）、vars 生成器合法。
+  （true 或 `{extra_patterns: [...]}`，正则可编译）、vars 生成器合法、
+  params 须为对象（含 `_headers` 控制键形状校验）、repeat ∈ 1-100 整数。
   所有 ValueError 都带 `文件名:行号`。原则：**坏数据死在收集期（exit 2），
   不进执行期白跑**
 - `rendered_messages()`：vars 占位符渲染。`{NAME}` → 生成值，递归替换
@@ -158,11 +154,20 @@ TransportError（连接失败/超时）→ 重试 1 次
   not_contains → finish_reason / chunks_min / sse_done / resp → no_tool →
   json → tool / tool_args_contains。
   每条断言的消息都带「期望 vs 实际」；`_brief()`（160 字符）截断回复。
-  另注：messages 允许空数组（api_params 的 empty_messages 用例需要发空
-  数组测 4xx）
+  另注：messages 允许空数组（参数校验类用例需要发空数组测 4xx）
 
 **`load_cases(path)`**：逐行 `json.loads` → `Case`，跳过空行，id 查重
-（重复报「与第 N 行重复」）。
+（重复报「与第 N 行重复」），最后按 `repeat` 展开为执行实例列表（见下）。
+
+**repeat 展开机制** `expand_repeats`：行级 `repeat`（默认 1，上限 100）
+= 该行重复执行的次数（稳定性/波动复测）。展开规则：首轮沿用原 id，
+后续轮 `id[r2]` / `id[r3]`…——首轮裸 id 保证既有 `tools.cases` 过滤与
+nodeid 向后兼容。每轮是浅拷贝副本，**渲染缓存重置** → seed 缺省的 vars
+每轮取新随机值（固定 seed 每轮一致）；junit 与结果 jsonl 按轮次各记一条
+（external_key 带轮次后缀，落库 `test_case` 按 external_key 唯一快照、
+`case_result` 按轮次多行，互不覆盖）。原 id 形如 `x[r2]` 会与 `x` 的
+展开产物相撞，加载期显式报错。`tools.cases` 过滤：指定原 id 选中其
+全部轮次，指定 `id[r3]` 精确复现单轮。
 
 **json 断言** `_check_json_spec`：递归规格（path 取值 → type/len/eq/in/
 item_type/fields 嵌套）。两个易忽略细节：`int` 校验排除 bool（bool 是
@@ -219,7 +224,8 @@ cases 过滤、argv/env 构造）都在这里，测试不需要起 subprocess。
 
 **场景解析**：`_available_scenarios(root)` 扫描目录直接子项，含
 `cases.jsonl` **或** `test_*.py` 的子目录算场景（glob 非递归，嵌套不算）。
-`tests_dir` 有值用用户目录，否则用内置 `SCENARIOS_DIR`。
+`tests_dir` 有值用用户目录，否则用平台托管根
+`config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR`（与资产层同源）。
 
 **cases 过滤**（tools.cases 非空时）：
 
@@ -280,7 +286,7 @@ pass_rate = (tests - failures - errors - skipped) / (tests - skipped)
 
 ### 5.4 list_tasks
 
-只枚举**内置**场景（tests_dir 用户场景运行时才解析）：
+枚举**平台托管场景根**（根不存在/为空返回 `[]`，tests_dir 运行时另行解析）：
 `{name, pretty_name, metrics: ["pass_rate"], tags: ["functional"],
 few_shot_num: None}`。数据形状与 evalscope 的 list_tasks 对齐，REST-ready。
 
@@ -307,7 +313,6 @@ error**（死在起点）；字段对但断言不满足，**exit 1 记 pass_rate
 | jsonl 数据驱动 + 自定义收集器 | 请求体与断言外移出 Python，加用例只加行；收集期校验保证坏数据不进执行期 |
 | nodeid 而非 -k | 精确匹配；打错 id 在 build_config 报错列出可用项，而不是静默跑 0 例 |
 | 质量断言（乱码/泄露/复读）口径保守 | 误报会把好模型判坏，违背功能测试确定性原则；宁可漏报 |
-| API 契约域严格按 OpenAI 规范断言 | 在非完全兼容服务端（Ollama）上显性暴露真实规范差异，这是该域的价值；差异用例 desc 标注「已知差异」，换标准端点应转绿 |
 | 预期错误模式（http_status）把错误响应变成被测对象 | 参数校验测试的核心矛盾：错误是预期结果。不重试不抛，原样返回交断言 |
 | expect DSL 而非自定义 checker 注册表 | YAGNI：四类通用谓词内置已够用，一次性复杂逻辑走手写 test_*.py 逃生门，不做可配置框架 |
 | auto 阈值 → pass_rate: 1.0 | 功能测试零容忍口径：部分通过的功能是坏功能 |
@@ -320,13 +325,14 @@ error**（死在起点）；字段对但断言不满足，**exit 1 记 pass_rate
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| datasets | list[str] | 内置模式 = 场景名；tests_dir 模式可空（全部）/ 非空 = 子目录筛选 |
-| tests_dir | str | 用户自建场景目录（与内置二选一） |
-| cases | list[str] | 用例 id 过滤，省略 = 全部 |
+| datasets | list[str] | 可空 = 跑全部子目录；非空 = 子目录（场景）名筛选 |
+| tests_dir | str | 场景目录；缺省 = 平台托管根（`config.DEFAULT_FUNCTIONAL_SCENARIOS_DIR`） |
+| cases | list[str] | 用例 id 过滤，省略 = 全部；repeat 用例原 id 选中全部轮次，`id[r3]` 精确单轮 |
 | metric_thresholds | dict / "auto" | `{pass_rate: x}` 显式优先；auto → 1.0；不配无判定 |
 | extra_args.timeout | int | 单场景 subprocess 总超时（秒），默认 1800 |
 
-**cases.jsonl 行结构：** `id`（场景内唯一）/ `desc` / `messages` / `tools`? /
+**cases.jsonl 行结构：** `id`（场景内唯一）/ `desc` / `repeat`?（默认 1，
+1-100，该行重复执行次数）/ `messages` / `tools`? /
 `params`? / `vars`?（`{"NAME": {"haystack": {chars, key_at, key}}}`，
 messages 里 `{NAME}` 占位）/ `expect`（必填）。
 
@@ -353,7 +359,10 @@ messages 里 `{NAME}` 占位）/ `expect`（必填）。
 
 **请求构造控制**（`params` 下划线前缀，不进 payload）：`_omit_messages`
 （发缺字段的坏请求）、`_http_method`（GET 测 405）、`_raw_body`（text/plain
-测 Content-Type 校验）。**流式**：`params.stream: true` 自动走 SSE 解析。
+测 Content-Type 校验，Content-Type 可经 `_headers` 换值）、`_headers`
+（认证负向用例：覆盖 Authorization 发坏 key、值 null 删头测缺失鉴权，
+键大小写不敏感；Authorization/key/token 等敏感头值落库自动打码）。
+**流式**：`params.stream: true` 自动走 SSE 解析。
 
 ## 9. 维护指引
 
@@ -362,7 +371,7 @@ messages 里 `{NAME}` 占位）/ `expect`（必填）。
 | 操作 | 动作 | 验证 |
 |---|---|---|
 | 加用例 | cases.jsonl 加一行 | `pytest <场景> --collect-only -q -p aite.functional.harness`（零环境秒验格式） |
-| 加场景 | 目录放 cases.jsonl（内置 scenarios/ 或自建 + tests_dir） | 同上 + `aite tool benchmarks pytest`（内置模式） |
+| 加场景 | 托管根（或 tests_dir 目录）下建场景子目录放 cases.jsonl | 同上 + `aite fscenario list` / `aite tool benchmarks pytest` |
 | 加断言类型 | harness 三处：`_EXPECT_KEYS` 加键 → 写检测函数 → `Case.check()` 接线（带参数再在 `__init__` 加形状校验） | tests/unit/test_functional_cases.py 补正反例 |
 
 **改动回归路径：** `pytest tests/unit/test_functional_cases.py`（DSL 纯函数，

@@ -161,12 +161,25 @@ class TestBoard:
 
 class TestApi:
     @pytest.fixture()
-    def client(self, tmp_path):
+    def client(self, tmp_path, monkeypatch):
+        import json
+
         from fastapi.testclient import TestClient
 
+        from aite import config
         from aite.storage.db import Database
         from aite.storage.repositories import SqlAlchemyRepository
         from aite.web.app import create_app
+
+        scen_root = tmp_path / "scen"
+        monkeypatch.setattr(config, "DEFAULT_FUNCTIONAL_SCENARIOS_DIR",
+                            str(scen_root))
+        # 托管根放一个真实场景（manifest 带中文名称）→ 验证大屏维度行中文名 join
+        scen = scen_root / "api_params"
+        scen.mkdir(parents=True)
+        (scen / "manifest.json").write_text(
+            json.dumps({"display_name": "参数校验", "dimension": "",
+                        "description": ""}, ensure_ascii=False), encoding="utf-8")
 
         db_url = f"sqlite+aiosqlite:///{tmp_path / 'web.db'}"
         app = create_app(storage_url=db_url)
@@ -209,6 +222,10 @@ class TestApi:
         body = board.json()
         assert body["kpi"]["degraded"] == 1
         assert len(body["dimensions"]) == 2
+        by_dim = {d["scenario"]: d for d in body["dimensions"]}
+        # 中文名称 join：托管根有 manifest 的取显示名，没有的回退场景 id
+        assert by_dim["api_params"]["display_name"] == "参数校验"
+        assert by_dim["agent_tasks"]["display_name"] == "agent_tasks"
 
     def test_quality_board_missing_baseline_422(self, client):
         resp = client.get("/api/v1/functional/quality/board", params={

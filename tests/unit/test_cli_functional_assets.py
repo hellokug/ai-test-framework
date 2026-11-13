@@ -42,6 +42,20 @@ def test_scenario_create_list_and_dimension_guard(env):
     assert dup.exit_code == 1 and "已存在" in dup.output
 
 
+def test_scenario_delete_gated_then_force(env):
+    """删除保护双形态：有脚本默认拒删（exit 1 + 提示）；--force 级联。"""
+    (env / "del.jsonl").write_text(_case("d-1") + "\n", encoding="utf-8")
+    runner.invoke(app, ["fscenario", "create", "del_scn", "--name", "待删场景"])
+    runner.invoke(app, ["fscript", "import", "del-script", "--scenario", "del_scn",
+                        "--name", "脚本", "--file", str(env / "del.jsonl")])
+    gated = runner.invoke(app, ["fscenario", "delete", "del_scn"])
+    assert gated.exit_code == 1 and "仍有" in gated.output
+    ok = runner.invoke(app, ["fscenario", "delete", "del_scn", "--force"])
+    assert ok.exit_code == 0 and "deleted" in ok.output
+    gone = runner.invoke(app, ["fscenario", "create", "del_scn"])
+    assert gone.exit_code == 0                      # 目录已删，可重建
+
+
 def test_tag_add_list_and_duplicate(env):
     r = runner.invoke(app, ["ftag", "add", "安全合规"])
     assert r.exit_code == 0, r.output
