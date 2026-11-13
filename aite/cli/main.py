@@ -17,9 +17,8 @@ from aite import config as aite_config
 from aite.core.registry import registry
 from aite.reporting.rebuild import rebuild_report
 from aite.reporting.renderers import report_relpath
-from aite.service.functional_assets import ScenarioReadOnlyError
 from aite.storage import repo_session
-from aite.utils.logging import get_logger, setup_logging
+from aite.utils.logging import APP_LOG_NAME, SERVER_LOG_NAME, build_web_log_config, get_logger, setup_logging
 
 app = typer.Typer(
     name="aite",
@@ -547,6 +546,135 @@ def dataset_gen_domain(
                   f"或 dataset ref: {row['name']}")
 
 
+@dataset_app.command("settings")
+def dataset_settings() -> None:
+    """查看数据集路径与在线源设置（生效值 + 环境变量覆盖标记）。"""
+    from aite.datasets import settings as ds_settings
+
+    snap = ds_settings.snapshot()
+    env_checks = {
+        "datasets_dir": aite_config.ENV_DATASETS_DIR,
+        "cache_dir": "HF_HOME",
+        "hf_endpoint": "HF_ENDPOINT",
+        "remote_url": aite_config.ENV_DATASET_REMOTE_URL,
+    }
+    table = Table(title=f"dataset settings ({ds_settings.settings_path()})")
+    for col in ("key", "设置值", "生效值", "来源", "说明"):
+        table.add_column(col, overflow="fold")
+    for key in ds_settings.FIELDS:
+        env_name = env_checks[key]
+        locked = bool(os.environ.get(env_name))
+        resolved = snap["resolved"][key] or "（未配置）"
+        source = f"env {env_name}" if locked else (
+            "设置文件" if snap["settings"][key] else "默认")
+        table.add_row(key, snap["settings"][key] or "—", resolved, source,
+                      snap["help"][key])
+    console.print(table)
+
+
+@dataset_app.command("settings-set")
+def dataset_settings_set(
+    key: str = typer.Argument(
+        ..., help="datasets_dir / cache_dir / hf_endpoint / remote_url"),
+    value: str = typer.Argument(
+        ..., help="设置值（hf_endpoint/remote_url 传空串恢复默认）"),
+) -> None:
+    """写一个数据集设置项（落 ./data/dataset_settings.json）。"""
+    from aite.datasets import settings as ds_settings
+
+    try:
+        values = ds_settings.save_settings({key: value})
+    except ValueError as exc:
+        err_console.print(f"[red]settings failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]saved[/green] {key}={values[key] or '（空=默认）'} "
+                  f"-> {ds_settings.settings_path()}")
+
+
+@dataset_app.command("upload")
+def dataset_upload(
+    file: Path = typer.Argument(..., help="数据集文件（.jsonl/.json/.csv 文本）"),
+    type_: str = typer.Option("accuracy", "--type",
+                              help="数据集类型（accuracy / functional / perf）"),
+    name: str = typer.Option(..., "--name", help="数据集名（type 下唯一）"),
+    notes: str = typer.Option("", "--notes"),
+    force: bool = typer.Option(False, "--force", help="覆盖同名"),
+) -> None:
+    """上传本地数据集文件：校验 → 落位数据集目录 → 登记 catalog。"""
+    from aite.service.dataset_files import upload_dataset
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await upload_dataset(
+                repo, dataset_type=type_, name=name,
+                filename=file.name, content=file.read_bytes(),
+                notes=notes, force=force)
+
+    try:
+        row = asyncio.run(_go())
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[red]upload failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]uploaded[/green] {row['type']}/{row['name']} "
+                  f"({(row.get('stats') or {}).get('count', '?')} records) -> {row['path']}")
+
+
+@dataset_app.command("download")
+def dataset_download(
+    ref: str = typer.Argument(..., help="id / name / type:name"),
+    out: Path | None = typer.Option(None, "--out",
+                                    help="目标路径（缺省当前目录原文件名）"),
+) -> None:
+    """下载数据集文件到本地（登记文件优先，包内置精度样本回退）。"""
+    import shutil
+
+    from aite.service.dataset_files import resolve_download
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await resolve_download(repo, ref)
+
+    try:
+        result = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]download failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    dest = out or Path(result["filename"])
+    if result["kind"] == "file":
+        shutil.copyfile(result["path"], dest)
+    else:
+        dest.write_bytes(result["content"])
+    console.print(f"[green]downloaded[/green] {ref} -> {dest}")
+
+
+@dataset_app.command("pull-url")
+def dataset_pull_url(
+    name: str = typer.Argument(..., help="数据集名"),
+    type_: str = typer.Option("accuracy", "--type",
+                              help="数据集类型（accuracy / functional / perf）"),
+    url: str = typer.Option(
+        "", "--url",
+        help="直链地址（缺省用设置 remote_url；结尾带 / 按 <地址>/<名>.jsonl 拼接）"),
+    notes: str = typer.Option("", "--notes"),
+    force: bool = typer.Option(False, "--force", help="覆盖同名"),
+) -> None:
+    """从远程拉取地址导入数据集（OBS 桶/其他直链，内网 HF 不通场景）。"""
+    from aite.service.dataset_files import remote_import
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await remote_import(repo, dataset_type=type_, name=name,
+                                       url=url, notes=notes, force=force)
+
+    try:
+        row = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]pull failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]imported[/green] {row['type']}/{row['name']} "
+                  f"({(row.get('stats') or {}).get('count', '?')} records) -> {row['path']}")
+
+
 bench_app = typer.Typer(help="evalscope / lm-eval compatibility tools")
 app.add_typer(bench_app, name="bench")
 
@@ -613,8 +741,11 @@ def serve(
     from aite.web.app import create_app
 
     application = create_app(storage_url=_db_url(db=db), token=token)
-    console.print(f"[bold]aite[/bold] v{__version__} serving on http://{host}:{port}")
-    uvicorn.run(application, host=host, port=port, reload=reload, log_level="info")
+    log_dir = Path("logs")   # 跟随启动时 CWD（与 ./aite.db、./reports 同一约定）
+    console.print(f"[bold]aite[/bold] v{__version__} serving on http://{host}:{port}，"
+                  f"日志落盘 {log_dir}：{APP_LOG_NAME} 业务 / {SERVER_LOG_NAME} 访问·服务器")
+    uvicorn.run(application, host=host, port=port, reload=reload,
+                log_config=build_web_log_config(log_dir))
 
 
 @app.command()
@@ -675,10 +806,6 @@ def common_show() -> None:
 
 def main() -> None:  # console_scripts entrypoint
     app()
-
-
-if __name__ == "__main__":
-    main()
 
 
 agent_app = typer.Typer(help="执行机 agent（模块 G：拉取式纳管）")
@@ -931,9 +1058,6 @@ def _fasset_errors():
     """CLI 侧资产异常映射（与 routers/functional.py 的 HTTP 映射同口径）。"""
     try:
         yield
-    except ScenarioReadOnlyError as exc:
-        err_console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1) from exc
     except FileExistsError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from exc
@@ -954,20 +1078,19 @@ app.add_typer(ftag_app, name="ftag")
 
 
 @fscen_app.command("list")
-def fscenario_list(source: str = typer.Option(None, "--source",
-                                              help="builtin / user")) -> None:
+def fscenario_list() -> None:
     """列出评估场景（含能力覆盖与用例数）。"""
     from aite.service import functional_assets as assets
 
     with _fasset_errors():
-        items = assets.scan_scenarios(source or None)
+        items = assets.scan_scenarios()
     table = Table(title=f"functional scenarios ({len(items)})")
-    for col in ("id", "display_name", "dimension", "source", "forms",
+    for col in ("id", "display_name", "dimension", "forms",
                 "scripts", "cases", "coverage"):
         table.add_column(col, overflow="fold")
     for i in items:
         table.add_row(i["id"], i["display_name"], i["dimension"] or "-",
-                      i["source"], i["forms"], str(i["scripts"]),
+                      i["forms"], str(i["scripts"]),
                       str(i["cases"]),
                       json.dumps(i["coverage"], ensure_ascii=False))
     console.print(table)
@@ -975,8 +1098,8 @@ def fscenario_list(source: str = typer.Option(None, "--source",
 
 @fscen_app.command("create")
 def fscenario_create(
-    scenario_id: str = typer.Argument(..., help="场景 id（小写字母开头）"),
-    name: str = typer.Option("", "--name", help="显示名（缺省 = id）"),
+    scenario_id: str = typer.Argument(..., help="场景英文编号（小写字母开头，允许数字/-/_）"),
+    name: str = typer.Option("", "--name", help="显示名（中文名称，缺省 = 编号）"),
     dimension: str = typer.Option("", "--dimension", help="维度标签（须在标签库内）"),
     description: str = typer.Option("", "--description"),
 ) -> None:
@@ -992,6 +1115,21 @@ def fscenario_create(
         row = asyncio.run(_go())
     console.print(f"[green]created[/green] {row['id']}（{row['display_name']}，"
                   f"dimension={row['dimension'] or '-'}）")
+
+
+@fscen_app.command("delete")
+def fscenario_delete(
+    scenario_id: str = typer.Argument(..., help="场景英文编号"),
+    force: bool = typer.Option(False, "--force",
+                               help="场景下仍有脚本/用例时级联删除（默认拒删）"),
+) -> None:
+    """删除评估场景（默认有内容拒删；--force 级联删除整目录）。"""
+    from aite.service import functional_assets as assets
+
+    with _fasset_errors():
+        row = assets.delete_scenario(scenario_id, force)
+    console.print(f"[green]deleted[/green] {row['id']}（{row['display_name']}，"
+                  f"含 {row['scripts']} 脚本 / {row['cases']} 用例）")
 
 
 @fscript_app.command("list")
@@ -1031,7 +1169,7 @@ def fscript_show(script_id: str = typer.Argument(...)) -> None:
 def fscript_import(
     script_id: str = typer.Argument(...),
     scenario: str = typer.Option(..., "--scenario", help="目标场景 id"),
-    name: str = typer.Option(..., "--name", help="脚本名（测试意图）"),
+    name: str = typer.Option(..., "--name", help="脚本名称（中文名称，测试意图）"),
     file: Path = typer.Option(None, "--file", help="cases.jsonl 文件（与 --dataset 二选一）"),
     dataset: str = typer.Option(None, "--dataset", help="functional 型数据集名"),
     case_type: str = typer.Option("基础", "--case-type"),
@@ -1097,3 +1235,162 @@ def ftag_add(name: str = typer.Argument(...)) -> None:
     with _fasset_errors():
         row = asyncio.run(_go())
     console.print(f"[green]added[/green] {row['name']}")
+
+
+# ============================================ 精度域资产（V1-PLAN §10.4 accuracy）
+# 场景与脚本全部用户自管，无预置；维度标签复用共享标签库（ftag）。
+ascen_app = typer.Typer(help="精度场景管理（用户自管，无预置）")
+app.add_typer(ascen_app, name="ascenario")
+ascript_app = typer.Typer(help="精度脚本（固化 spec）管理")
+app.add_typer(ascript_app, name="ascript")
+
+
+@ascen_app.command("list")
+def ascenario_list() -> None:
+    """列出精度场景（含脚本数与数据条数）。"""
+    from aite.service import accuracy_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.scan_scenarios(repo)
+
+    with _fasset_errors():
+        items = asyncio.run(_go())
+    table = Table(title=f"accuracy scenarios ({len(items)})")
+    for col in ("id", "display_name", "dimension", "scripts", "cases", "description"):
+        table.add_column(col, overflow="fold")
+    for i in items:
+        table.add_row(i["id"], i["display_name"], i["dimension"] or "-",
+                      str(i["scripts"]),
+                      "-" if i["cases"] is None else str(i["cases"]),
+                      i["description"])
+    console.print(table)
+
+
+@ascen_app.command("create")
+def ascenario_create(
+    scenario_id: str = typer.Argument(..., help="场景英文编号（小写字母开头，允许数字/-/_）"),
+    name: str = typer.Option("", "--name", help="显示名（中文名称，缺省 = 编号）"),
+    dimension: str = typer.Option("", "--dimension", help="维度标签（须在共享标签库内）"),
+    description: str = typer.Option("", "--description"),
+) -> None:
+    """新建精度场景（写 manifest；创建即注册）。"""
+    from aite.service import accuracy_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.create_scenario(repo, scenario_id, name,
+                                                dimension, description)
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    console.print(f"[green]created[/green] {row['id']}（{row['display_name']}，"
+                  f"dimension={row['dimension'] or '-'}）")
+
+
+@ascen_app.command("delete")
+def ascenario_delete(
+    scenario_id: str = typer.Argument(..., help="场景英文编号"),
+    force: bool = typer.Option(False, "--force",
+                               help="场景下仍有脚本时级联删除（默认拒删）"),
+) -> None:
+    """删除精度场景（默认有脚本拒删；--force 级联删除整目录）。"""
+    from aite.service import accuracy_assets as assets
+
+    with _fasset_errors():
+        row = asyncio.run(assets.delete_scenario(scenario_id, force))
+    console.print(f"[green]deleted[/green] {row['id']}（{row['display_name']}，"
+                  f"含 {row['scripts']} 脚本）")
+
+
+@ascript_app.command("list")
+def ascript_list(scenario: str = typer.Option(None, "--scenario")) -> None:
+    """列出精度脚本（跨场景；数据集 + 条数瘦身口径）。"""
+    from aite.service import accuracy_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.list_scripts(repo, scenario or None)
+
+    with _fasset_errors():
+        items = asyncio.run(_go())
+    table = Table(title=f"accuracy scripts ({len(items)})")
+    for col in ("id", "name", "scenario", "datasets", "条数", "updated_at"):
+        table.add_column(col, overflow="fold")
+    for i in items:
+        table.add_row(i["id"], i["name"], i["scenario"],
+                      " ".join(i["datasets"]) or "-",
+                      "-" if i["case_count"] is None else str(i["case_count"]),
+                      (i.get("updated_at") or "")[:10])
+    console.print(table)
+
+
+@ascript_app.command("create")
+def ascript_create(
+    script_id: str = typer.Argument(..., help="脚本英文编号"),
+    scenario: str = typer.Option(..., "--scenario", help="目标场景 id"),
+    name: str = typer.Option("", "--name", help="脚本中文名称（缺省 = 编号）"),
+    file: Path = typer.Option(..., "--file", help="suite raw yaml 文件（spec）"),
+    description: str = typer.Option("", "--description"),
+) -> None:
+    """新建精度脚本：spec 经 resolve_suite 真实校验后落盘。"""
+    import yaml as _yaml
+
+    from aite.service import accuracy_assets as assets
+
+    spec = _yaml.safe_load(file.read_text(encoding="utf-8"))
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.create_script(repo, scenario_id=scenario,
+                                              script_id=script_id, name=name,
+                                              description=description, spec=spec)
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    count = row["case_count"]
+    console.print(f"[green]created[/green] {row['id']}（{row['name']}，"
+                  f"{len(row['datasets'])} 数据集 · 条数 "
+                  f"{'—' if count is None else count}） -> {row['scenario']}")
+
+
+@ascript_app.command("show")
+def ascript_show(script_id: str = typer.Argument(...)) -> None:
+    """查看脚本：登记 + 完整 spec。"""
+    import yaml as _yaml
+
+    from aite.service import accuracy_assets as assets
+
+    async def _go():
+        async with repo_session(aite_config.db_url_from_env()) as repo:
+            return await assets.get_script(repo, script_id)
+
+    with _fasset_errors():
+        row = asyncio.run(_go())
+    console.print(f"[bold]{row['name']}[/bold]（{row['id']}）@ {row['scenario']}"
+                  + (f" · {row['description']}" if row.get("description") else ""))
+    count = row["case_count"]
+    console.print(f"数据集: {' '.join(row['datasets']) or '-'} · 条数: "
+                  f"{'—' if count is None else count}")
+    console.print(_yaml.safe_dump(row["spec"], allow_unicode=True, sort_keys=False))
+
+
+@ascript_app.command("delete")
+def ascript_delete(script_id: str = typer.Argument(...),
+                   yes: bool = typer.Option(False, "--yes")) -> None:
+    """删除脚本（场景目录内 yaml）。"""
+    from aite.service import accuracy_assets as assets
+
+    if not yes and not typer.confirm(f"删除脚本 {script_id}?"):
+        raise typer.Abort()
+
+    with _fasset_errors():
+        row = asyncio.run(assets.delete_script(script_id))
+    console.print(f"[green]deleted[/green] {row['id']}（{row['scenario']}）")
+
+
+# `python -m aite.cli.main` 入口必须排在全部 add_typer 之后：提前执行会在
+# 后续命令组注册前退出（2026-11-08 效率复盘教训：ascenario/ascript 曾因此
+# 「No such command」）。
+if __name__ == "__main__":
+    main()
