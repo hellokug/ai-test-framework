@@ -14,12 +14,12 @@ from typing import Any
 def list_perf_datasets() -> list[dict]:
     """性能场景数据集产物清单（模块 J）：stats 摘要 + 时间倒序。
 
-    磁盘枚举收口本层（原则 1：路由不直接读磁盘）；产物目录见
-    config.DEFAULT_PERFDATA_DIR。
+    磁盘枚举收口本层（原则 1：路由不直接读磁盘）；产物目录随数据集设置
+    （``<datasets_dir>/datasets/perf``，缺省 ``./data/datasets/perf``）。
     """
-    from aite import config
+    from aite.datasets import userstore
 
-    base = Path(config.DEFAULT_PERFDATA_DIR)
+    base = userstore.dataset_dir("perf")
     if not base.is_dir():
         return []
     items = []

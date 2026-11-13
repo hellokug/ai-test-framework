@@ -18,11 +18,9 @@ class TestPerfDataApi:
     def client(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from aite import config
         from aite.web.app import create_app
 
-        monkeypatch.setattr(config, "DEFAULT_PERFDATA_DIR",
-                            str(tmp_path / "perf_datasets"))
+        monkeypatch.setenv("AITE_DATASETS_DIR", str(tmp_path))
         app = create_app(storage_url=f"sqlite+aiosqlite:///{tmp_path / 'web.db'}")
         with TestClient(app) as c:
             yield c

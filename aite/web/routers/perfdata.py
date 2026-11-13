@@ -1,9 +1,10 @@
 """性能场景数据集 REST（模块 J）：语料池 → 压测专用负载，前端对接入口。
 
 生成产物为 jsonl（input 字段 + 长度/前缀元数据），suite yaml 经
-``perf.dataset: <path>`` 直接被两引擎消费；产物目录由
-``config.DEFAULT_PERFDATA_DIR`` 收口。路由只做「校验 → 调生成器/web_service
-→ 返回」（原则 1），磁盘枚举在 web_service.list_perf_datasets。
+``perf.dataset: <path>`` 直接被两引擎消费；产物目录随数据集设置落位
+（``<datasets_dir>/datasets/perf``，缺省即 ``./data/datasets/perf``）。
+路由只做「校验 → 调生成器/web_service → 返回」（原则 1），磁盘枚举在
+web_service.list_perf_datasets。
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from aite import config
+from aite.datasets import userstore
 from aite.datasets.catalog import register_entry
 from aite.service import web_service
 from aite.tools.perf_dataset import generate_perf_dataset, validate_scenario
@@ -31,7 +32,7 @@ async def create_perf_dataset(body: dict, state: Any = Depends(get_state)):
     dataset catalog（perf 型，name=场景名指向最新产物，seed=version）。
     """
     try:
-        result = generate_perf_dataset(body, dest_dir=config.DEFAULT_PERFDATA_DIR)
+        result = generate_perf_dataset(body, dest_dir=userstore.dataset_dir("perf"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await register_entry(

@@ -44,12 +44,24 @@ context_recall / answer_correctness）**走 `engine: evalscope-rageval`**（eval
 | `xlam_fc` | hf:Salesforce/xlam-function-calling-60k | 函数调用：工具选择 + 参数抽取（expected 带 tools/tool_args） |
 
 配套指标：tool_call_correctness / tool_arg_correctness / agent_efficiency /
-task_completion / trajectory_quality，详见 `examples/accuracy/agent_eval.yaml`。
+task_completion / trajectory_quality（`aite/metrics/agent_metrics.py` 注册表）。
 被测 agent 需在响应中回传 trace（HTTP 约定或 langchain_agent 连接器）。
 
 ### 精度基准
 
 `mmlu` / `gsm8k` / `ceval` / `jailbreak`（安全）——采样版离线自带，全量见下文 add-hf。
+
+### 性能压测负载（perf 型）
+
+| 来源 | 入口 | 说明 |
+|---|---|---|
+| 场景生成 | `POST /perf/datasets` / perf 页 | 语料池 + 输入长度分桶 + 前缀共享率，同 seed 逐字节可复现（模块 J） |
+| 真实负载导入 | `POST /datasets/upload`（type=perf） | 客户 csv/jsonl：逐条取输入列（input/question/…），ShareGPT 对话数组自动取 human 话轮拼接；expected 族列顺手统计 `avg_output_chars` 供选 max_tokens 参考 |
+| 合成兜底 | suite 里 `perf.synthetic` | 无任何数据时确定性合成固定输入（零缓存命中） |
+
+导入产物为 input-only jsonl（`<datasets_dir>/datasets/perf/<name>.jsonl`），
+suite 里 `perf.dataset` 直接指路径；语料池同样接受对话数组与 csv
+（`aite/tools/perf_dataset.py` 的 load_corpus，目录或单文件皆可）。
 
 ## 在线评测（hf_hub）
 
@@ -163,6 +175,44 @@ aite run -c suite.yaml
 | `group_by: subject` | 按 metadata 字段分组统计 | 报告出分组 breakdown |
 | `--concurrency` | 并发覆盖 | 云端 API 有效；本地单卡 Ollama 无收益（GPU 吞吐是瓶颈） |
 
+## 路径与在线源配置（上传 / 下载 / 远程拉取）
+
+数据集管理支持固定落位路径与两种在线源，设置持久化在 `./data/dataset_settings.json`
+（公共页「数据集管理 → 路径与在线源配置」或 CLI 均可改）；解析优先级一律
+**环境变量 > 设置文件 > 默认**：
+
+| 设置项 | 默认 | 环境变量覆盖 | 用途 |
+|---|---|---|---|
+| `datasets_dir` | `./data` | `AITE_DATASETS_DIR` | 本地数据集固定落位根：上传/导入的文件落 `<根>/datasets/<类型>/`，外部注册表 `aite_datasets.json` 也随根走 |
+| `cache_dir` | `./data/cache/hf` | `HF_HOME` | 在线数据集下载缓存根（注入 HF_HOME，add-hf / hf 导入共用） |
+| `hf_endpoint` | `https://hf-mirror.com` | `HF_ENDPOINT` | 和 HF 通时：在线数据集从该镜像仓拉取（留空 = 用默认镜像） |
+| `remote_url` | （空） | `AITE_DATASET_REMOTE_URL` | 和 HF 不通（内网）时：OBS 桶 https 地址或其他可直链下载数据集的地址；结尾带 `/` 按 `<地址>/<数据集名>.jsonl` 拉取 |
+
+在线连通性探测（`GET /datasets/online/status`，公共页「在线连通性探测」按钮）：
+收到 HTTP 响应即算「通」，hf 不通就配 `remote_url` 走远程导入。
+
+```bash
+aite dataset settings                                 # 查看四项设置（生效值 + 来源：env/设置文件/默认）
+aite dataset settings-set remote_url "https://obs.cn-east-3.myhuaweicloud.com/<bucket>/datasets/"
+aite dataset settings-set datasets_dir "D:/eval-data" # 本地数据集固定放到某个路径下
+```
+
+### 上传与下载
+
+```bash
+aite dataset upload my-qa.jsonl --type accuracy --name my-qa-100        # 校验→落位→登记（.jsonl/.json/.csv）
+aite dataset upload cases.jsonl --type functional --name api-regression # 功能型过 harness.Case 真实校验
+aite dataset upload real-load.csv --type perf --name customer-real      # 性能真实负载导入（输入列必填；ShareGPT 对话数组可）
+aite dataset download accuracy:my-qa-100 --out copy.jsonl               # 下载（内置精度样本也可直下）
+```
+
+REST 对应：`POST /datasets/upload`（文本内容 json 上传）、
+`GET /datasets/{ref}/download`、`POST /datasets/hf/import`（镜像仓导入，
+参数同 add-hf：hf_id/name/split/subset/n/seed/fields）、
+`POST /datasets/remote/import`（远程拉取，type/name/url）、
+`GET·PUT /datasets/settings`、`GET /datasets/online/status`。
+公共页「数据集管理」已全部对接（列表/筛选/删除/导入上传/设置/在线导入）。
+
 ## 命令速查
 
 ```bash
@@ -170,5 +220,9 @@ aite dataset list                                  # 所有 builtin + 已导入�
 aite dataset show <id>                             # 详情
 aite dataset add-hf <hf_id> --name <id> [-n 200]   # 在线下载 → 离线注册
 aite dataset gen-domain <领域> [--name x] [-n 12]   # 生成私域 RAG 数据集（金融/政务/法律）
+aite dataset settings / settings-set <k> <v>       # 路径与在线源设置
+aite dataset upload <file> --type accuracy --name x # 上传本地数据集
+aite dataset download <ref> [--out p]              # 下载数据集文件
+aite dataset pull-url <name> [--url ...]           # 从 remote_url/直链拉取导入
 aite run -c suite.yaml                             # 跑评测
 ```

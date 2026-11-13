@@ -14,10 +14,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from aite.datasets import userstore
 from aite.datasets.catalog import register_entry
 from aite.functional.harness import Case
-
-FUNCTIONAL_ROOT = Path("./data/datasets/functional")
 
 
 def iter_cases_lines(text: str, source: str = "<text>") -> list[tuple[int, dict]]:
@@ -59,7 +58,7 @@ async def ingest_functional(repo: Any, src_path: str | Path, name: str,
     existing = await repo.find_dataset_catalog("functional", name)
     if existing and not force:
         raise ValueError(f"功能数据集 {name!r} 已存在（--force 覆盖）")
-    dest_dir = FUNCTIONAL_ROOT / name
+    dest_dir = userstore.dataset_dir("functional") / name
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "cases.jsonl"
     shutil.copyfile(src, dest)

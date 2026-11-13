@@ -70,6 +70,27 @@ def sanitize_name(name: str) -> str:
     return re.sub(r"[^0-9A-Za-z_-]+", "-", name).strip("-_") or "dataset"
 
 
+def _apply_hf_env() -> None:
+    """HF 端点/缓存目录注入（环境变量优先，其次数据集设置文件）。
+
+    huggingface_hub 在 import 期把 HF_ENDPOINT 固化进 constants.ENDPOINT，
+    服务进程里可能已随其他模块提前 import——环境变量照常生效，显式改
+    settings 后需要补一发 constants 同步（best-effort，未装则跳过）。
+    """
+    import os
+
+    from aite.datasets import settings as ds_settings
+
+    endpoint = ds_settings.resolve_hf_endpoint()
+    os.environ.setdefault("HF_ENDPOINT", endpoint)
+    os.environ.setdefault("HF_HOME", str(ds_settings.resolve_cache_dir()))
+    try:
+        from huggingface_hub import constants as hf_constants
+        hf_constants.ENDPOINT = os.environ["HF_ENDPOINT"].rstrip("/")
+    except ImportError:
+        pass
+
+
 def add_hf_dataset(
     hf_id: str,
     name: str | None = None,
@@ -91,6 +112,7 @@ def add_hf_dataset(
     except ImportError as exc:  # pragma: no cover - 环境相关
         raise RuntimeError("datasets lib not installed: pip install 'aite[bench]'") from exc
 
+    _apply_hf_env()
     ds = load_dataset(hf_id, subset, split=split)
     converted = convert_records([dict(r) for r in ds], fields)
     if not converted:

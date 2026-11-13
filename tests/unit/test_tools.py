@@ -492,6 +492,10 @@ class TestEvalscopeSubprocess:
                 assert pathlib.Path(cfg["work_dir"]).is_absolute()
                 assert kw["env"]["PYTHONUTF8"] == "1"   # 中文 Windows GBK 解码防御
                 assert kw["env"]["HF_ENDPOINT"] == "https://hf-mirror.com"   # 默认镜像
+                # HF_HOME 注入：运行时自动下载随数据集设置 cache_dir 落位（绝对路径）
+                from aite import config as _config
+                assert kw["env"]["HF_HOME"] == str(
+                    pathlib.Path(_config.DEFAULT_DATASET_CACHE_DIR).resolve())
                 reports = pathlib.Path(kw["cwd"]) / "reports"
                 reports.mkdir(parents=True, exist_ok=True)
                 (reports / "qwen2.5_3b.json").write_text(_json.dumps({
@@ -508,6 +512,11 @@ class TestEvalscopeSubprocess:
             def kill(self):
                 self.returncode = -9
 
+        # HF_HOME 断言去环境化：屏蔽本机 HF_HOME，缓存根钉在 config 默认
+        monkeypatch.delenv("HF_HOME", raising=False)
+        from aite import config as _acc_config
+        monkeypatch.setattr("aite.datasets.settings.resolve_cache_dir",
+                            lambda: pathlib.Path(_acc_config.DEFAULT_DATASET_CACHE_DIR))
         monkeypatch.setattr(em.subprocess, "Popen", FakePopen)
         result = await em.EvalscopeAdapter().run(self._req(
             tmp_path, {"python_exe": "py310-python", "timeout_s": 3600}))

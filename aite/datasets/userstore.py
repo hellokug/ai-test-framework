@@ -18,8 +18,9 @@ REGISTRY_FILENAME = "aite_datasets.json"
 
 
 def data_root() -> Path:
-    """外部数据集根目录（项目 ./data）。"""
-    return Path("./data")
+    """外部数据集根目录：AITE_DATASETS_DIR 环境变量 > 设置文件 > 项目 ./data。"""
+    from aite.datasets import settings
+    return settings.resolve_datasets_dir()
 
 
 def dataset_dir(dataset_type: str) -> Path:

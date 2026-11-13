@@ -18,8 +18,13 @@ DEFAULT_SWEBENCH_WORK_DIR = "./data/runs/swebench"
 DEFAULT_EVALSCOPE_TASK_TIMEOUT_S = 14400.0  # evalscope agent 任务子进程墙钟上限（ swe-bench 单实例 30min 量级）
 DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"   # 子进程 HF 默认镜像（用户显式设置 HF_ENDPOINT 时优先）   # 打分文件契约产物（按模块归目录）
 DEFAULT_COMMON_FILE = "./data/common.yaml"   # 全局 common 配置：模型预制（target.profile 引用）+ 工具环境缺省
-DEFAULT_FUNCTIONAL_SCENARIOS_DIR = "./data/functional/scenarios"   # 用户自建评估场景根（builtin 场景在包内只读，V1-PLAN §10.5）
-DEFAULT_ACCURACY_SCRIPTS_DIR = "./data/accuracy/scripts"   # 用户自定义精度脚本（builtin 预置 = examples/accuracy 只读，V1-PLAN §10.4）
+DEFAULT_FUNCTIONAL_SCENARIOS_DIR = "./data/functional/scenarios"   # 评估场景托管根（引擎缺省同源，V1-PLAN §10.5）
+DEFAULT_ACCURACY_SCENARIOS_DIR = "./data/accuracy/scenarios"   # 精度场景托管根（场景/脚本全部用户自管，无预置，V1-PLAN §10.4）
+DEFAULT_DATASETS_DIR = "./data"              # 数据集文件根（设置文件 datasets_dir 缺省；目录树 <根>/datasets/<type>/）
+DEFAULT_DATASET_CACHE_DIR = "./data/cache/hf"   # 在线数据集下载缓存根（设置文件 cache_dir 缺省，注入 HF_HOME）
+DATASET_SETTINGS_FILE = "./data/dataset_settings.json"   # 数据集路径/在线源设置（datasets_dir/cache_dir/hf_endpoint/remote_url）
+ENV_DATASETS_DIR = "AITE_DATASETS_DIR"       # 数据集文件根的环境变量覆盖（优先于设置文件）
+ENV_DATASET_REMOTE_URL = "AITE_DATASET_REMOTE_URL"   # 远程拉取地址（OBS 桶等）的环境变量覆盖
 SECRET_KEY_FILE = "./data/.secret.key"      # 密钥库本地密钥（与库分离，不入 git）
 SECRET_STORE_FILE = "./data/.secrets.json"  # 密钥库（api_key_env 未设置时的加密兜底，不入 git）
 WEB_HOST = "127.0.0.1"

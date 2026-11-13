@@ -324,9 +324,13 @@ print(json.dumps(out, ensure_ascii=False))
                             encoding="utf-8")
         # 中文 Windows 保命：docker-py/工具链读 UTF-8 文件（如 docker context
         # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正；
-        # HF 镜像默认注入（huggingface.co 直连不可达的环境开箱即用）
+        # HF 镜像默认注入（环境变量 > 数据集设置 > 默认镜像，开箱即用）；
+        # HF_HOME 同步注入：基准运行时自动下载随「数据集设置 cache_dir」落位，
+        # 不再落默认 ~/.cache/hf；.resolve() 防相对路径在 work_dir cwd 下二次拼接
+        from aite.datasets.settings import resolve_cache_dir, resolve_hf_endpoint
         env = {**os.environ, "PYTHONUTF8": "1"}
-        env.setdefault("HF_ENDPOINT", config.DEFAULT_HF_ENDPOINT)
+        env.setdefault("HF_ENDPOINT", resolve_hf_endpoint())
+        env.setdefault("HF_HOME", str(resolve_cache_dir().resolve()))
         log_path = work_dir / "logs" / "eval_log.log"   # evalscope 自写日志
         stdout_path = work_dir / "proc_stdout.log"
         stderr_path = work_dir / "proc_stderr.log"
