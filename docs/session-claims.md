@@ -11,4 +11,6 @@ docs/efficiency-log.md / HANDOVER，本文件只留活跃租约。同一域同�
 
 ## 在认领
 
-- 2026-11-12 23:50｜任务执行历史归属任务（owner 已拍板）：retry/重跑不再新建同级任务，同一任务多轮运行，每轮运行快照当时 spec（保审计）；详情页加「执行历史」轮次选择；copy 保留为分支变体；retry_of 列保留兼容旧链｜aite/core/taskkit.py + aite/storage/{models,repositories}.py + aite/web/routers/domain_tasks.py + aite/cli/task_cli.py + docs/domain-backends.md + 四域任务相关 tests + web-ui/mockups/v1/{api32.js,functional2.html,render_check.cjs,fixtures}（完成 bump ?v=18）｜预计 1-2 天，后端先行
+- 2026-11-13 | 性能域前端对接：perf2.html + 新建 api-perf.js（任务/详情/大屏 timeseries/数据集真读写） | web-ui/mockups/v1/perf2.html + api-perf.js + web-ui/HANDOVER.md | 本轮内
+- 2026-11-13 | perf 真实负载导入：csv/jsonl/ShareGPT 对话数组 → perf 型数据集上传 + 语料池对话格式适配 | aite/datasets/local.py + aite/tools/perf_dataset.py + aite/service/dataset_files.py + aite/web/routers + tests + docs/dataset-guide.md + roadmap | 本轮内
+

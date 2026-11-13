@@ -1192,3 +1192,20 @@
 
 
 
+
+- 2026-11-13（性能域前端对接，perf2 + 新建 api-perf.js v2）：perf2.html 原地对接
+  真实后端（此前纯静态稿）——任务列表 GET /perf/tasks 真数据（行内 onclick 带真实
+  task id，pending=运行 / running=停止 / 终态=重试）；任务详情 task+result+run
+  summaries，运行中 5s 轮询耗时，终态拉 /runs/{id}/timeseries 出 TTFT/RPS 图 +
+  统计表 + 报告产物；压测大屏 timeseries 全量（档级 chips 过滤 + 八图 avg/p95 +
+  并发阶梯 + 错误条形）；性能数据集 GET/POST 真生成 + validate 干跑 + 克隆回填；
+  新建抽屉自定义编排 → suite raw 组装（perf.mode/baseline/ramp/probe/soak/rate
+  开环/负载三选一/warmup/spawn_rate/arrival/jitter/tools.metric_thresholds，键位
+  契约 = perf_common/perf_adapter）。口径修正：任务层 succeeded 仅=子进程跑完，
+  run.status=error 上浮为 failed 红徽标（papiEffStatus）。不对接（后端缺口，保持
+  演示 + 显式脚注/toast）：脚本库（无 /perf/scripts）、数据集删除、运行中逐秒进度
+  （两引擎 collect 才落盘）、probe 字段 live 替换为真实契约（SLA 指标 ∈
+  _SLA_METRICS、上界=max_parallel 并发）。IAB 沙箱实测：列表状态徽标/详情错误卡/
+  抽屉真提交（创建+run 202）/数据集生成失败与成功双路径/克隆回填/大屏 stub 时序
+  八图渲染/档级过滤/probe+locust 联动全过。api-perf.js 顶层符号全 papi/PERF_ 前缀，
+  mockup_symbols --check 过；perf2 引用 v=2。
