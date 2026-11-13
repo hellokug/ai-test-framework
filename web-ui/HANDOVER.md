@@ -1169,5 +1169,26 @@
   检新版式。注：首轮验证曾误判通过——被 TaskStop 杀剩的旧后端与新版双监听 8310 串
   请求（端口先 netstat 核实干净再起实例，验证断言要以「第 1 轮自己的目录」为基线）。
 
+- 2026-11-13（数据集域显式化）：common2 数据集页命名对齐两层模型——目录 kicker
+  「目录」→「本地资产」（注明内置样本+私有导入、非全集）、「在线数据集」来源卡/
+  抽屉 chip/模式说明 →「开源基准（evalscope 全集，未预下载跑任务时自动下载）」；
+  accuracy2 数据集选择器接口失败改持久红字（不再静默留 10 条演示行被当成全集），
+  api-acc3 bump v7。后端 evalscope 子进程补注入 HF_HOME=数据集设置 cache_dir
+  （.resolve 绝对路径，防 work_dir cwd 二次拼接），运行时自动下载不再落默认
+  ~/.cache/hf；test_tools 子进程用例随附断言（去环境化 monkeypatch）。
+
+- 2026-11-13（数据集列表并入全集 + 筛选改原生下拉，common2 + api32 v22）：目录表
+  并入 evalscope 基准全集（GET /datasets ⊕ /datasets/online/datasets，本机行在前，
+  实测 261 行）；基准行带 已有/近似/未下载 徽标（match_local_benchmarks 标记）+
+  「详情」基准版式（指标/subsets/few-shot，可跳本机数据集）+「导入」一键预填
+  dataset id。筛选弃 filterbox 大框按钮面板（owner 否掉该交互：选完不收起），改
+  三枚原生 select（类型/来源/本机状态）+ 关键字搜索，选完即生效、原生自动收起；
+  mock 走同一套渲染（DOMContentLoaded 灌 DS_ROWS/DS_BENCH），内联 dsMockRender/
+  dsMockView 删重；filterbox.js 不再被任何页面引用（文件暂留，待 owner 定去留）；
+  api32 v21→v22（common2/functional2 同 bump）。scripts/iab_sandbox.py 后端补注入
+  AITE_DATASETS_DIR/HF_HOME 到 .tmp（沙箱灌数不再写 owner 的 data/ 托管根），
+  down 一并清临时数据根。IAB 实测：全集渲染/三维筛选/搜索/导入预填/详情跳转全过；
+  全集首次列举 21.7s（evalscope 子进程，进程内缓存后秒回，列表先出本机行不等它）。
+
 
 

@@ -69,9 +69,28 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       </div>
     </header>
 
-    <div class="ds-kicker"><span>目录</span><i></i><em>GET /datasets · 大筛选框点选 类型/来源/登记状态 · 行内「详情」查看单个数据集自己的来源、统计与 notes</em></div>
+    <div class="ds-kicker"><span>数据集目录</span><i></i><em>GET /datasets ⊕ /datasets/online/datasets · 本机数据集 + evalscope 基准全集同表（本机在前；基准行「详情」看指标/subsets，「导入」一键预填） · 下拉筛选 类型/来源/本机状态 + 关键字搜索 · 行内「详情」查看单个数据集的来源、统计与 notes</em></div>
     <section class="card">
-      <div id="dsFilter" style="margin-bottom:12px"></div>
+      <div id="dsFilter" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <select class="in" id="dsFType" style="width:auto;min-width:120px" title="按类型筛选">
+          <option value="">类型：全部</option>
+          <option value="functional">功能 functional</option>
+          <option value="accuracy">精度 accuracy</option>
+          <option value="perf">性能 perf</option>
+        </select>
+        <select class="in" id="dsFKind" style="width:auto;min-width:150px" title="按来源筛选">
+          <option value="">来源：全部</option>
+          <option value="local">本机数据集</option>
+          <option value="bench">evalscope 基准</option>
+        </select>
+        <select class="in" id="dsFState" style="width:auto;min-width:130px" title="按本机状态筛选">
+          <option value="">状态：全部</option>
+          <option value="in">已在本机</option>
+          <option value="out">未在本机</option>
+        </select>
+        <input class="in" id="dsFQ" placeholder="搜名称 / dataset_id / 标签 / notes…" style="flex:1;min-width:180px">
+        <span class="hint" id="dsFCount"></span>
+      </div>
       <table id="dsTbl" class="sumtable"></table>
       <div class="foot-note"><span>功能型：行为规约（请求+断言）· 精度型：题库（问题+标准答案）· 性能型：流量特征（分布语义无关）· 删除仅删登记，文件保留</span></div>
     </section>
@@ -84,9 +103,9 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
         <span class="go">开始上传 →</span>
       </button>
       <button class="ds-src" data-tone="hf" onclick="dsEntry('hf')">
-        <span class="ico">🤗</span><b>在线数据集</b>
-        <p>内置 250+ 基准库点选免填 id，或手填 dataset id 走镜像仓全参数导入；之后完全离线可用</p>
-        <span class="go">从在线导入 →</span>
+        <span class="ico">🤗</span><b>开源基准</b>
+        <p>evalscope 支持的全集（250+）点选免填 id，或手填 dataset id 走镜像仓导入；未预下载的基准跑任务时也会自动下载</p>
+        <span class="go">从开源基准导入 →</span>
       </button>
       <button class="ds-src" data-tone="remote" onclick="dsEntry('remote')">
         <span class="ico">⛓</span><b>远程直链</b>
@@ -220,7 +239,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       <div class="chips" id="dsModeChips" data-nodirty style="margin:0">
         <span class="chip on" data-dsmode="upload">上传文件</span>
         <span class="chip" data-dsmode="functional">功能 cases</span>
-        <span class="chip" data-dsmode="hf">在线数据集</span>
+        <span class="chip" data-dsmode="hf">开源基准</span>
         <span class="chip" data-dsmode="remote">远程直链</span>
       </div>
     </div>
@@ -236,7 +255,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
         <span class="hint">POST /datasets/functional/import · harness.Case 真实校验 · 坏行报错带行号</span></div>
     </div>
     <div class="ds-mode" data-mode="hf" hidden>
-      <div class="ds-mode-note">在线数据集：上方基准库点选（本机已有的标绿、近似标蓝，点「选用」自动填下方参数），或手填 dataset id 走镜像仓；镜像端点/下载缓存取「全局设置」，HF 不通改用「远程直链」。名称留空自动取 id 尾段。</div>
+      <div class="ds-mode-note">开源基准：上方基准库即 evalscope 全集，点选（本机已有的标绿、近似标蓝，「选用」自动填下方参数）或手填 dataset id 走镜像仓；镜像端点/下载缓存取「全局设置」，HF 不通改用「远程直链」。名称留空自动取 id 尾段。</div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <input class="in" id="dsOnlineSearch" placeholder="搜基准名 / dataset_id / 标签（如 gsm8k、Math、swe）" style="flex:1;min-width:200px">
         <span class="chip" id="dsOnlineLocalOnly">只看本机已有 <small>0</small></span>
@@ -315,9 +334,8 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
 <div class="ribbon">V1 静态稿 · 公共资源 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=17"></script>
-<script src="assets/filterbox.js?v=2"></script>
 <script>
-/* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets 重渲染） ---------- */
+/* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets ⊕ /datasets/online/datasets 重渲染） ---------- */
 const DS = [
   ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）"],
   ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编"],
@@ -326,7 +344,8 @@ const DS = [
   ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）"],
   ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）"],
 ];
-/* 行对象与后端合并行同形：dsBuildGroups/dsFilterMatch/dsRenderTable 由 api32.js 提供 */
+/* 行对象与后端合并行同形：筛选/渲染/详情由 api32.js 提供（mock 也走同一套代码，
+   DOMContentLoaded 时灌进 DS_ROWS/DS_BENCH）；statsText 为演示规模文本（live 行走 stats） */
 const DS_ROWS_MOCK = DS.map(d => ({
   type: d[0], name: d[1], version: d[2], source: d[3], id: "mock0000",
   origin: /hf:|remote/.test(d[3]) ? "online" : "local",
@@ -358,41 +377,8 @@ function dsEntry(mode) {
 document.querySelectorAll("#dsModeChips .chip").forEach(c =>
   c.addEventListener("click", () => dsSyncMode(c.dataset.dsmode)));
 
-function dsMockRender() {
-  const rows = DS_ROWS_MOCK.filter(r => dsFilterMatch(r, window.DS_FILTERS));
-  if (window.dsFB) window.dsFB.setGroups(dsBuildGroups(DS_ROWS_MOCK));
-  document.getElementById("dsTbl").innerHTML = `
-    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>stats</th><th>path</th><th style="text-align:right">操作</th></tr></thead>
-    <tbody>${rows.map(x => `<tr>
-      <td><span class="tag">${x.type}</span></td><td class="rname"><b class="mono">${x.name}</b></td>
-      <td style="white-space:nowrap">${x.origin === "online" ? '<span class="tag t-online">在线</span>' : '<span class="tag">本地</span>'}</td>
-      <td class="dim" style="white-space:normal">${x.statsText}</td>
-      <td class="mono faint" style="font-size:11px">${x.path}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn sm" onclick="dsMockView('${x.name}')">详情</button>
-      <button class="btn sm" onclick="dsMockGuard()">下载</button>
-      <button class="btn sm danger" onclick="dsMockGuard()">删除</button></td></tr>`).join("")
-      || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
-}
-/* mock 详情：与 live 的 dsOpenDetail（api32.js）同版式，数据取自静态 DS */
-function dsMockView(name) {
-  const d = DS_ROWS_MOCK.find(x => x.name === name);
-  if (!d) return;
-  document.getElementById("dsDetailTitle").textContent = `数据集详情 · ${d.type}/${d.name}`;
-  const kvs = [
-    ["类型", `<span class="tag">${d.type}</span>`], ["名称", `<b class="mono">${d.name}</b>`],
-    ["登记 id", '<span class="mono faint">静态稿演示数据</span>'],
-    ["来源", `${d.origin === "online" ? '<span class="tag t-online">在线</span>' : '<span class="tag">本地</span>'} <span class="dim">${d.source}</span>`],
-    ["version（复现凭证：HF split / 生成 seed）", d.version],
-    ["规模 stats", d.statsText],
-    ["文件路径", `<span class="mono" style="font-size:12px">${d.path}</span>`], ["notes", d.notes || "—"],
-  ];
-  document.getElementById("dsDetailBody").innerHTML =
-    `<div class="ds-detail">${kvs.map(([k, v]) =>
-      `<div class="ds-kv"><span>${k}</span><div>${v}</div></div>`).join("")}</div>`;
-  document.getElementById("dsDetailDl").removeAttribute("href");
-  document.getElementById("dsDetailDel").removeAttribute("data-ds-del");
-  document.getElementById("dsDetail").hidden = false;
-}
+/* mock 详情/表格不再单独实现：dsRenderTable/dsOpenDetail（api32.js）对 mock 行数据同样工作，
+   写操作（下载/删除/导入）由委托里的 dsMockGuard 拦下 */
 ["dsSetSave", "dsProbeBtn", "dsImpGo", "dsDetailDel"].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("click", () => dsMockGuard());
@@ -443,15 +429,18 @@ function dsOnlineMockRender() {
 }
 
 /* 页面初始化（DOMContentLoaded）：api32.js 在本内联脚本之后加载，届时
-   dsBuildGroups/dsFilterMatch/fbMount 才可用；监听注册顺序保证 boot 先行 */
+   DS_ROWS/DS_BENCH/dsRenderTable 才可用；先灌演示数据让 mock 立即可看，
+   live 再由 fapiBoot→wireCommonDatasetsPage 拉真数据覆盖 */
 function dsDatasetsInit() {
   if (!document.getElementById("dsFilter")) return;
-  window.DS_FILTERS = {};
-  window.dsFB = fbMount("dsFilter", dsBuildGroups(DS_ROWS_MOCK), sel => {
-    window.DS_FILTERS = sel;
-    if (dsIsLive()) dsRenderTable();              // live：api32.js 渲染 + 后端筛选
-    else dsMockRender();                          // mock：静态稿筛选
-  });
+  window.DS_FILTERS = { type: "", kind: "", state: "", q: "" };
+  DS_ROWS = DS_ROWS_MOCK.map(r => ({ ...r, kind: "local" }));
+  DS_BENCH = DS_ONLINE_MOCK.map(b => ({ ...b, kind: "bench", type: "accuracy" }));
+  ["dsFType", "dsFKind", "dsFState"].forEach(id =>
+    document.getElementById(id).addEventListener("change", dsApplyFilters));
+  document.getElementById("dsFQ").addEventListener("input", dsApplyFilters);
+  dsBindDatasetsTable();
+  dsRenderTable();
   document.getElementById("dsOnlineSearch").addEventListener("input", () => {
     if (dsIsLive()) return;                       // live 由 api32.js 接管
     dsOnlineMockRender();
@@ -462,7 +451,7 @@ function dsDatasetsInit() {
     document.getElementById("dsOnlineLocalOnly").classList.toggle("on", DS_ONLINE_MOCK_ONLY);
     dsOnlineMockRender();
   });
-  if (!dsIsLive()) { dsMockRender(); dsOnlineMockRender(); }
+  if (!dsIsLive()) dsOnlineMockRender();
 }
 window.addEventListener("DOMContentLoaded", dsDatasetsInit);
 
@@ -517,6 +506,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=21"></script>
+<script src="api32.js?v=22"></script>
 </body>
 </html>

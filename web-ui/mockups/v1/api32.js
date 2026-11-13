@@ -1903,7 +1903,8 @@ async function wireCommonVersions() {
 }
 
 /* ---------------- 公共 · 数据集管理页（common2.html：目录 + 路径/在线源设置 + 导入抽屉） ---------------- */
-let DS_ROWS = [];
+let DS_ROWS = [];    // 本机数据集行：GET /datasets 合并行 + kind:"local"
+let DS_BENCH = [];   // evalscope 基准全集行：GET /datasets/online/datasets + kind:"bench"（type 固定 accuracy）
 
 function dsRef(r) { return `${r.type}:${r.name}`; }
 function dsStatsCell(stats) {
@@ -1919,55 +1920,73 @@ function dsOriginTag(r) {
     ? '<span class="tag t-online">在线</span>'
     : '<span class="tag">本地</span>';
 }
-/* 统一筛选框的分组与实时计数（mock/live 共用，行字段对齐后端合并行） */
-function dsBuildGroups(rows) {
-  const n = fn => rows.filter(fn).length;
-  const type = rows.filter(r => r.origin === "online").length;
-  return [
-    { key: "type", label: "类型", options: [
-      { value: "functional", label: "功能 functional", count: n(r => r.type === "functional") },
-      { value: "accuracy", label: "精度 accuracy", count: n(r => r.type === "accuracy") },
-      { value: "perf", label: "性能 perf", count: n(r => r.type === "perf") }] },
-    { key: "origin", label: "来源", options: [
-      { value: "local", label: "本地", count: rows.length - type },
-      { value: "online", label: "在线", count: type }] },
-    { key: "reg", label: "登记状态", options: [
-      { value: "in", label: "已登记", count: n(r => r.registered !== false) },
-      { value: "out", label: "未登记", count: n(r => r.registered === false) }] },
-  ];
-}
-function dsFilterMatch(r, sel) {
-  const pick = k => (sel || {})[k] || [];
-  if (pick("type").length && !pick("type").includes(r.type)) return false;
-  const origin = r.origin === "online" ? "online" : "local";
-  if (pick("origin").length && !pick("origin").includes(origin)) return false;
-  const reg = r.registered === false ? "out" : "in";
-  if (pick("reg").length && !pick("reg").includes(reg)) return false;
+/* 统一筛选（mock/live 共用）：原生 select 单选 + 关键字搜索；原生下拉选中即自动收起 */
+window.DS_FILTERS = { type: "", kind: "", state: "", q: "" };
+function dsFilterMatch(r, f) {
+  if (f.type && r.type !== f.type) return false;
+  const kind = r.kind === "bench" ? "bench" : "local";
+  if (f.kind && kind !== f.kind) return false;
+  const state = kind === "bench" ? (r.local ? "in" : "out") : "in";
+  if (f.state && state !== f.state) return false;
+  if (f.q) {
+    const hay = kind === "bench"
+      ? [r.name, r.pretty_name, r.dataset_id, (r.tags || []).join(" ")]
+      : [r.name, r.notes, r.path, r.source];
+    if (!hay.some(v => String(v || "").toLowerCase().includes(f.q))) return false;
+  }
   return true;
 }
+/* 目录全部行：本机在前（后端已按 type,name 排好），evalscope 基准全集在后按名排 */
+function dsAllRows() {
+  return [...DS_ROWS.filter(r => r.kind !== "bench"),
+    ...DS_BENCH.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))];
+}
 function dsRenderTable() {
-  const rows = DS_ROWS.filter(r => dsFilterMatch(r, window.DS_FILTERS));
+  const rows = dsAllRows().filter(r => dsFilterMatch(r, window.DS_FILTERS));
+  const cnt = document.getElementById("dsFCount");
+  if (cnt) cnt.textContent =
+    `共 ${rows.length} 行 · 本机 ${DS_ROWS.filter(r => r.kind !== "bench").length}` +
+    ` · 基准 ${DS_BENCH.length}（本机已有 ${DS_BENCH.filter(b => b.local).length}）`;
   document.getElementById("dsTbl").innerHTML = `
-    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>stats</th><th>path</th><th style="text-align:right">操作</th></tr></thead>
-    <tbody>${rows.map(r => {
-      const ref = encodeURIComponent(dsRef(r));
-      const unreg = r.registered === false;
-      const originCell = dsOriginTag(r) + (unreg
-        ? ' <span class="badge pending" title="本机已有（注册表/目录），尚未登记 catalog；走一次导入即可入册"><i></i>未登记</span>'
-        : "");
-      return `<tr>
-      <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${r.name}</b>
-        <div class="rid mono faint">${(r.id || "").slice(0, 8)}</div></td>
-      <td style="white-space:nowrap">${originCell}</td>
-      <td class="dim" style="white-space:normal">${dsStatsCell(r.stats)}</td>
-      <td class="mono faint" style="font-size:11px">${r.path || "—"}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="${dsRef(r)}" title="查看该数据集自己的来源/统计/notes">详情</button>
-      <a class="btn sm" href="${FAPI.base}/datasets/${ref}/download" title="下载数据集文件">下载</a>
-      ${unreg ? "" : `<button class="btn sm danger" data-ds-del="${dsRef(r)}">删除</button>`}</td></tr>`;
-    }).join("")
+    <thead><tr><th>类型</th><th>名称</th><th>来源</th><th>规模 / 概要</th><th>path · dataset_id</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${rows.map(r => r.kind === "bench" ? dsBenchRow(r) : dsLocalRow(r)).join("")
       || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
 }
+function dsLocalRow(r) {
+  const ref = encodeURIComponent(dsRef(r));
+  const unreg = r.registered === false;
+  const originCell = dsOriginTag(r) + (unreg
+    ? ' <span class="badge pending" title="本机已有（注册表/目录），尚未登记 catalog；走一次导入即可入册"><i></i>未登记</span>'
+    : "");
+  return `<tr>
+  <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${r.name}</b>
+    <div class="rid mono faint">${(r.id || "").slice(0, 8)}</div></td>
+  <td style="white-space:nowrap">${originCell}</td>
+  <td class="dim" style="white-space:normal">${r.statsText || dsStatsCell(r.stats)}</td>
+  <td class="mono faint" style="font-size:11px">${r.path || "—"}</td>
+  <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="${dsRef(r)}" title="查看该数据集自己的来源/统计/notes">详情</button>
+  <button class="btn sm" data-ds-dl="${ref}" title="下载数据集文件">下载</button>
+  ${unreg ? "" : `<button class="btn sm danger" data-ds-del="${dsRef(r)}">删除</button>`}</td></tr>`;
+}
+function dsBenchRow(b) {
+  const badge = b.local
+    ? `<span class="badge passed" title="本机已有同源/同名数据集，可直接用"><i></i>已有 · ${b.local}</span>`
+    : b.local_like
+      ? `<span class="badge pending" title="本机有近似名数据集（可能是同一基准的另一份转换）"><i></i>近似 · ${b.local_like}</span>`
+      : '<span class="dim" title="本机没有：导入后完全离线可用，跑任务时也会自动下载">未下载</span>';
+  return `<tr>
+  <td><span class="tag">accuracy</span></td>
+  <td class="rname"><b class="mono">${b.name}</b>
+    <div class="rid faint">${b.pretty_name && b.pretty_name !== b.name ? b.pretty_name : ""}
+      ${(b.tags || []).slice(0, 3).map(t => `<span class="tag">${t}</span>`).join(" ")}</div></td>
+  <td style="white-space:nowrap"><span class="tag t-online">evalscope</span> ${badge}</td>
+  <td class="dim" style="white-space:normal">${(b.metrics || []).join(", ") || "—"} · subsets ${(b.subsets || []).length}${b.few_shot_num ? ` · few-shot ${b.few_shot_num}` : ""}</td>
+  <td class="mono faint" style="font-size:11px">${b.dataset_id || "—"}</td>
+  <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-ds-view="bench:${b.name}" title="基准信息与导入参数">详情</button>
+  <button class="btn sm" data-ds-import="${b.name}" title="打开导入抽屉并预填 dataset id">导入</button></td></tr>`;
+}
 function dsOpenDetail(ref) {
+  if (String(ref).startsWith("bench:")) return dsOpenBenchDetail(String(ref).slice(6));
   const r = DS_ROWS.find(x => dsRef(x) === ref);
   if (!r) return;
   document.getElementById("dsDetailTitle").textContent = `数据集详情 · ${r.type}/${r.name}`;
@@ -1987,30 +2006,102 @@ function dsOpenDetail(ref) {
       `<div class="ds-kv"><span>${k}</span><div>${v}</div></div>`).join("")}</div>`;
   document.getElementById("dsDetailDl").href =
     `${FAPI.base}/datasets/${encodeURIComponent(ref)}/download`;
+  document.getElementById("dsDetailDl").hidden = false;
   document.getElementById("dsDetailDel").dataset.dsDel = ref;
+  document.getElementById("dsDetailDel").hidden = false;
   document.getElementById("dsDetail").hidden = false;
 }
-async function wireCommonDatasetsPage() {
-  const data = await FAPI.get("/datasets");
-  DS_ROWS = data.items || [];
-  if (window.dsFB) window.dsFB.setGroups(dsBuildGroups(DS_ROWS));
-  dsRenderTable();
-  const tbl = document.getElementById("dsTbl");
-  if (tbl && !tbl.dataset.liveBound) {
-    tbl.dataset.liveBound = "1";
-    tbl.addEventListener("click", async e => {
-      const view = e.target.closest("[data-ds-view]");
-      if (view) { dsOpenDetail(view.dataset.dsView); return; }
-      const del = e.target.closest("[data-ds-del]");
-      if (!del) return;
-      if (!confirm(`删除数据集登记 ${del.dataset.dsDel}?（文件保留）`)) return;
-      try {
-        await FAPI.del(`/datasets/${encodeURIComponent(del.dataset.dsDel)}`);
-        fapiToast("已删除登记（数据文件保留）");
-      } catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
-      await wireCommonDatasetsPage();
+/* 基准版式详情（bench:<name>）：还不是本机登记，下载/删除不适用，给「去导入」与跳本机 */
+function dsOpenBenchDetail(name) {
+  const b = DS_BENCH.find(x => x.name === name);
+  if (!b) return;
+  document.getElementById("dsDetailTitle").textContent = `evalscope 基准 · ${b.name}`;
+  const subs = b.subsets || [];
+  const localCell = b.local
+    ? `<span class="badge passed"><i></i>本机已有</span> <button class="btn sm" data-ds-view="accuracy:${b.local}">查看本机数据集</button>`
+    : b.local_like
+      ? `<span class="badge pending"><i></i>近似 · ${b.local_like}</span> <button class="btn sm" data-ds-view="accuracy:${b.local_like}">查看近似数据集</button>`
+      : '<span class="dim">未下载（导入后完全离线可用；跑任务时未预下载的也会自动下载）</span>';
+  const kvs = [
+    ["基准名", `<b class="mono">${b.name}</b>`],
+    ["pretty_name", b.pretty_name || "—"],
+    ["dataset_id", `<span class="mono">${b.dataset_id || "—"}</span>`],
+    ["标签", (b.tags || []).map(t => `<span class="tag">${t}</span>`).join(" ") || "—"],
+    ["指标", `<span class="mono dim">${(b.metrics || []).join(", ") || "—"}</span>`],
+    ["subsets", `${subs.length} 个${subs.length ? `：${subs.slice(0, 6).join("、")}${subs.length > 6 ? " …" : ""}` : ""}`],
+    ["few-shot", String(b.few_shot_num || 0)],
+    ["本机状态", localCell],
+  ];
+  document.getElementById("dsDetailBody").innerHTML =
+    `<div class="ds-detail">${kvs.map(([k, v]) =>
+      `<div class="ds-kv"><span>${k}</span><div>${v}</div></div>`).join("")}</div>
+    <div style="margin-top:10px"><button class="btn primary sm" data-ds-import="${b.name}">导入此基准（预填 dataset id）</button></div>`;
+  document.getElementById("dsDetailDl").hidden = true;
+  document.getElementById("dsDetailDel").hidden = true;
+  document.getElementById("dsDetail").hidden = false;
+}
+/* 行内/详情「导入」基准：预填 dataset id 与名称，切到导入抽屉「开源基准」模式（dsEntry 在页面内联） */
+function dsBenchImport(name) {
+  const b = DS_BENCH.find(x => x.name === name);
+  if (!b) return;
+  if (!dsIsLive()) { dsMockGuard(); return; }
+  const set = (id, v) => { const el = document.getElementById(id); if (el && !el.value) el.value = v; };
+  document.getElementById("dsHfId").value = b.dataset_id || b.name || "";
+  set("dsImpName", b.name || "");
+  dsEntry("hf");
+  fapiToast(`已预填 ${b.dataset_id || b.name}：确认 split/采样参数后点「校验并导入」`);
+}
+function dsDownload(ref) {
+  if (!dsIsLive()) { dsMockGuard(); return; }
+  location.href = `${FAPI.base}/datasets/${encodeURIComponent(ref)}/download`;
+}
+/* 目录表格 + 详情抽屉的点击委托（mock/live 一套）：详情类 mock 也可看，写操作 mock 一律 guard */
+function dsBindDatasetsTable() {
+  [document.getElementById("dsTbl"), document.getElementById("dsDetailBody")]
+    .forEach(host => {
+      if (!host || host.dataset.dsBound) return;
+      host.dataset.dsBound = "1";
+      host.addEventListener("click", async e => {
+        const view = e.target.closest("[data-ds-view]");
+        if (view) { dsOpenDetail(view.dataset.dsView); return; }
+        const imp = e.target.closest("[data-ds-import]");
+        if (imp) { dsBenchImport(imp.dataset.dsImport); return; }
+        const dl = e.target.closest("[data-ds-dl]");
+        if (dl) { dsDownload(dl.dataset.dsDl); return; }
+        if (!dsIsLive()) { dsMockGuard(); return; }
+        const del = e.target.closest("[data-ds-del]");
+        if (!del) return;
+        if (!confirm(`删除数据集登记 ${del.dataset.dsDel}?（文件保留）`)) return;
+        try {
+          await FAPI.del(`/datasets/${encodeURIComponent(del.dataset.dsDel)}`);
+          fapiToast("已删除登记（数据文件保留）");
+        } catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+        await wireCommonDatasetsPage();
+      });
     });
+}
+/* 筛选应用（mock/live 共用，页面下拉 change/搜索 input 都走这里；原生 select 选中即收起） */
+function dsApplyFilters() {
+  const val = id => ((document.getElementById(id) || {}).value || "").trim();
+  window.DS_FILTERS = {
+    type: val("dsFType"), kind: val("dsFKind"), state: val("dsFState"),
+    q: val("dsFQ").toLowerCase(),
+  };
+  dsRenderTable();
+}
+async function wireCommonDatasetsPage() {
+  dsBindDatasetsTable();
+  const data = await FAPI.get("/datasets");
+  DS_ROWS = (data.items || []).map(r => ({ ...r, kind: "local" }));
+  dsRenderTable();                       // 本机行先出（基准全集首次列举可能要起子进程，慢）
+  try {
+    const online = await FAPI.get("/datasets/online/datasets");
+    DS_BENCH = (online.items || []).map(b => ({ ...b, kind: "bench", type: "accuracy" }));
+  } catch (err) {
+    DS_BENCH = [];
+    fapiToast(`evalscope 基准全集列举失败（目录暂只显本机数据集）：${err.message}`, true);
   }
+  dsRenderTable();
 }
 async function wireDatasetSettings() {
   const snap = await FAPI.get("/datasets/settings");
