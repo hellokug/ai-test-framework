@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aite · 任务管理 · 精度</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="assets/v1.css?v=17">
+<link rel="stylesheet" href="assets/v1.css?v=20">
 </head>
 <body data-module="accuracy" data-module-label="任务管理 · 精度">
 <script type="text/plain" id="page-list">[
-  {"id":"runs","label":"任务列表","count":"128"},
+  {"id":"runs","label":"任务列表"},
   {"id":"detail","label":"任务详情"},
-  {"id":"scripts","label":"脚本库","count":"21"},
+  {"id":"scenarios","label":"评估场景"},
+  {"id":"scripts","label":"脚本库"},
   {"id":"trends","label":"趋势对比"},
-  {"id":"manual","label":"人工评测","count":"6"}
+  {"id":"manual","label":"人工评测"}
 ]</script>
 
 <header class="topnav" id="topnav"></header>
@@ -37,9 +38,9 @@
       <div class="stat"><div class="label"><i style="background:var(--warn)"></i>受测模型</div><div class="value">9</div><span class="delta flat">— 持平</span></div>
     </section>
     <div class="filter-bar" id="runsFilter">
-      <span class="chip on" data-status="all">全部 <small>128</small></span>
+      <span class="chip on" data-status="all">全部</span>
       <span class="chip" data-status="passed">已通过</span>
-      <span class="chip" data-status="running">运行中 <small>1</small></span>
+      <span class="chip" data-status="running">运行中</span>
       <span class="chip" data-status="failed">失败</span>
       <span class="chip" data-status="pending">已排队</span>
       <span style="flex:1"></span>
@@ -147,6 +148,19 @@
     </section>
   </section>
 
+  <!-- ============ 评估场景（脚本的组织维度） ============ -->
+  <section data-page="scenarios" hidden>
+    <header class="topbar">
+      <div><h1>评估场景</h1><div class="crumb">场景 = 脚本的组织维度（维度标签 + 说明）· 脚本归属唯一场景 · GET /accuracy/scenarios</div></div>
+      <div class="actions"><button class="btn primary" id="accNewScenBtn">＋ 新建评估场景</button></div>
+    </header>
+    <div class="card" style="margin-bottom:14px;padding:12px 18px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;font-weight:600">场景 = 脚本的组织维度 · 先场景后脚本</span>
+      <span class="qmark">?<span class="tip">层级口径：评估场景 = 脚本的组织维度（维度标签 + 一句话说明）→ 场景内沉淀「脚本 = 版本基线用例」（脚本在「脚本库」页维护，归属唯一场景）。创建硬约束：先场景后脚本——场景是趋势对比与基线比对的分组键，无场景不沉淀脚本。场景 id 全平台唯一（目录名/接口寻址，创建后不可改）；删除场景默认有脚本拒删，二次确认后级联删除；历史任务持 spec 快照不受影响。</span></span>
+    </div>
+    <div class="scene-grid" id="accSceneGrid"></div>
+  </section>
+
   <!-- ============ 脚本库（一个脚本 = 一个版本基线用例） ============ -->
   <section data-page="scripts" hidden>
     <header class="topbar">
@@ -157,17 +171,21 @@
       <div class="dim" style="font-size:13px;line-height:1.9">
         <b style="color:var(--tx)">为什么沉淀脚本：</b>每个版本固定要测哪些基线数据集、怎么抽样、怎么判分——固化为命名脚本后一键复用：
         新版本发布 = 逐个脚本「发起任务」，同脚本跨版本跑出的分数才能进「趋势对比」与基线比对（口径一致才有可比性）。<br>
-        <b style="color:var(--tx)">脚本两条来源：</b>① 研发预置（<span class="tag mono">examples/accuracy/*.yaml</span> 随框架版本发布，只读可复制）；
-        ② 前台沉淀（创建任务时「保存为脚本」）。脚本编辑即生效；历史任务持创建时的配置快照，不受编辑影响。
+        <b style="color:var(--tx)">无预置 · 场景维度：</b>脚本随框架<strong>不预置</strong>，全部用户自建沉淀（先建场景再落脚本）；
+        脚本 = 英文 id + 中文名称，清单只带 数据集与条数（完整配置见「发起任务」抽屉的内容快照）。脚本编辑即生效；历史任务持创建时的配置快照，不受编辑影响。
+        场景的新建与删除在「评估场景」页维护，本页只按场景筛选。
       </div>
     </div>
     <div class="chips" style="margin-bottom:12px">
-      <span class="chip on" data-single>全部 <small>21</small></span>
-      <span class="chip" data-single>研发预置 <small>17</small></span>
-      <span class="chip" data-single>自定义沉淀 <small>4</small></span>
+      <span class="chip on" id="accScenAll" data-scen="">全部 <small>0</small></span>
+      <span class="ds-flabel gap">场景</span>
+      <select class="in" id="accScenFilter" style="width:240px;height:30px;padding:3px 10px">
+        <option value="">全部场景</option>
+      </select>
+      <span style="margin-left:10px;font-size:11.5px;color:var(--tx3)">场景的新建与删除在「评估场景」页 · 脚本归属唯一场景 · id 全平台唯一</span>
     </div>
     <section class="card"><table id="scriptsTbl" class="sumtable"></table>
-      <div class="foot-note"><span>共 21 个脚本（上表展示 8 个）· 预置 = 随框架发布的基准套件模板 · 自定义 = 团队沉淀的基线用例</span></div></section>
+      <div class="foot-note"><span>共 0 个脚本 · 清单瘦身口径：数据集 + 条数（条数 = 数据集规模合计；evalscope 基准跑上游全量，本地不可知显示 —）</span></div></section>
   </section>
 
   <!-- ============ 版本质量对比（趋势页重构） ============ -->
@@ -241,9 +259,9 @@
     <!-- ===== 复用面板：选脚本 + 本次运行参数 ===== -->
     <div data-pane="script">
       <div class="form-sec">
-        <div class="sec-head"><span class="sec-num">1</span><b>选择脚本</b><small>研发预置 + 自定义沉淀 · 内容快照只读</small></div>
+        <div class="sec-head"><span class="sec-num">1</span><b>选择脚本</b><small>按场景分组 · 内容快照只读</small></div>
         <div class="p-row">
-          <span class="p-label">评测脚本<span class="qmark">?<span class="tip">脚本 = 固化的评测配置（数据集/抽样/seed/Judge/阈值/并发…）；「研发预置」随框架发布（examples/accuracy/*.yaml），「自定义」来自创建任务时的「保存为脚本」。内容维护与新建沉淀请到「脚本库」页</span></span></span>
+          <span class="p-label">评测脚本<span class="qmark">?<span class="tip">脚本 = 固化的评测配置（数据集/抽样/seed/Judge/阈值/并发…）；无预置，全部来自创建任务时「保存为脚本」或脚本库自建沉淀，按场景分组展示。内容维护与新建沉淀请到「脚本库」页</span></span></span>
           <select class="in" id="accScriptSel" style="max-width:460px"></select></div>
         <div class="seg-title">脚本内容快照（只读 · 运行时不改动）</div>
         <div class="detail-stack" id="accScriptSnap" style="margin-top:0"></div>
@@ -269,14 +287,18 @@
           <div class="p-row">
             <span class="p-label">模型名称</span><input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
           <div class="p-row" style="margin-bottom:0">
-            <span class="p-label">鉴权 api_key_env</span><input class="in" placeholder="环境变量名，如 OPENAI_API_KEY" style="max-width:300px"></div>
+            <span class="p-label">鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">「公共 · 密钥库」已归档的密钥直接下拉选择（运行时解密注入）；也可选「仅环境变量」手填本机变量名</span></span></span>
+            <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+              <select class="in" data-keysel style="flex:1"></select>
+              <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+            </div></div>
         </div>
         <div class="p-row">
           <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一脚本逐版本执行 = 「版本质量对比」的数据来源（同配置跨版本才可比，劣化检测依赖此口径）</span></span></span>
           <div style="display:flex;gap:8px;align-items:center;max-width:440px">
             <input class="in" id="accVerIn2" list="accVerDl" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
             <datalist id="accVerDl"></datalist>
-            <button class="btn sm" type="button" id="accVerNewBtn2" title="登记到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
+            <button class="btn sm" type="button" id="accVerNewBtn2" title="创建到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
           </div></div>
         <div class="p-row">
           <span class="p-label">执行方式<span class="qmark">?<span class="tip">创建 ≠ 执行：立即/定时到点自动 run；仅创建 = 配置固化排队，稍后在任务列表手动运行</span></span></span>
@@ -291,8 +313,8 @@
       </div>
       <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
         <div class="dim" style="font-size:12.5px;line-height:1.7">
-          ✓ <b style="color:var(--tx)">脚本发起 = spec 整体复用</b>：POST /accuracy/tasks 带 script_id + 本次运行参数（模型/版本/执行方式），
-          后端加载脚本固化 spec 并叠加运行参数——与「版本质量对比」基线口径一致；同脚本想改数据集/阈值，请到脚本库编辑或复制出新脚本。
+          ✓ <b style="color:var(--tx)">脚本发起 = spec 整体复用</b>：前端加载脚本固化 spec（GET /accuracy/scripts/{id} 深拷贝）
+          叠加本次运行参数（模型/版本）后 POST /accuracy/tasks——与「版本质量对比」基线口径一致；同脚本想改数据集/阈值，请到脚本库编辑或复制出新脚本。
         </div>
       </div>
     </div>
@@ -322,8 +344,11 @@
           <span class="p-label">模型名称<span class="qmark">?<span class="tip">端点侧模型名（请求体 model 字段）</span></span></span>
           <input class="in" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
         <div class="p-row" style="margin-bottom:0">
-          <span class="p-label">鉴权 api_key_env<span class="qmark">?<span class="tip">密钥不落库：仅存环境变量名，运行时解析</span></span></span>
-          <input class="in" placeholder="环境变量名，如 OPENAI_API_KEY" style="max-width:300px"></div>
+          <span class="p-label">鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">「公共 · 密钥库」已归档的密钥直接下拉选择（运行时解密注入）；也可选「仅环境变量」手填本机变量名</span></span></span>
+          <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+            <select class="in" data-keysel style="flex:1"></select>
+            <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+          </div></div>
       </div>
       <div class="p-row">
         <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">契约无 auto 档：默认不配置 = 纯规则判分（mmlu / ceval / gsm8k / humaneval 等经典基准全规则，配了也不调用）；LLM 判官类基准（如 aime26）必须显式选判官，否则起跑即拒，按报错补配即可</span></span></span>
@@ -331,18 +356,18 @@
           <option value="">不配置（默认 · 仅规则判分）</option>
         </select></div>
       <div class="p-row">
-        <span class="p-label">被测版本<span class="qmark">?<span class="tip">自由输入版本号；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
+        <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
         <div style="display:flex;gap:8px;align-items:center;max-width:440px">
           <input class="in" id="accVerIn" list="accVerDl2" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
           <datalist id="accVerDl2"></datalist>
-          <button class="btn sm" type="button" id="accVerNewBtn" title="登记到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
+          <button class="btn sm" type="button" id="accVerNewBtn" title="创建到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
         </div></div>
     </div>
 
     <div class="form-sec">
       <div class="sec-head"><span class="sec-num">2</span><b>数据集配置</b><small>选择数据 · 控制规模 · 保证可复现</small></div>
       <div class="ds-picker" id="dsPicker" style="margin-bottom:12px">
-        <div class="ds-search" id="dsSearchBox">
+        <div class="ds-search" id="dsSearchBox" data-nodirty>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
           <span class="ds-tokens" id="dsTokens"></span>
           <input id="dsSearch" placeholder="模糊搜索：数据集名称 / 领域 / 标签…">
@@ -407,7 +432,7 @@
         <span class="p-label">thinking 推理开关<span class="qmark">?<span class="tip">前端控件映射到 evalscope 原生 reasoning_effort 键（键名不同由前端翻译）；留空 = 不传，用端点默认</span></span></span>
         <select class="in" id="accThinkSel" style="max-width:300px"><option value="">端点默认（不传）</option><option value="off">关闭（off）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
       <div class="adv-json" id="advJson">
-        <button type="button" class="adv-head" id="advJsonToggle">
+        <button type="button" class="adv-head" id="advJsonToggle" data-nodirty>
           <span class="adv-badge">高级</span>
           <b>JSON 扩展参数</b>
           <small>generation_config 长尾 + dataset_args 按基准覆盖</small>
@@ -468,7 +493,7 @@
 
 <div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=13"></script>
+<script src="assets/v1.js?v=17"></script>
 <script>
 /* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选）
    数据源 = GET /api/v1/tools/benchmarks（name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id）
@@ -629,60 +654,127 @@ document.querySelectorAll("#execCards .radio-card").forEach(c => c.addEventListe
 /* ---------- 脚本库：一个脚本 = 一个版本基线用例 ----------
    预置 = examples/accuracy/*.yaml 随框架发布（GET /{D}/scripts 合并展示，只读可复制）
    自定义 = 创建任务「保存为脚本」沉淀（spec = 固化的任务配置，运行参数不沉淀） ---------- */
+/* ---------- 脚本库：一个脚本 = 一个版本基线用例（无预置 · 场景维度） ----------
+   后端契约（docs/domain-backends.md §17）：GET /accuracy/scripts 清单瘦身口径 =
+   id/name/场景/datasets/case_count/updated_at（无描述/spec，详情接口才有）；
+   case_count None = 数据集规模本地不可知（evalscope 基准跑上游全量）→ 显示 —；
+   快照/发起需要 spec → 懒加载 GET /accuracy/scripts/{id}。 */
 const ACC_SCRIPTS = [
-  { id: "baseline-full", name: "版本精度基线 · 全量", desc: "版本发布必跑：知识 / 数学 / 代码四集基线回归", src: "custom",
-    sum: "4 数据集 · 每子集 100 · seed 42 · 阈值 auto",
-    snap: [
-      ["数据集", "ceval（知识问答 · 52 科）· mmlu（英文学科）· gsm8k（数学推理）· humaneval（代码生成）"],
-      ["抽样", "每子集 100 条 · 随机种子 seed=42（跨 run 抽样一致，结果可比）"],
-      ["Judge", "不配置（四集均为规则判分，零判官成本）"],
-      ["阈值判定", "auto（内置基准推荐阈值，选择题类按随机基线）"],
-      ["压力", "并发 eval_batch_size=10 · timeout_s 14400 · resume auto"],
-      ["扩展参数", "generation_config：temperature 0 · max_tokens 4096"],
-      ["最近执行", "v1.2.0 · 09-22 · mean_acc 0.846 达标（见趋势对比）"],
-    ], last: "v1.2.0 · 84.6 达标", upd: "09-22" },
-  { id: "baseline-smoke", name: "版本精度基线 · 冒烟", desc: "发布前快速过闸：每子集 10 条，几分钟出结果", src: "custom",
-    sum: "4 数据集 · 每子集 10 · seed 42 · 阈值 auto",
-    snap: [["数据集", "ceval · mmlu · gsm8k · humaneval（同全量基线）"],
-      ["抽样", "每子集 10 条 · seed=42"], ["阈值判定", "auto"],
-      ["最近执行", "v1.2.0 · 09-22 · mean_acc 0.861 达标"]], last: "v1.2.0 · 86.1 达标", upd: "09-22" },
-  { id: "rag-reg", name: "RAG 回归 · 金融私域", desc: "自建 RAG 集回归，token_f1 阈值门槛", src: "custom",
-    sum: "2 数据集 · 全量 76 题 · Judge deepseek · token_f1 ≥ 0.70",
-    snap: [["数据集", "finance_private（12 题）· multihoprag（64 题）"],
-      ["Judge", "deepseek（LLM 判官）"], ["阈值判定", "token_f1 ≥ 0.70"],
-      ["最近执行", "v1.2.0 · 09-18 · token_f1 0.78 达标"]], last: "v1.2.0 · 0.78 达标", upd: "09-18" },
-  { id: "preset-ceval", name: "C-Eval 中文知识基准", desc: "52 科 MCQ · 5-shot · 规则判分（examples/accuracy/ceval.yaml）", src: "preset",
-    sum: "ceval · 阈值 mean_acc ≥ 0.25（随机基线）", last: "冒烟 · 1 科", upd: "框架发布" },
-  { id: "preset-gsm8k", name: "GSM8K 数学推理", desc: "应用题 CoT · 严格匹配判分", src: "preset",
-    sum: "gsm8k · 阈值 exact_match ≥ 0.60", last: "—", upd: "框架发布" },
-  { id: "preset-humaneval", name: "HumanEval 代码生成", desc: "pass@1 · Windows 判分需 review_timeout ≥ 60", src: "preset",
-    sum: "humaneval · dataset_args: review_timeout 60", last: "—", upd: "框架发布" },
-  { id: "preset-swe", name: "SWE-bench Lite · Agent", desc: "真实 issue 修 bug · evalscope agentic 沙箱判分", src: "preset",
-    sum: "swe_bench_lite_agentic · 阈值 resolve_rate ≥ 0.30", last: "v1.2.0 · 0.824 达标", upd: "框架发布" },
-  { id: "preset-aime26", name: "AIME26 竞赛数学", desc: "LLM 判官类基准 · 必须显式配 Judge", src: "preset",
-    sum: "aime26 · Judge deepseek · 阈值 accuracy ≥ 0.20", last: "—", upd: "框架发布" },
+  { id: "baseline-full", name: "版本精度基线 · 全量", scenario: "release-baseline", scenario_name: "版本发布基线",
+    datasets: ["ceval", "mmlu", "gsm8k", "humaneval"], case_count: null, upd: "09-22 10:12" },
+  { id: "baseline-smoke", name: "版本精度基线 · 冒烟", scenario: "release-baseline", scenario_name: "版本发布基线",
+    datasets: ["ceval", "mmlu", "gsm8k", "humaneval"], case_count: null, upd: "09-22 10:08" },
+  { id: "rag-reg-fin", name: "RAG 回归 · 金融私域", scenario: "rag-regression", scenario_name: "RAG 回归",
+    datasets: ["finance_private", "multihoprag"], case_count: 76, upd: "09-18 16:40" },
+  { id: "agent-swe-lite", name: "SWE-bench Lite · Agent", scenario: "agent-capability", scenario_name: "Agent 能力",
+    datasets: ["swe_bench_lite_agentic"], case_count: null, upd: "09-15 11:02" },
 ];
+let ACC_SCEN_FILTER = "";        // 当前场景筛选（"" = 全部）；api-acc3.js live 时回填
+function accCaseCount(v) { return v === null || v === undefined ? "—" : String(v); }
 function renderAccScriptsTbl() {
+  const rows = ACC_SCRIPTS.filter(x => !ACC_SCEN_FILTER || x.scenario === ACC_SCEN_FILTER);
   document.getElementById("scriptsTbl").innerHTML = `
-  <thead><tr><th>脚本</th><th>内容摘要</th><th>来源</th><th>最近执行</th><th>更新</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${ACC_SCRIPTS.map(s => `<tr>
-    <td class="rname"><b>${s.name}</b><div class="rid">${s.id} · ${s.desc}</div></td>
-    <td class="dim" style="white-space:normal">${s.sum}</td>
-    <td>${s.src === "preset" ? '<span class="tag">预置</span>' : '<span class="tag" style="color:var(--ac)">自定义</span>'}</td>
-    <td class="dim" style="white-space:normal">${s.last}</td><td class="dim">${s.upd}</td>
-    <td style="text-align:right;white-space:nowrap"><button class="btn sm primary" data-open-drawer="newRunModal" data-run-script="${s.id}">发起任务</button>
-      ${s.src === "custom" ? '<button class="btn sm">编辑</button><button class="btn sm danger">删除</button>' : '<button class="btn sm">复制</button>'}</td></tr>`).join("")}</tbody>`;
+  <thead><tr><th>脚本</th><th>场景</th><th>数据集</th><th>条数</th><th>更新</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${rows.map(x => `<tr>
+    <td class="rname"><b>${x.name}</b><div class="rid">${x.id}</div></td>
+    <td class="dim">${x.scenario_name || x.scenario || "—"}</td>
+    <td class="dim mono" style="white-space:normal">${(x.datasets || []).join(" · ") || "—"}</td>
+    <td class="num">${accCaseCount(x.case_count)}</td>
+    <td class="dim">${x.upd || "—"}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn sm primary" data-open-drawer="newRunModal" data-run-script="${x.id}">发起任务</button>
+      <button class="btn sm">编辑</button><button class="btn sm danger">删除</button></td></tr>`).join("")
+    || '<tr><td colspan="6" class="ds-empty">暂无脚本 —— 场景在「评估场景」页创建；脚本来自创建任务时「保存为脚本」沉淀或「＋ 新建脚本（自定义编排）」</td></tr>'}</tbody>`;
 }
 renderAccScriptsTbl();
 
-/* 复用面板：脚本下拉（分组）+ 内容快照联动 */
+/* 复用面板下拉：按场景分组（静态演示数据；live 时由 api-acc3.js 以真实场景重填） */
 const accScriptSel = document.getElementById("accScriptSel");
-accScriptSel.innerHTML = `<optgroup label="自定义沉淀">${ACC_SCRIPTS.filter(s => s.src === "custom").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>` +
-  `<optgroup label="研发预置">${ACC_SCRIPTS.filter(s => s.src === "preset").map(s => `<option value="${s.id}">${s.name}</option>`).join("")}</optgroup>`;
-function renderAccSnap() {
-  const s = ACC_SCRIPTS.find(x => x.id === accScriptSel.value) || ACC_SCRIPTS[0];
-  document.getElementById("accScriptSnap").innerHTML = s.snap.map(kv =>
-    `<div class="kv"><span>${kv[0]}</span><div style="font-size:12.5px;white-space:normal">${kv[1]}</div></div>`).join("");
+(function fillAccScriptSelStatic() {
+  const byScen = new Map();
+  ACC_SCRIPTS.forEach(x => {
+    const key = x.scenario_name || x.scenario || "未分组";
+    if (!byScen.has(key)) byScen.set(key, []);
+    byScen.get(key).push(x);
+  });
+  accScriptSel.innerHTML = [...byScen].map(([scen, items]) =>
+    `<optgroup label="${scen}">${items.map(x => `<option value="${x.id}">${x.name}</option>`).join("")}</optgroup>`).join("");
+})();
+
+/* 场景筛选（静态：演示数据派生；live 时 api-acc3.js 以 /accuracy/scenarios 重填） */
+function accFillScenFilter(scens) {   // scens: [{id, display_name, scripts?}]
+  const sel = document.getElementById("accScenFilter");
+  sel.innerHTML = '<option value="">全部场景</option>' + scens.map(c =>
+    `<option value="${c.id}">${c.display_name}${c.scripts != null ? `（${c.scripts}）` : ""}</option>`).join("");
+  sel.value = scens.some(c => c.id === ACC_SCEN_FILTER) ? ACC_SCEN_FILTER : "";
+  ACC_SCEN_FILTER = sel.value;
+  document.getElementById("accScenAll").classList.toggle("on", !ACC_SCEN_FILTER);
+  document.querySelector("#accScenAll small").textContent = String(ACC_SCRIPTS.length);
+}
+document.getElementById("accScenFilter").addEventListener("change", e => {
+  ACC_SCEN_FILTER = e.target.value;
+  document.getElementById("accScenAll").classList.toggle("on", !ACC_SCEN_FILTER);
+  renderAccScriptsTbl();
+});
+document.getElementById("accScenAll").addEventListener("click", () => {
+  ACC_SCEN_FILTER = "";
+  document.getElementById("accScenFilter").value = "";
+  document.getElementById("accScenAll").classList.add("on");
+  renderAccScriptsTbl();
+});
+/* ---------- 评估场景页（静态演示卡；live 时 api-acc3.js 以 /accuracy/scenarios 重渲染） ---------- */
+const ACC_SCENS = [
+  { id: "release-baseline", display_name: "版本发布基线", dimension: "基线", description: "版本发布必跑的全量 / 冒烟精度基线，同脚本跨版本可比" },
+  { id: "rag-regression", display_name: "RAG 回归", dimension: "RAG", description: "金融私域知识问答与多跳检索回归" },
+  { id: "agent-capability", display_name: "Agent 能力", dimension: "Agent", description: "SWE-bench 等智能体任务能力验收" },
+];
+function accScensStatic() {   // 脚本计数从演示脚本清单派生
+  return ACC_SCENS.map(c => ({ ...c, scripts: ACC_SCRIPTS.filter(x => x.scenario === c.id).length }));
+}
+function renderAccScenGrid(scens) {   // scens: [{id, display_name, dimension?, description?, scripts, cases?}]
+  const grid = document.getElementById("accSceneGrid");
+  grid.innerHTML = scens.map(c => `
+  <div class="scene-card"><b>${c.display_name}</b>
+    <div class="rid mono" style="margin:2px 0 6px">${c.id}</div><p>${c.description || "（无说明）"}</p>
+    <div class="meta"><span class="tag">${c.dimension || "未分类"}</span><span class="tag">${c.scripts ?? 0} 个脚本</span>${c.cases != null ? `<span class="tag">${c.cases} 例</span>` : ""}</div>
+    <div class="meta" style="margin-top:10px;display:flex;gap:6px">
+      <button class="btn sm primary" data-acc-view="${c.id}">查看脚本 →</button>
+      <button class="btn sm danger" data-acc-scen-del="${c.id}">删除</button></div></div>`).join("")
+    || '<div class="ds-empty">暂无评估场景 —— 点右上「＋ 新建评估场景」创建（脚本须归属场景）</div>';
+}
+document.getElementById("accSceneGrid").addEventListener("click", async e => {
+  const view = e.target.closest("[data-acc-view]");
+  if (view) {   // 跳脚本库并按场景筛出该场景脚本（live 共用同一筛选状态）
+    ACC_SCEN_FILTER = view.dataset.accView;
+    document.getElementById("accScenFilter").value = ACC_SCEN_FILTER;
+    document.getElementById("accScenAll").classList.remove("on");
+    renderAccScriptsTbl();
+    showPage("scripts");
+    return;
+  }
+  const del = e.target.closest("[data-acc-scen-del]");
+  if (del && typeof aapiDeleteScenario === "function") await aapiDeleteScenario(del.dataset.accScenDel);
+});
+accFillScenFilter(accScensStatic());
+renderAccScenGrid(accScensStatic());
+function accStaticSnap(sid) {
+  const x = ACC_SCRIPTS.find(s => s.id === sid);
+  return x ? [["场景", x.scenario_name || x.scenario || "—"],
+              ["数据集", (x.datasets || []).join(" · ") || "—"],
+              ["条数", accCaseCount(x.case_count)]] : [];
+}
+async function renderAccSnap() {
+  const el = document.getElementById("accScriptSnap");
+  const sid = accScriptSel.value || (ACC_SCRIPTS[0] || {}).id;
+  if (!sid) { el.innerHTML = '<div class="ds-empty">暂无脚本 —— 请先在「脚本库」沉淀</div>'; return; }
+  el.innerHTML = '<div class="ds-empty">加载脚本内容快照…</div>';
+  try {
+    // live：api-acc3.js 懒加载详情 → 完整快照行；静态稿：清单字段即快照
+    const rows = typeof aapiScriptSnap === "function" ? await aapiScriptSnap(sid) : accStaticSnap(sid);
+    el.innerHTML = rows.map(kv =>
+      `<div class="kv"><span>${kv[0]}</span><div style="font-size:12.5px;white-space:normal">${kv[1]}</div></div>`).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="ds-empty">快照加载失败：${e.message}</div>`;
+  }
 }
 accScriptSel.addEventListener("change", renderAccSnap);
 renderAccSnap();
@@ -717,6 +809,7 @@ const RUNS = [
   ["manual-eval-round2", "#5f19c2ab", "人工评审", "pending", null, "30", "09-18 18:03", "刘畅"],
 ];
 function renderRuns(status, owner, kw) {
+  syncStatusChips("runsFilter", RUNS, r => r[3]);
   const hits = RUNS.filter(r => (status === "all" || r[3] === status)
     && (owner === "all" || r[7] === owner)
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));

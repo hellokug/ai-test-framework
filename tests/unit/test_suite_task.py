@@ -21,6 +21,7 @@ class TestEvaluationStats:
         summary = suite_summary(self._report(rows))
         assert summary["pass_rate"] == 0.75           # (1.0*3 + 0.0*1) / 4
         assert summary["evaluated_cases"] == 4
+        assert summary["passed_cases"] == 3           # 1.0*3 + 0.0*1
         assert summary["status"] == "passed"          # 执行层与评估层并存
 
     def test_non_functional_rows_absent(self):

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from aite.core.profiles import remove_model_profile, upsert_model_profile
+from aite.utils.secrets import resolve_secret
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["models"])
@@ -37,7 +38,9 @@ async def save_model(body: ModelIn, state: Any = Depends(get_state)):
         "model": body.model, "base_url": body.base_url,
         "api_key_env": body.api_key_env, "params": body.params or None,
     })
-    return {"id": model_id, "common_profile": body.name}
+    # 注册即告知密钥可解析性（环境变量 > 密钥库）：未归档不阻断（密钥可后补录），前端据此提示
+    key_archived = not body.api_key_env or resolve_secret(body.api_key_env) is not None
+    return {"id": model_id, "common_profile": body.name, "key_archived": key_archived}
 
 
 @router.delete("/models/{model_id}")

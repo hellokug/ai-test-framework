@@ -1,10 +1,11 @@
 /* aite 静态稿 · 精度域原地对接层（api-acc3.js）—— 仅 accuracy2.html 引用。
    模式与 functional2 的 api32.js 同源：serve.py 同源反代 /api → 真数据渲染；
    后端不可达自动回退假数据（MOCK 徽标），写操作失败 toast 显式报错。
-   覆盖：任务列表/任务详情/脚本库（场景维度 · 无预置：场景新建/删除 + 脚本
-   发起/编辑/删除；清单瘦身口径 = 数据集 + 条数，spec 详情懒加载）/创建抽屉
-   （从脚本发起 + 自定义六卡 → suite raw 组装，保存为脚本须选场景）/
-   数据集选择器（benchmarks 真目录）/模型下拉。契约 = docs/domain-backends.md §17。
+   覆盖：任务列表/任务详情/评估场景（独立导航页：场景卡片 + 新建/删除，查看脚本
+   跳脚本库带筛选）/脚本库（场景筛选 · 无预置：脚本发起/编辑/删除；清单瘦身口径
+   = 数据集 + 条数，spec 详情懒加载）/创建抽屉（从脚本发起 + 自定义六卡 → suite
+   raw 组装，保存为脚本须选场景）/数据集选择器（benchmarks 真目录）/模型下拉。
+   契约 = docs/domain-backends.md §17。
    趋势对比与人工评测页本轮保持演示数据（后端聚合缺口 V1-PLAN §8.6）。
    参数映射契约 = web-ui/TOOL-SUITE-PARAMS.md（表单控件 → suite raw 键位）。 */
 "use strict";
@@ -396,6 +397,7 @@ async function wireAccScripts() {
   const [data, scens] = await Promise.all([
     AAPI.get("/accuracy/scripts"), AAPI.get("/accuracy/scenarios")]);
   setNavCount("scripts", data.count);
+  setNavCount("scenarios", scens.count);
   ACC_SCRIPT_DOCS = {};          // 清单刷新 = 详情缓存失效（编辑/删除后重取）
   ACC_SCENARIOS = scens.items;
   ACC_SCRIPTS.splice(0, ACC_SCRIPTS.length, ...data.items.map(d => ({
@@ -403,8 +405,8 @@ async function wireAccScripts() {
     datasets: d.datasets || [], case_count: d.case_count, upd: aapiShortTime(d.updated_at),
   })));
   accFillScenFilter(scens.items);
-  aapiSyncScenDelBtn();
   renderAccScriptsTbl();
+  renderAccScenGrid(scens.items);   // 评估场景页卡片（items 自带 scripts/cases 计数）
   const foot = document.querySelector('main.page-host [data-page="scripts"] .foot-note span');
   if (foot) foot.textContent = `真实后端 · ${scens.count} 个场景 / ${data.count} 个脚本 · 无预置（全部用户自建）`
     + " · 清单口径 = 数据集 + 条数（— = evalscope 基准跑上游全量，本地不可知）";
@@ -416,15 +418,40 @@ async function wireAccScripts() {
       const items = data.items.filter(d => d.scenario === c.id);
       return items.length ? `<optgroup label="${c.display_name}">${items.map(d =>
         `<option value="${d.id}">${d.name}（${d.id}）</option>`).join("")}</optgroup>` : "";
-    }).join("") || '<option value="">暂无脚本（先在脚本库新建场景，再「保存为脚本」沉淀）</option>';
+    }).join("") || '<option value="">暂无脚本（先到「评估场景」页建场景，再沉淀脚本）</option>';
     if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     renderAccSnap();
   }
 }
 
-function aapiSyncScenDelBtn() {
-  const btn = document.getElementById("accDelScenBtn");
-  if (btn) btn.hidden = !ACC_SCEN_FILTER;
+/* 场景删除（评估场景页卡片 data-acc-scen-del）：live = 后端删除（409 → 二次确认
+   级联 force）；静态稿（AAPI.live=false）= 仅移除本地演示数据 */
+async function aapiDeleteScenario(sid) {
+  if (!AAPI.live) {
+    if (!confirm(`删除场景 ${sid}？（静态演示：仅移除本地演示数据）`)) return;
+    for (let i = ACC_SCRIPTS.length - 1; i >= 0; i--)
+      if (ACC_SCRIPTS[i].scenario === sid) ACC_SCRIPTS.splice(i, 1);
+    const k = ACC_SCENS.findIndex(c => c.id === sid);
+    if (k >= 0) ACC_SCENS.splice(k, 1);
+    accFillScenFilter(accScensStatic());
+    renderAccScriptsTbl();
+    renderAccScenGrid(accScensStatic());
+    return;
+  }
+  if (!confirm(`删除场景 ${sid}？（历史任务持 spec 快照不受影响）`)) return;
+  try { await AAPI.del(`/accuracy/scenarios/${sid}`); }
+  catch (err) {
+    // 409 = 场景下仍有脚本：二次确认后级联删除（force）
+    if (!/仍有/.test(err.message) || !confirm(
+        `${err.message}\n\n级联删除将连同场景内全部脚本一并移除，不可恢复。确定？`)) {
+      aapiToast(`已取消删除 ${sid}`, true); return;
+    }
+    try { await AAPI.del(`/accuracy/scenarios/${sid}?force=true`); }
+    catch (err2) { aapiToast(`删除失败：${err2.message}`, true); return; }
+  }
+  aapiToast(`已删除场景 ${sid}`);
+  ACC_SCEN_FILTER = "";
+  await wireAccScripts();
 }
 
 async function aapiEditScript(sid) {
@@ -478,20 +505,18 @@ function bindAccScriptRows() {
   });
 }
 
-/* 场景：新建（id 英文编号 / 中文名称 / 维度标签 / 说明）+ 删除（有脚本二次确认级联） */
+/* 场景新建（「评估场景」页顶栏按钮；删除走场景卡 → aapiDeleteScenario） */
 function bindAccScenarioOps() {
-  const filter = document.getElementById("accScenFilter");
-  if (!filter || filter.dataset.accBound) return;
-  filter.dataset.accBound = "1";
-  filter.addEventListener("change", aapiSyncScenDelBtn);
-  document.getElementById("accScenAll")?.addEventListener("click", aapiSyncScenDelBtn);
-  document.getElementById("accNewScenBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("accNewScenBtn");
+  if (!btn || btn.dataset.accBound) return;
+  btn.dataset.accBound = "1";
+  btn.addEventListener("click", async () => {
     const id = prompt("场景英文编号（小写字母开头，字母/数字/-/_；目录名/接口寻址，创建后不可改）：");
     if (!id) return;
     if (!ACC_ID_RE.test(id.trim())) {
       aapiToast(`场景编号不合法：${id}（须匹配 ${ACC_ID_RE.source}）`, true); return;
     }
-    const name = prompt("场景中文名称（脚本库分组标题）：", id.trim());
+    const name = prompt("场景中文名称（评估场景卡与脚本库分组标题）：", id.trim());
     if (name === null) return;
     let tags = [];
     try { tags = (await AAPI.get("/functional/dim-tags")).items.map(t => t.name); }
@@ -504,25 +529,7 @@ function bindAccScenarioOps() {
       await AAPI.post("/accuracy/scenarios", { id: id.trim(), display_name: name.trim(),
                                                dimension: dim.trim(), description: desc.trim() });
     } catch (err) { aapiToast(`创建失败：${err.message}`, true); return; }
-    aapiToast(`场景 ${id.trim()} 已创建（目录即注册表）`);
-    ACC_SCEN_FILTER = id.trim();
-    await wireAccScripts();
-  });
-  document.getElementById("accDelScenBtn")?.addEventListener("click", async () => {
-    const sid = ACC_SCEN_FILTER;
-    if (!sid || !confirm(`删除场景 ${sid}？（历史任务持 spec 快照不受影响）`)) return;
-    try { await AAPI.del(`/accuracy/scenarios/${sid}`); }
-    catch (err) {
-      // 409 = 场景下仍有脚本：二次确认后级联删除（force）
-      if (!/仍有/.test(err.message) || !confirm(
-          `${err.message}\n\n级联删除将连同场景内全部脚本一并移除，不可恢复。确定？`)) {
-        aapiToast(`已取消删除 ${sid}`, true); return;
-      }
-      try { await AAPI.del(`/accuracy/scenarios/${sid}?force=true`); }
-      catch (err2) { aapiToast(`删除失败：${err2.message}`, true); return; }
-    }
-    aapiToast(`已删除场景 ${sid}`);
-    ACC_SCEN_FILTER = "";
+    aapiToast(`场景 ${id.trim()} 已创建（目录即注册表），卡片「查看脚本」可开始沉淀脚本`);
     await wireAccScripts();
   });
 }
@@ -539,7 +546,17 @@ const AAPI_DIM_RULES = [
 ];
 
 async function wireAccBenchmarks() {
-  const data = await AAPI.get("/tools/benchmarks?engine=evalscope");
+  let data;
+  try {
+    data = await AAPI.get("/tools/benchmarks?engine=evalscope");
+  } catch (err) {
+    // 失败要持久落在选择器上：静默留在 10 条静态演示行会被当成「全集只剩几条」
+    const list = document.getElementById("dsList");
+    if (list) list.innerHTML =
+      `<div style="color:#c0392b;padding:8px 4px;font-size:12px">基准目录加载失败：${err.message}` +
+      ` —— 下面是静态演示数据（10 条），不是开源全集；确认后端在跑后刷新本页重试</div>`;
+    throw err;   // boot 循环照常弹 toast
+  }
   DS_ITEMS.splice(0, DS_ITEMS.length, ...data.items.map(b => {
     const tags = String(b.tags || []);
     const dims = AAPI_DIM_RULES.filter(([re]) => re.test(tags)).map(([, d]) => d);
@@ -561,9 +578,10 @@ async function wireAccBenchmarks() {
 
 /* ------------------------------------------------------------- 模型下拉 */
 async function wireAccModels() {
-  const [common, db] = await Promise.all([
+  const [common, db, secrets] = await Promise.all([
     AAPI.get("/common/models").catch(() => ({ items: [] })),
     AAPI.get("/models").catch(() => ({ items: [] })),
+    AAPI.get("/secrets").catch(() => ({ items: [] })),
   ]);
   ACC_MODEL_SOURCES = [
     ...common.items.map(m => ({ key: `common:${m.name}`, profile: m.name,
@@ -587,10 +605,13 @@ async function wireAccModels() {
     judgeSel.innerHTML = '<option value="">不配置（默认 · 仅规则判分）</option>' +
       ACC_MODEL_SOURCES.filter(s => s.profile).map(s => `<option value="${s.profile}">${s.label}</option>`).join("");
   }
+  // 自定义端点的鉴权密钥：选已归档（掩码）/ 仅环境变量手填
+  document.querySelectorAll("#accModelCustom [data-keysel], #accScriptModelCustom [data-keysel]")
+    .forEach(sel => wireKeySelect(sel, secrets.items));
 }
 
 /* ------------------------------------------------- 全局版本管理（§10.6） */
-let ACC_VERSIONS = [];   // [{model, version, description}]（公共 · 版本管理登记）
+let ACC_VERSIONS = [];   // [{version, description}]（公共 · 版本管理创建，与模型无关）
 
 async function wireAccVersions() {
   const data = await AAPI.get("/versions");
@@ -600,40 +621,32 @@ async function wireAccVersions() {
 
 function renderAccVerDatalist() {
   const opts = ACC_VERSIONS.map(v =>
-    `<option value="${v.version}">${v.model}${v.description ? ` · ${v.description}` : ""}</option>`).join("");
+    `<option value="${v.version}">${v.description || ""}</option>`).join("");
   for (const id of ["accVerDl", "accVerDl2"]) {
     const dl = document.getElementById(id);
     if (dl) dl.innerHTML = opts;
   }
 }
 
-function accPickModelName(selectId) {
-  const key = document.getElementById(selectId).value;
-  if (key === "__custom__" || key === "") return null;   // 自定义端点/脚本内置 → 手填
-  const src = ACC_MODEL_SOURCES.find(s => s.key === key);
-  return src?.profile || null;
-}
-
-async function accRegisterVersion(selectId) {
-  const model = accPickModelName(selectId)
-    || prompt("模型名（被测版本挂在模型下，如 deepseek）：");
-  if (!model || !model.trim()) return;
-  const version = prompt(`为模型「${model.trim()}」登记版本号（如 v1.3.0）：`);
+/* 版本创建与模型无关：只登记版本号，发起任务时与目标模型自由组合 */
+async function accRegisterVersion() {
+  const version = prompt("输入版本号（如 v1.3.0）：");
   if (!version || !version.trim()) return;
   try {
-    await AAPI.post("/versions", { model: model.trim(), version: version.trim() });
-    aapiToast(`版本已登记：${model.trim()} ${version.trim()}（「公共 · 模型管理」页可管理）`);
+    await AAPI.post("/versions", { version: version.trim() });
+    aapiToast(`版本已创建：${version.trim()}（「公共 · 版本管理」页可管理）`);
     await wireAccVersions();
-  } catch (err) { aapiToast(`登记失败：${err.message}`, true); }
+  } catch (err) { aapiToast(`创建失败：${err.message}`, true); }
 }
 
 function aapiTargetOf(selectValue, paneId) {
   if (selectValue === "__custom__") {
     const pane = document.getElementById(paneId);
-    const inputs = pane.querySelectorAll("input.in");
+    const inputs = pane.querySelectorAll("input.in:not([data-keyenv])");
     const target = { type: "openai_compatible", base_url: inputs[0].value.trim(),
                      model: inputs[1].value.trim() };
-    const keyEnv = inputs[2].value.trim();
+    const kSel = pane.querySelector("[data-keysel]");
+    const keyEnv = kSel ? keyEnvValue(kSel) : "";
     if (keyEnv) target.api_key_env = keyEnv;
     if (!target.base_url || !target.model) throw new Error("自定义端点需填写 模型访问 url 与 模型名称");
     return target;
@@ -785,7 +798,7 @@ function bindAccSubmits() {
     try {
       const { spec } = aapiCollectCustomSpec();
       if (!ACC_SCENARIOS.length) {
-        aapiToast("暂无场景：请先到「脚本库」点「＋ 新建场景」，脚本须归属场景", true); return;
+        aapiToast("暂无场景：请先到「评估场景」页新建场景，脚本须归属场景", true); return;
       }
       const scenHint = ACC_SCENARIOS.map(c => `${c.id}（${c.display_name}）`).join("、");
       const scen = prompt(`保存到哪个场景？填场景英文编号\n可选：${scenHint}`,
@@ -852,9 +865,9 @@ async function aapiBoot() {
   bindAccScriptRows();
   bindAccScenarioOps();
   const steps = [
-    ["任务列表", wireAccTasks], ["脚本库", wireAccScripts],
+    ["任务列表", wireAccTasks], ["脚本库/评估场景", wireAccScripts],
     ["数据集目录", wireAccBenchmarks], ["模型下拉", wireAccModels],
-    ["版本登记", wireAccVersions],
+    ["版本创建", wireAccVersions],
   ];
   for (const [label, fn] of steps) {
     try {
@@ -864,11 +877,11 @@ async function aapiBoot() {
       aapiToast(`${label}对接失败（该板块保持演示数据）：${err.message}`, true);
     }
   }
-  // 「＋ 新版本」按钮：就地登记到全局版本管理（公共 · 版本管理页可统一管理）
+  // 「＋ 新版本」按钮：就地创建到全局版本管理（公共 · 版本管理页可统一管理）
   document.getElementById("accVerNewBtn")
-    ?.addEventListener("click", () => accRegisterVersion("accModelSel"));
+    ?.addEventListener("click", () => accRegisterVersion());
   document.getElementById("accVerNewBtn2")
-    ?.addEventListener("click", () => accRegisterVersion("accScriptModelSel"));
+    ?.addEventListener("click", () => accRegisterVersion());
   bindAccSubmits();
   startAccPolling();
   // 刷新后停在详情页：仅当 hash 以 #detail 开头才恢复任务视图

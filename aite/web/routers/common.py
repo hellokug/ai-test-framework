@@ -20,28 +20,25 @@ class SecretIn(BaseModel):
 
 
 class VersionIn(BaseModel):
-    model: str
     version: str
     description: str = ""
 
 
 @router.get("/versions")
-async def list_versions(model: str | None = None,
-                        state: Any = Depends(get_state)) -> dict[str, Any]:
-    """全局版本登记清单（被测系统/模型 × 版本；?model= 按模型过滤）。"""
-    items = await state.repo.list_model_versions(model=model)
+async def list_versions(state: Any = Depends(get_state)) -> dict[str, Any]:
+    """全局版本登记清单（被测版本号，跨域共享，与模型无关）。"""
+    items = await state.repo.list_model_versions()
     return {"items": items, "count": len(items)}
 
 
 @router.post("/versions", status_code=201)
 async def create_version(body: VersionIn,
                          state: Any = Depends(get_state)) -> dict[str, Any]:
-    if not body.model.strip() or not body.version.strip():
-        raise HTTPException(422, "model 与 version 均必填")
+    if not body.version.strip():
+        raise HTTPException(422, "version 必填")
     try:
         return await state.repo.create_model_version(
-            {"model": body.model.strip(), "version": body.version.strip(),
-             "description": body.description})
+            {"version": body.version.strip(), "description": body.description})
     except FileExistsError as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -109,11 +109,27 @@ metrics: [{exact_match: {threshold: 0.5}}]
                                                    "config_yaml": "run_name: x\n"})
         assert resp.status_code == 422
 
-    def test_models_crud(self, client):
+    def test_models_crud(self, client, tmp_path, monkeypatch):
+        from aite import config
+        monkeypatch.setattr(config, "SECRET_STORE_FILE", tmp_path / "secrets.json")
+        monkeypatch.setattr(config, "SECRET_KEY_FILE", tmp_path / "secret.key")
         mid = client.post("/api/v1/models", json={
             "name": "gpt4o-mini", "model": "gpt-4o-mini"}).json()["id"]
         assert any(m["id"] == mid for m in client.get("/api/v1/models").json()["items"])
+        # 注册回告密钥可解析性（环境变量 > 密钥库）：未归档 False → 归档后 True
+        mid2 = client.post("/api/v1/models", json={
+            "name": "no-key-model", "model": "m",
+            "api_key_env": "TEST_UNARCHIVED_KEY"}).json()
+        assert mid2["key_archived"] is False
+        client.put("/api/v1/secrets/TEST_UNARCHIVED_KEY", json={"value": "sk-test-123"})
+        mid3 = client.post("/api/v1/models", json={
+            "name": "archived-key-model", "model": "m",
+            "api_key_env": "TEST_UNARCHIVED_KEY"}).json()
+        assert mid3["key_archived"] is True
         assert client.delete(f"/api/v1/models/{mid}").json()["deleted"] is True
+        for extra in (mid2["id"], mid3["id"]):
+            client.delete(f"/api/v1/models/{extra}")
+        client.delete("/api/v1/secrets/TEST_UNARCHIVED_KEY")
 
     def test_run_launch_with_mock(self, client, tmp_path, monkeypatch):
         qa = tmp_path / "qa.jsonl"

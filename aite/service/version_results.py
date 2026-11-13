@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -130,4 +131,24 @@ def compute_board(rows: list[dict], target: str, baseline: str) -> dict:
 
 async def board(repo: Any, *, model: str, target: str, baseline: str) -> dict:
     rows = await repo.list_version_results(domain="functional", model=model)
-    return compute_board(rows, target, baseline)
+    out = compute_board(rows, target, baseline)
+    out["dimensions"] = await _attach_display_names(out["dimensions"])
+    return out
+
+
+async def _attach_display_names(matrix: list[dict]) -> list[dict]:
+    """维度行补中文名称（场景 manifest.display_name）。
+
+    归档键 = 场景 id（英文编号，引擎口径）；中文显示名在读取时经资产层
+    join——场景删除/重建后按当前登记取名，找不到回退 id 本身。
+    """
+    from aite.service import functional_assets as assets  # 懒加载避免环依赖风险
+
+    try:
+        names = {s["id"]: s.get("display_name") or s["id"]
+                 for s in await asyncio.to_thread(assets.scan_scenarios)}
+    except Exception as exc:   # 资产层不可用不拖垮大屏（原则 9）
+        logger.warning("大屏维度中文名 join 失败，回退场景 id: %s", exc)
+        names = {}
+    return [{**row, "display_name": names.get(row["scenario"], row["scenario"])}
+            for row in matrix]
