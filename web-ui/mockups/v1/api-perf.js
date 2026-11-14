@@ -575,6 +575,38 @@ async function wirePerfDatasets() {
   PERF_DATASETS = data.items;
   papiRenderDsTable();
   papiFillLoadDatasets();
+  await papiFillGenCorpus();
+}
+
+/* 生成抽屉语料池下拉：已登记数据集（catalog，含 HF 导入的开源语料如 ShareGPT）
+   + 性能产物 → 选中回填 genCorpus 路径框（仍可手改）。catalog 拉不到（mock/离线）时仅列产物。 */
+async function papiFillGenCorpus() {
+  const sel = document.getElementById("genCorpusSel");
+  if (!sel) return;
+  const cnt = s => (s && s.count != null) ? `${s.count} 条` : "—";
+  const seen = new Set();
+  const opt = (label, path) => {
+    if (!path || seen.has(path)) return "";
+    seen.add(path);
+    return `<option value="${papiEsc(path)}">${papiEsc(label)}</option>`;
+  };
+  let rows = [];
+  try { rows = (await PAPI.get("/datasets")).items || []; } catch { /* mock 容错 */ }
+  let html = '<option value="">— 选择已登记数据集 / 性能产物，或下方手填路径 —</option>';
+  html += '<optgroup label="性能产物（生成 / 真实负载导入）">';
+  html += PERF_DATASETS.map(d => opt(`产物 ${d.file}（${cnt(d.stats)}）`, d.path)).join("");
+  html += rows.filter(r => r.type === "perf")
+    .map(r => opt(`perf:${r.name}（${cnt(r.stats)}）`, r.path)).join("");
+  html += "</optgroup>";
+  html += '<optgroup label="开源 / 题库数据集（accuracy：对话数组可直接当语料池）">';
+  html += rows.filter(r => r.type === "accuracy")
+    .map(r => opt(`accuracy:${r.name}（${cnt(r.stats)}）`, r.path)).join("");
+  html += "</optgroup>";
+  sel.innerHTML = html;
+  sel.onchange = () => {
+    const input = document.getElementById("genCorpus");
+    if (sel.value && input) input.value = sel.value;
+  };
 }
 
 /* ------------------------------------------------------------- 模型下拉 */

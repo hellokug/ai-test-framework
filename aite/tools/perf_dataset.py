@@ -4,7 +4,8 @@
 复用会导致输出长度随模型漂移（结果不可复现不可比）、缓存命中只有一个固定档位
 （synthetic 刻意零命中），无法代表 RAG 等高共享前缀场景。本模块从语料池按
 场景配置确定性生成压测专用负载（jsonl，input 字段），两引擎经 ``perf.dataset``
-直接消费；REST ``POST /perf/datasets`` 供前端对接。
+直接消费；REST ``POST /perf/datasets`` 供前端对接。语料池支持 .txt/.md 整篇
+文本与 .jsonl/.json/.csv 记录文件（INPUT_KEYS 扁平字段或 ShareGPT 对话数组）。
 
 设计约束：纯函数无 LLM 依赖；同 seed + 同语料 + 同配置 → 逐字节一致（可复现、
 曲线可比）；长度以字符计量（与 synthetic.prompt_length 口径一致）。
@@ -28,13 +29,17 @@ _PREFIX_RATIO = 0.8         # 共享前缀占目标长度的比例（其余为�
 
 
 def load_corpus(path: str | Path) -> list[str]:
-    """语料池：目录（.txt/.md/.jsonl）或单文件 → 文本块池（确定性顺序）。"""
+    """语料池：目录（.txt/.md/.jsonl/.json/.csv）或单文件 → 文本块池（确定性顺序）。
+
+    记录文件逐条取 INPUT_KEYS 扁平字段，没有则取 ShareGPT 对话数组的全部
+    话轮——真实对话日志（conversations/messages 形状）免拍平直接入池。
+    """
     p = Path(path)
     if p.is_dir():
-        files = sorted(x for x in p.iterdir()
-                       if x.is_file() and x.suffix.lower() in (".txt", ".md", ".jsonl"))
+        files = sorted(x for x in p.iterdir() if x.is_file()
+                       and x.suffix.lower() in (".txt", ".md", ".jsonl", ".json", ".csv"))
         if not files:
-            raise ValueError(f"语料池目录为空（需 .txt/.md/.jsonl）: {p}")
+            raise ValueError(f"语料池目录为空（需 .txt/.md/.jsonl/.csv）: {p}")
         texts: list[str] = []
         for f in files:
             texts.extend(_read_corpus_file(f))
@@ -49,23 +54,26 @@ def load_corpus(path: str | Path) -> list[str]:
 
 
 def _read_corpus_file(f: Path) -> list[str]:
-    if f.suffix.lower() == ".jsonl":
-        texts = []
-        for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError as exc:
-                raise ValueError(f"{f.name}:{lineno}: 行不是合法 JSON: {exc}") from exc
-            hit = next((rec[k] for k in INPUT_KEYS
-                        if isinstance(rec.get(k), str) and rec[k].strip()), None)
-            if hit is None:
-                raise ValueError(f"{f.name}:{lineno}: 无文本字段（{INPUT_KEYS}）")
+    """文本文件整篇入池；记录文件（jsonl/json/csv）逐条取文本。"""
+    if f.suffix.lower() in (".txt", ".md"):
+        return [f.read_text(encoding="utf-8")]
+    from aite.datasets.local import _read_records, conversation_texts
+
+    texts: list[str] = []
+    for lineno, rec in enumerate(_read_records(f), 1):
+        if not isinstance(rec, dict):
+            raise ValueError(f"{f.name}: 第 {lineno} 条记录须为对象")
+        hit = next((rec[k] for k in INPUT_KEYS
+                    if isinstance(rec.get(k), str) and rec[k].strip()), None)
+        if hit:
             texts.append(hit)
-        return texts
-    return [f.read_text(encoding="utf-8")]
+            continue
+        turns = conversation_texts(rec)
+        if not turns:
+            raise ValueError(f"{f.name}: 第 {lineno} 条记录无文本字段"
+                             f"（{INPUT_KEYS} 之一或 ShareGPT 对话数组）")
+        texts.extend(turns)
+    return texts
 
 
 def _chunk(texts: list[str]) -> list[str]:

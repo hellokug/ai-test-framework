@@ -261,7 +261,10 @@
   <div class="drawer-head"><h3>生成压测场景数据集</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body">
     <div class="field"><label>场景名</label><input class="in" id="genName" value="rag-prefix-50"></div>
-    <div class="field"><label>语料池（目录或 jsonl）</label><input class="in" id="genCorpus" value="./data/corpora/business.txt"></div>
+    <div class="field"><label>语料池（开源语料池 / 已登记数据集 / 性能产物 / 手填路径）</label>
+      <select class="in" id="genCorpusSel" style="margin-bottom:6px"></select>
+      <input class="in" id="genCorpus" value="./data/corpora/business.txt" placeholder="目录或 .txt/.md/.jsonl/.json/.csv 文件路径">
+      <span class="hint">下拉联已登记数据集（含 HF 导入的开源语料，如 ShareGPT——对话数组自动取话轮）与性能产物；选中即回填上方路径，可再手改</span></div>
     <div class="form-grid">
       <div class="field"><label>条数 count</label><input class="in" id="genCount" value="2000"></div>
       <div class="field"><label>seed</label><input class="in" id="genSeed" value="42"></div>
@@ -517,6 +520,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=2"></script>
+<script src="api-perf.js?v=3"></script>
 </body>
 </html>

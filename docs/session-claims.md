@@ -11,5 +11,3 @@ docs/efficiency-log.md / HANDOVER，本文件只留活跃租约。同一域同�
 
 ## 在认领
 
-- 2026-11-13 | perf 真实负载导入：csv/jsonl/ShareGPT 对话数组 → perf 型数据集上传 + 语料池对话格式适配 | aite/datasets/local.py + aite/tools/perf_dataset.py + aite/service/dataset_files.py + aite/web/routers + tests + docs/dataset-guide.md + roadmap | 本轮内
-

@@ -127,3 +127,58 @@ class TestValidation:
         for cfg, err in cases:
             with pytest.raises(ValueError, match=err):
                 generate_perf_dataset(cfg)
+
+
+class TestCorpusFormats:
+    """语料池新格式：ShareGPT 对话数组（免拍平入池）+ csv（Excel 另存直用）。"""
+
+    def _sharegpt_rec(self) -> dict:
+        return {"conversations": [
+            {"from": "human", "value": "请解释同业拆借利率的形成机制，包括报价行报价、"
+             "剔除极值与加权平均的完整过程，内容尽量详细以便测试。"},
+            {"from": "gpt", "value": "同业拆借利率由多家报价行每日报出，剔除最高最低后取"
+             "平均得到，反映银行间短期资金成本，是浮息资产定价的重要基准。"},
+            {"from": "human", "value": "那 Shibor 与 LPR 之间是什么关系？请从期限结构、"
+             "报价机制与传导路径三个角度分别展开说明。"},
+            {"from": "gpt", "value": "Shibor 反映银行间批发资金利率，LPR 在政策利率基础上"
+             "加点形成，两者通过银行负债成本传导联动，但期限结构并不相同。"},
+        ]}
+
+    def test_sharegpt_conversations_corpus(self, tmp_path):
+        ds = tmp_path / "corpus.jsonl"
+        ds.write_text("".join(json.dumps(self._sharegpt_rec(), ensure_ascii=False)
+                              + "\n" for _ in range(4)), encoding="utf-8")
+        pool = load_corpus(ds)
+        assert len(pool) >= 2
+        joined = "\n".join(pool)
+        assert "报价行" in joined and "LPR" in joined     # human + gpt 话轮都入池
+
+    def test_messages_role_content_corpus(self, tmp_path):
+        """OpenAI 风格 messages/role/content 同样识别。"""
+        rec = {"messages": [
+            {"role": "user", "content": "帮忙起草一份数据中心机房巡检操作说明，覆盖配电、"
+             "温湿度与消防三部分，每部分列出检查项与合格标准。"},
+            {"role": "assistant", "content": "机房巡检操作说明：一、配电系统检查 UPS 输入"
+             "输出状态、电池温度与负载率并记录读数；二、环境检查精密空调运行状态与温湿度。"},
+        ]}
+        ds = tmp_path / "corpus.jsonl"
+        ds.write_text("".join(json.dumps(rec, ensure_ascii=False) + "\n"
+                              for _ in range(8)), encoding="utf-8")
+        assert "巡检" in "\n".join(load_corpus(ds))
+
+    def test_csv_corpus_input_column(self, tmp_path):
+        rows = ["id,input,output"]
+        for i in range(12):
+            rows.append(f"{i},这是第{i}条客服会话记录，客户咨询了账单分期手续费的详细"
+                        f"计算方式、适用期数与当月优惠活动说明,客服已按标准话术解答")
+        ds = tmp_path / "corpus.csv"
+        ds.write_text("\n".join(rows), encoding="utf-8")
+        pool = load_corpus(ds)
+        assert len(pool) >= 2
+        assert "账单分期" in "\n".join(pool)
+
+    def test_record_without_text_raises(self, tmp_path):
+        ds = tmp_path / "corpus.jsonl"
+        ds.write_text('{"id": 1, "meta": {"a": "b"}}\n', encoding="utf-8")
+        with pytest.raises(ValueError, match="无文本字段"):
+            load_corpus(ds)

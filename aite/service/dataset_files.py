@@ -244,8 +244,15 @@ def _parse_fields(fields: Any) -> dict[str, str] | None:
 async def hf_import(repo: Any, *, hf_id: str, name: str | None = None,
                     split: str = "test", subset: str | None = None,
                     n: int | None = None, seed: int = 42,
-                    fields: Any = None, notes: str = "") -> dict:
-    """HF 镜像仓导入（add_hf 管线）→ 落位 → 双登记（外部注册表 + catalog）。"""
+                    fields: Any = None, notes: str = "",
+                    dataset_type: str = "accuracy") -> dict:
+    """HF 镜像仓导入（add_hf 管线）→ 落位 → 双登记（外部注册表 + catalog）。
+
+    dataset_type 默认 accuracy（题库）；perf 用于开源语料池场景（如
+    ShareGPT：对话数组不经映射可直作语料池，配 fields 映射到扁平输入列
+    则可作压测负载）。
+    """
+    check_type(dataset_type)
     from aite.datasets.add_hf import add_hf_dataset
 
     mapping = _parse_fields(fields)
@@ -255,7 +262,7 @@ async def hf_import(repo: Any, *, hf_id: str, name: str | None = None,
     ds_id = path.stem
     registry = userstore.load_registry().get(ds_id, {})
     return await register_entry(
-        repo, dataset_type="accuracy", name=ds_id, source="hf",
+        repo, dataset_type=dataset_type, name=ds_id, source="hf",
         path=str(path).replace("\\", "/"), version=split,
         stats={"count": registry.get("n")},
         notes=notes or f"hf:{hf_id}" + (f" ({subset})" if subset else ""))

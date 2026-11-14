@@ -375,6 +375,35 @@ class TestDatasetsApi:
             "hf_id": "x/y", "fields": "inputquestion"})
         assert bad.status_code == 422
 
+    def test_hf_import_as_perf_corpus(self, client, tmp_path, monkeypatch):
+        """开源语料池导为 perf 型：ShareGPT 对话数组直作语料池（免字段映射）。"""
+        conversations = [
+            {"from": "human", "value": "请解释同业拆借利率的形成机制，包括报价行报价、"
+             "剔除极值与加权平均的完整过程说明内容。"},
+            {"from": "gpt", "value": "同业拆借利率由多家报价行每日报出，剔除最高最低后"
+             "取平均得到，反映银行间短期资金成本，是浮息资产定价基准。"},
+        ]
+
+        def fake_add_hf(hf_id, name=None, **kw):
+            p = tmp_path / "sharegpt_pool.jsonl"
+            p.write_text("".join(json.dumps({"conversations": conversations},
+                                            ensure_ascii=False) + "\n"
+                                 for _ in range(12)), encoding="utf-8")
+            return p
+
+        monkeypatch.setattr("aite.datasets.add_hf.add_hf_dataset", fake_add_hf)
+        resp = client.post("/api/v1/datasets/hf/import", json={
+            "hf_id": "Ryoo72/sharegpt", "name": "sharegpt_pool", "type": "perf",
+            "n": 100})
+        assert resp.status_code == 201
+        row = resp.json()
+        assert row["type"] == "perf" and row["source"] == "hf"
+        assert client.get("/api/v1/datasets/perf:sharegpt_pool").status_code == 200
+        # 落盘的对话数组 jsonl 可直接当生成器语料池（INPUT_KEYS 无扁平字段也行）
+        from aite.tools.perf_dataset import load_corpus
+        pool = load_corpus(row["path"])
+        assert len(pool) >= 2 and "报价行" in "\n".join(pool)
+
     def test_remote_import_pulls_and_registers(self, client, monkeypatch):
         from aite.service import dataset_files
 

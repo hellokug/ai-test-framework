@@ -48,6 +48,7 @@ class DatasetUploadIn(BaseModel):
 class HfImportIn(BaseModel):
     hf_id: str
     name: str | None = None
+    type: str = "accuracy"  # accuracy（题库）/ perf（开源语料池·负载）
     split: str = "test"
     subset: str | None = None
     n: int | None = None
@@ -142,9 +143,9 @@ async def hf_import(body: HfImportIn, state: Any = Depends(get_state)):
     """HF 镜像仓导入（下载→字段映射→采样→落位→登记，之后完全离线可用）。"""
     try:
         return await dataset_files.hf_import(
-            state.repo, hf_id=body.hf_id, name=body.name, split=body.split,
-            subset=body.subset, n=body.n, seed=body.seed, fields=body.fields,
-            notes=body.notes)
+            state.repo, hf_id=body.hf_id, name=body.name,
+            dataset_type=body.type, split=body.split, subset=body.subset,
+            n=body.n, seed=body.seed, fields=body.fields, notes=body.notes)
     except RuntimeError as exc:          # datasets 库未安装
         raise HTTPException(400, str(exc)) from exc
     except ValueError as exc:            # 字段映射/记录形状问题
