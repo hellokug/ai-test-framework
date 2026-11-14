@@ -505,6 +505,64 @@ class TestDatasetLoad:
             PerfAdapter().build_config(make_request(
                 perf={"prompt": "p", "max_tokens": [1, 2, 3]}))
 
+    def test_generation_params_passthrough(self):
+        """生成/采样参数透传 evalscope CLI；显式配置才上旗标（留空 = 端点缺省）。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "parallel": [2], "number": 2,
+            "temperature": 0.7, "top_p": 0.9, "top_k": 50, "seed": 42,
+            "min_tokens": 16, "stop": ["END", "###"],
+            "query_template": '{"model": "m", "stream": true}',
+            "apply_chat_template": False,
+            "frequency_penalty": 0.5, "repetition_penalty": 1.1}))
+        args = cfg["args"]
+        assert args[args.index("--temperature") + 1] == "0.7"
+        assert args[args.index("--top-p") + 1] == "0.9"
+        assert args[args.index("--top-k") + 1] == "50"
+        assert args[args.index("--seed") + 1] == "42"
+        assert args[args.index("--min-tokens") + 1] == "16"
+        s = args.index("--stop")
+        assert args[s + 1:s + 3] == ["END", "###"]
+        assert args[args.index("--query-template") + 1] \
+            == '{"model": "m", "stream": true}'
+        assert "--no-apply-chat-template" in args
+        assert args[args.index("--frequency-penalty") + 1] == "0.5"
+        assert args[args.index("--repetition-penalty") + 1] == "1.1"
+        plain = PerfAdapter().build_config(make_request(
+            perf={"prompt": "p", "parallel": [2], "number": 2}))["args"]
+        for flag in ("--temperature", "--top-p", "--top-k", "--seed",
+                     "--min-tokens", "--stop", "--query-template",
+                     "--apply-chat-template", "--no-apply-chat-template",
+                     "--frequency-penalty", "--repetition-penalty"):
+            assert flag not in plain
+
+    def test_dataset_meta_output_tokens_priority(self, tmp_path):
+        """max_tokens 优先级：任务显式 > 数据集 meta.output_tokens 定长兜底。"""
+        from aite.tools.perf_common import dataset_output_tokens
+
+        ds = tmp_path / "scene-1.jsonl"
+        ds.write_text(json.dumps({"input": "问一"}) + "\n", encoding="utf-8")
+        (tmp_path / "scene-1.stats.json").write_text(
+            json.dumps({"output_tokens": 256}), encoding="utf-8")
+        perf = {"dataset": str(ds), "mode": "baseline",
+                "baseline": {"parallel": 2}, "number": 2}
+        args = PerfAdapter().build_config(
+            make_request(work_dir=tmp_path, perf=dict(perf)))["args"]
+        assert args[args.index("--max-tokens") + 1] == "256"   # meta 定长兜底
+        assert dataset_output_tokens(ds) == 256
+        # 任务显式配置优先于 meta
+        args = PerfAdapter().build_config(make_request(
+            work_dir=tmp_path,
+            perf={**perf, "max_tokens": [64, 256]}))["args"]
+        mt = args.index("--max-tokens")
+        assert args[mt + 1:mt + 3] == ["64", "256"]
+        # 无 meta 文件 / meta 无 output_tokens → 不注入
+        ds2 = tmp_path / "scene-2.jsonl"
+        ds2.write_text(json.dumps({"input": "问二"}) + "\n", encoding="utf-8")
+        args = PerfAdapter().build_config(make_request(
+            work_dir=tmp_path, perf={**perf, "dataset": str(ds2)}))["args"]
+        assert "--max-tokens" not in args
+        assert dataset_output_tokens(ds2) is None
+
 
 SUMMARY = {
     "Test Duration (s)": 14.55, "Concurrency": 4, "Total Requests": 8,

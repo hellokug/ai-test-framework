@@ -133,7 +133,7 @@
       <div class="card"><div class="card-head"><div><h3>并发阶梯</h3></div></div><div class="chart" data-chart="cUsers"></div></div>
     </div>
     <section class="card">
-      <div class="card-head"><div><h3>错误统计</h3><div class="sub">错误码/文本 × 次数 · chaos 注入窗在全图叠加阴影</div></div></div>
+      <div class="card-head"><div><h3>错误统计</h3><div class="sub">错误码/文本 × 次数 · 按档级聚合</div></div></div>
       <div class="chart" data-chart="cErr" style="height:200px"></div>
     </section>
   </section>
@@ -153,6 +153,8 @@
   <div class="drawer-head"><h3>新建压测任务</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body" data-src-toggle>
 
+    <div class="field" style="margin-top:0"><label>任务名称</label><input class="in" id="perfTaskName2" placeholder="留空自动生成，如 baseline-u8-1114"></div>
+
     <div class="chips" style="margin:0 0 14px">
       <span class="ds-flabel" style="margin-right:4px">脚本来源</span>
       <span class="chip on" data-src="script">从脚本发起（复用）</span>
@@ -169,9 +171,6 @@
         <div class="detail-stack" id="perfScriptSnap" style="margin-top:0"></div>
       </div>
       <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>本次运行参数</b><small>只指定 对谁测 · 编排不改动</small></div>
-        <div class="form-grid">
-          <div class="field"><label>任务名称</label><input class="in" placeholder="留空自动生成，如 baseline-u8-v130-0930"></div>
-        </div>
         <div class="field"><label>目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」；选「自定义」可临时手填端点，免登记直接跑</span></span></label>
           <select class="in" id="perfScriptModelSel" style="max-width:380px">
             <option>DeepSeek-V3 · api.deepseek.com（鉴权 OPENAI_API_KEY）</option>
@@ -189,7 +188,7 @@
       </div>
       <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
         <div class="dim" style="font-size:12.5px;line-height:1.7">
-          ✓ <b style="color:var(--tx)">脚本发起 = 压测编排整体复用</b>：spec 按脚本固化值下发（含 chaos 注入声明如有）；
+          ✓ <b style="color:var(--tx)">脚本发起 = 压测编排整体复用</b>：spec 按脚本固化值下发；
           需要调整并发/负载时切「自定义编排」，调好后「保存为脚本」沉淀为新基线用例。
         </div>
       </div>
@@ -212,16 +211,12 @@
           </div>
           <span class="hint">probe 仅 evalscope-perf；locust 必配时长键（无请求数上限语义）</span></div>
         </div>
-        <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>负载来源</b><small>三选一</small></div>
-        <div class="field"><label>负载</label>
+        <div class="form-sec"><div class="sec-head"><span class="sec-num">2</span><b>负载来源</b><small>数据集 · 二选一</small></div>
+        <div class="field"><label>数据集</label>
           <div class="radio-cards three">
-            <div class="radio-card" data-load="prompt"><b>固定 prompt</b><small>与 v1 直配同构</small></div>
-            <div class="radio-card on" data-load="dataset"><b>平台数据集</b><small>perf 型场景（长度分布可控）</small></div>
-            <div class="radio-card" data-load="synthetic"><b>synthetic</b><small>count + prompt_length 确定性生成</small></div>
+            <div class="radio-card on" data-load="dataset"><b>平台数据集</b><small>「性能数据集」页生成的场景负载（长度分布/前缀共享可控）</small></div>
+            <div class="radio-card" data-load="synthetic"><b>固定输入输出</b><small>给输入/输出长度与条数，运行时自动生成临时数据集</small></div>
           </div></div>
-        <div class="field"><label>数据集（perf 型）</label>
-          <select class="in" id="perfDatasetSel"><option>rag-prefix-50（2000 条 · 前缀共享率 0.5 · 80~640 tok）</option><option>qa-uniform（1000 条 · 均匀分布）</option></select>
-          <span class="hint">在「性能数据集」页生成与管理</span></div>
         <div id="perfLoadExtra"></div>
         </div>
         <div class="form-sec"><div class="sec-head"><span class="sec-num">3</span><b>压力参数</b><small>并发 / QPS / 时长</small></div>
@@ -243,12 +238,29 @@
           </div>
           <span class="hint">密钥不落库：仅存环境变量名，运行时解析</span>
         </div>
-        <div class="field" style="margin-top:10px"><label>任务名称</label><input class="in" id="perfTaskName2" placeholder="留空自动生成"></div>
-        <div class="field"><label>max_tokens（定长或 [min,max]）</label><input class="in" id="perfMaxTokIn" value="[128, 512]"></div>
-        <details><summary class="check" style="margin:6px 0 12px">高级（阈值判定 / chaos 注入）</summary>
+        <div class="seg-title">生成 / 采样参数（显式填写才透传引擎 · 留空 = 端点缺省）</div>
+        <div class="form-grid">
+          <div class="field"><label>max_tokens（定长或 [min,max]）</label><input class="in" id="perfMaxTokIn" placeholder="如 512 或 [128, 512]"></div>
+          <div class="field"><label>temperature</label><input class="in" id="perfTempIn" placeholder="缺省 0.0"></div>
+          <div class="field"><label>top_p</label><input class="in" id="perfTopPIn" placeholder="如 0.9"></div>
+          <div class="field"><label>top_k</label><input class="in" id="perfTopKIn" placeholder="如 50"></div>
+          <div class="field"><label>seed</label><input class="in" id="perfSeedIn" placeholder="如 42（复现）"></div>
+        </div>
+        <details><summary class="check" style="margin:6px 0 8px">更多生成参数（请求体模板 / 惩罚 / 停止词 / tokenizer）</summary>
+          <div class="form-grid">
+            <div class="field"><label>query_template<span class="qmark">?<span class="tip">请求体 JSON 模板（messages 由负载数据自动填充）；@file.json 引用文件</span></span></label><input class="in" id="perfTplIn" placeholder='如 {"model": "m", "stream": true}'></div>
+            <div class="field"><label>apply_chat_template</label><select class="in" id="perfChatTplIn"><option value="">端点缺省</option><option value="true">应用（chat 模板）</option><option value="false">不应用（原文补全）</option></select></div>
+            <div class="field"><label>min_tokens</label><input class="in" id="perfMinTokIn" placeholder="如 16（最短输出）"></div>
+            <div class="field"><label>frequency_penalty</label><input class="in" id="perfFreqIn" placeholder="如 0.5"></div>
+            <div class="field"><label>repetition_penalty</label><input class="in" id="perfRepIn" placeholder="如 1.1"></div>
+            <div class="field"><label>stop（停止词 · 逗号分隔）</label><input class="in" id="perfStopIn" placeholder="如 END, ###"></div>
+            <div class="field"><label>tokenizer_path</label><input class="in" id="perfTokIn" placeholder="本地 tokenizer 路径（真实 token 数统计）"></div>
+          </div>
+        </details>
+        <span class="hint">参数优先级：此处显式填写 &gt; 数据集 meta 的 output_tokens（选平台数据集且 max_tokens 留空时按其定长兜底）；「固定输入输出」的输出长度即定长 max_tokens，优先于本区 max_tokens</span>
+        <details><summary class="check" style="margin:6px 0 12px">高级（阈值判定）</summary>
           <div class="field"><label>阈值判定 metric_thresholds（JSON：{指标: 阈值}；时延/错误率 ≤，吞吐 ≥）</label>
             <input class="in" id="perfThrIn" placeholder='如 {"ttft_p95_ms": 500, "error_rate": 0.01}；留空不判定'></div>
-          <div class="field"><label>chaos 故障注入（复用可靠性选择器 · 本轮未对接）</label><select class="in"><option>不注入</option><option>process:suspend ×1 @ 60s</option></select></div>
         </details>
   </div>
     </div>
@@ -477,7 +489,7 @@ const PERF_SCRIPTS = [
   { id: "ds-capacity", name: "DeepSeek 网关容量摸高", desc: "沉淀：官方端点 429 限流边界探测", src: "custom",
     sum: "locust · baseline+QPS 开环 · qps 1→10 阶梯",
     snap: [["引擎 / 模式", "locust · baseline（QPS 开环限速）"],
-      ["负载", "固定 prompt（128 tok 入 / 256 tok 出）"],
+      ["负载", "固定输入输出（128 tok 入 / 256 tok 出 · 临时数据集）"],
       ["压力参数", "qps 1,2,4,6,8,10 · arrival poisson · spawn_rate 2/s"],
       ["最近执行", "09-20 16:10 · qps 8 起持续 429（限流边界）"]], last: "09-20 16:10", upd: "09-20" },
   { id: "spike-val", name: "浪涌验证 · spike", desc: "沉淀：突发流量下错误率与恢复", src: "custom",
@@ -520,6 +532,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=3"></script>
+<script src="api-perf.js?v=4"></script>
 </body>
 </html>

@@ -13,8 +13,16 @@ TTFT/TPOT/ITL/吞吐原生分档），aite 负责编排与统一入库——不�
 - ``prompt``：固定提示词
 - ``synthetic``：合成负载 {count, prompt_length}——确定性生成固定输入
   （输入一致则输出分布一致，曲线可比）
-- ``max_tokens``：标量 = 定长；``[min, max]`` = 每请求均匀采样（输出长度分布）
+- ``max_tokens``：标量 = 定长；``[min, max]`` = 每请求均匀采样（输出长度分布）。
+  优先级：任务显式配置 > 平台数据集 meta（同名 ``.stats.json`` 的
+  ``output_tokens``，任务未配时定长兜底，输出对齐场景设计）
 - ``min/max_prompt_length`` + ``tokenizer_path``：按真实 token 数过滤输入
+
+**生成/采样参数**（显式配置才上 CLI，留空 = 端点缺省）：``temperature`` /
+``top_p`` / ``top_k`` / ``min_tokens`` / ``frequency_penalty`` /
+``repetition_penalty`` / ``seed`` / ``stop``（标量或数组）/
+``query_template``（请求体 JSON 模板，``messages`` 由负载填充，``@file``
+引用文件）/ ``apply_chat_template``（bool；chat 与 completions 端点二选）。
 
 **模式**（``perf.mode`` 四选一；省略 = 兼容直配 ``parallel``/``number``）：
 
@@ -64,6 +72,7 @@ from aite.tools.perf_common import (
     DEFAULT_TIMEOUT,
     DURATION_DRIVEN_NUMBER_CAP,
     append_metric_rows,
+    dataset_output_tokens,
     export_prompts,
     generate_synthetic_prompts,
     positive_ints,
@@ -366,6 +375,31 @@ def _assemble_args(cfg: dict, *, url: str, model: str, api_key: str,
                       ("max_prompt_length", "--max-prompt-length")):
         if cfg.get(key):
             args += [flag, str(int(cfg[key]))]
+    # 生成/采样参数透传（显式配置才上 CLI——留空保持端点缺省，不抢先覆盖；
+    # 旗标拼写对齐 evalscope perf 1.15 Arguments：query-template /
+    # apply-chat-template / frequency-penalty / repetition-penalty 等）
+    if cfg.get("temperature") is not None:
+        args += ["--temperature", str(float(cfg["temperature"]))]
+    if cfg.get("top_p") is not None:
+        args += ["--top-p", str(float(cfg["top_p"]))]
+    if cfg.get("top_k") is not None:
+        args += ["--top-k", str(int(cfg["top_k"]))]
+    if cfg.get("min_tokens") is not None:
+        args += ["--min-tokens", str(int(cfg["min_tokens"]))]
+    if cfg.get("frequency_penalty") is not None:
+        args += ["--frequency-penalty", str(float(cfg["frequency_penalty"]))]
+    if cfg.get("repetition_penalty") is not None:
+        args += ["--repetition-penalty", str(float(cfg["repetition_penalty"]))]
+    if cfg.get("seed") is not None:
+        args += ["--seed", str(int(cfg["seed"]))]
+    if cfg.get("stop"):
+        stop = cfg["stop"] if isinstance(cfg["stop"], list) else [cfg["stop"]]
+        args += ["--stop", *[str(s) for s in stop]]
+    if cfg.get("query_template"):
+        args += ["--query-template", str(cfg["query_template"])]
+    if cfg.get("apply_chat_template") is not None:
+        args.append("--apply-chat-template" if cfg["apply_chat_template"]
+                    else "--no-apply-chat-template")
     if cfg.get("no_test_connection"):
         args.append("--no-test-connection")
     return args + probe_args
@@ -483,6 +517,14 @@ class PerfAdapter(ToolAdapter):
             raise ValueError("evalscope-perf 需要 target.model")
         url, api_key = api_endpoint(req.target)
         dataset, prompt, synthetic = resolve_load(cfg)
+        # max_tokens 优先级：任务显式 > 平台数据集 meta.output_tokens 定长兜底
+        # （生成长度对齐场景设计）；其余采样参数只有任务侧一个来源，无歧义
+        if dataset and cfg.get("max_tokens") is None:
+            expect = dataset_output_tokens(dataset)
+            if expect is not None:
+                cfg = {**cfg, "max_tokens": expect}   # 拷贝，不改动原 spec dict
+                logger.info("perf.max_tokens 未指定，按数据集 meta 定长兜底: %s",
+                            expect)
         rates = _resolve_rate(cfg)   # QPS 模式（开环）：与 parallel/mode 互斥
         open_loop = rates is not None
         mode, parallel, probe_cfg = resolve_mode_parallel(cfg, allow_probe=True)

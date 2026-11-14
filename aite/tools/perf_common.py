@@ -85,6 +85,24 @@ def resolve_load(cfg: dict) -> tuple[str, str, dict | None]:
     return dataset, prompt, synthetic
 
 
+def dataset_output_tokens(dataset: str | Path) -> int | None:
+    """平台数据集 meta（同名 .stats.json）声明的期望输出长度；缺失/非法 → None。
+
+    供 perf 适配器做 max_tokens 兜底：数据集生成时 output_tokens 写 meta，
+    任务未显式配 max_tokens 时按其定长施压（输出长度对齐场景设计）。
+    """
+    meta = Path(dataset).with_suffix(".stats.json")
+    if not meta.is_file():
+        return None
+    try:
+        value = json.loads(meta.read_text(encoding="utf-8")).get("output_tokens")
+    except (OSError, ValueError):
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return None
+
+
 def resolve_mode_parallel(cfg: dict, *, allow_probe: bool) -> tuple[str | None, list[int], dict]:
     """mode 分派 → (mode, parallel, probe_cfg)。
 

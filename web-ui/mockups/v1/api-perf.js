@@ -648,10 +648,15 @@ function papiTargetOf(selectValue, paneId) {
 
 /* --------------------------------------------------- 新建抽屉（自定义编排） */
 /* spec 组装（键位契约 = perf_common.resolve_* + perf_adapter._assemble_args）：
-   perf.dataset|prompt|synthetic 三选一；mode baseline{parallel}/ramp{from,to,step}/
-   probe{sla,max_parallel,from,runs}/soak{parallel}；rate 开环与 mode/parallel 互斥；
-   duration|level_duration 二选一；locust 必配时长；引擎附加 warmup_num /
-   spawn_rate / arrival / jitter；tools.metric_thresholds 判定。 */
+   负载 = perf.dataset（平台数据集）| perf.synthetic{count,prompt_length}（固定
+   输入输出的临时数据集，输出长度另配 max_tokens 定长）二选一；mode
+   baseline{parallel}/ramp{from,to,step}/probe{sla,max_parallel,from,runs}/
+   soak{parallel}；rate 开环与 mode/parallel 互斥；duration|level_duration
+   二选一；locust 必配时长；引擎附加 warmup_num / spawn_rate / arrival / jitter。
+   生成/采样参数显式填写才透传：temperature/top_p/top_k/min_tokens/seed/stop/
+   frequency_penalty/repetition_penalty/query_template/apply_chat_template/
+   tokenizer_path。max_tokens 优先级：任务显式 > 数据集 meta.output_tokens
+   （平台数据集未配 max_tokens 时后端按其定长兜底）。tools.metric_thresholds 判定。 */
 function papiFieldVal(labelRe) {
   const f = [...document.querySelectorAll("#perfParams > .field")]
     .find(el => labelRe.test(el.querySelector("label")?.textContent || ""));
@@ -673,16 +678,22 @@ function papiRenderLoadExtra() {
   const kind = document.querySelector('#newTaskDrawer .radio-cards.three .radio-card.on')?.dataset.load || "dataset";
   const box = document.getElementById("perfLoadExtra");
   if (!box) return;
-  if (kind === "prompt") {
-    box.innerHTML = `<div class="field"><label>固定 prompt</label>
-      <input class="in" id="perfPromptIn" placeholder="压测请求文本（每请求同一 prompt，与 v1 直配同构）"></div>`;
-  } else if (kind === "synthetic") {
+  if (kind === "dataset") {
+    box.innerHTML = `<div class="field"><label>数据集（perf 型 · 平台生成物）</label>
+      <div style="display:flex;gap:8px">
+        <select class="in" id="perfDatasetSel" style="flex:1;min-width:0"></select>
+        <button class="btn sm" id="perfGenBtn" type="button">＋ 生成新数据集</button></div>
+      <span class="hint">由「性能数据集」生成功能产出（长度分布/前缀共享可控）；max_tokens 留空时按数据集 meta 的 output_tokens 定长兜底</span></div>`;
+    papiFillLoadDatasets();
+    box.querySelector("#perfGenBtn")?.addEventListener("click", () => {
+      document.getElementById("genDrawer").hidden = false;
+    });
+  } else {   // 固定输入输出：临时数据集（确定性生成，跑完即弃，不选平台数据集）
     box.innerHTML = `<div class="form-grid">
-      <div class="field"><label>条数 count</label><input class="in" id="perfSynCount" placeholder="如 500"></div>
-      <div class="field"><label>每条目标字符数 prompt_length</label><input class="in" id="perfSynLen" placeholder="如 512"></div></div>
-      <span class="hint">确定性合成负载：输入一致 → 曲线可比（seed 固定算法）</span>`;
-  } else {
-    box.innerHTML = "";   // 数据集卡：复用面板里的静态 perfDatasetSel 下拉（papiFillLoadDatasets 填充）
+      <div class="field"><label>数据条数 count</label><input class="in" id="perfSynCount" placeholder="如 500"></div>
+      <div class="field"><label>输入长度 prompt_length（字符）</label><input class="in" id="perfSynLen" placeholder="如 512"></div>
+      <div class="field"><label>输出长度 output_tokens（定长）</label><input class="in" id="perfSynOut" placeholder="如 256"></div></div>
+      <span class="hint">运行时按 参数自动生成临时数据集（确定性可复现）；输出长度经 max_tokens 定长透传（vLLM 配 ignore_eos 为真定长）；本模式不选数据集，「模型参数」区的 max_tokens 不生效</span>`;
   }
 }
 
@@ -701,26 +712,50 @@ function papiCollectSpec() {
   const engine = perfCur("data-e", "evalscope-perf");
   const mode = perfCur("data-m", "baseline");
   const perf = {};
-  // 负载三选一
+  // 负载数据集二选一（prompt 键后端仍兼容，但表单不再提供）
   const kind = document.querySelector('#newTaskDrawer .radio-cards.three .radio-card.on')?.dataset.load || "dataset";
   if (kind === "dataset") {
     perf.dataset = $("perfDatasetSel")?.value || "";
-    if (!perf.dataset) throw new Error("请选择 perf 型数据集（或先到「性能数据集」页生成）");
-  } else if (kind === "prompt") {
-    perf.prompt = $("perfPromptIn")?.value.trim() || "";
-    if (!perf.prompt) throw new Error("固定 prompt 必填");
+    if (!perf.dataset) throw new Error("请选择平台数据集（或先点「＋ 生成新数据集」）");
+    // max_tokens（定长或 [min,max]）：任务显式填写 > 数据集 meta 兜底（后端规则）
+    const mtRaw = $("perfMaxTokIn")?.value.trim();
+    if (mtRaw) {
+      const m = mtRaw.match(/^\[\s*(\d+)\s*,\s*(\d+)\s*\]$/);
+      perf.max_tokens = m ? [Number(m[1]), Number(m[2])] : papiNumIn(mtRaw, "max_tokens");
+    }
   } else {
-    const count = papiNumIn($("perfSynCount")?.value.trim(), "synthetic.count");
-    const len = papiNumIn($("perfSynLen")?.value.trim(), "synthetic.prompt_length");
-    if (count === undefined || len === undefined) throw new Error("synthetic 需要条数与每条字符数");
+    // 固定输入输出：条数 + 输入长度 + 输出长度（定长 max_tokens），运行时生成临时数据集
+    const count = papiNumIn($("perfSynCount")?.value.trim(), "数据条数 count");
+    const len = papiNumIn($("perfSynLen")?.value.trim(), "输入长度 prompt_length");
+    const out = papiNumIn($("perfSynOut")?.value.trim(), "输出长度 output_tokens");
+    if (count === undefined || len === undefined || out === undefined)
+      throw new Error("固定输入输出需要 数据条数 / 输入长度 / 输出长度 三项");
     perf.synthetic = { count, prompt_length: len };
+    perf.max_tokens = out;   // 本模式输出长度即定长 max_tokens，优先于模型参数区
   }
-  // max_tokens（定长或 [min,max]）
-  const mtRaw = $("perfMaxTokIn")?.value.trim();
-  if (mtRaw) {
-    const m = mtRaw.match(/^\[\s*(\d+)\s*,\s*(\d+)\s*\]$/);
-    perf.max_tokens = m ? [Number(m[1]), Number(m[2])] : papiNumIn(mtRaw, "max_tokens");
-  }
+  // 生成/采样参数（显式填写才透传；temperature 等无数据集侧来源，仅任务侧）
+  const temperature = papiNumIn($("perfTempIn")?.value.trim(), "temperature", { int: false, min: 0 });
+  if (temperature !== undefined) perf.temperature = temperature;
+  const topP = papiNumIn($("perfTopPIn")?.value.trim(), "top_p", { int: false, min: 0, exclusive: true });
+  if (topP !== undefined) perf.top_p = topP;
+  const topK = papiNumIn($("perfTopKIn")?.value.trim(), "top_k");
+  if (topK !== undefined) perf.top_k = topK;
+  const seed = papiNumIn($("perfSeedIn")?.value.trim(), "seed", { min: 0 });
+  if (seed !== undefined) perf.seed = seed;
+  const minTok = papiNumIn($("perfMinTokIn")?.value.trim(), "min_tokens");
+  if (minTok !== undefined) perf.min_tokens = minTok;
+  const freq = papiNumIn($("perfFreqIn")?.value.trim(), "frequency_penalty", { int: false, min: -2 });
+  if (freq !== undefined) perf.frequency_penalty = freq;
+  const rep = papiNumIn($("perfRepIn")?.value.trim(), "repetition_penalty", { int: false, min: 0, exclusive: true });
+  if (rep !== undefined) perf.repetition_penalty = rep;
+  const tpl = $("perfTplIn")?.value.trim();
+  if (tpl) perf.query_template = tpl;
+  const chatTpl = $("perfChatTplIn")?.value;
+  if (chatTpl) perf.apply_chat_template = chatTpl === "true";
+  const stopRaw = $("perfStopIn")?.value.trim();
+  if (stopRaw) perf.stop = stopRaw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const tokPath = $("perfTokIn")?.value.trim();
+  if (tokPath) perf.tokenizer_path = tokPath;
   // 压力参数（动态字段按 label 采集）
   let qpsRaw = "";
   if (mode === "baseline") {
@@ -825,9 +860,6 @@ function bindPerfSubmit() {
   document.getElementById("perfSaveScript")?.addEventListener("click", () => {
     if (PAPI.live) papiToast("保存为脚本暂未落库（无 /perf/scripts 端点）：编排可用「克隆上一次任务 spec」方式暂存");
   });
-  // 负载来源卡切换 → 条件输入区重渲染（dataset/prompt/synthetic 各自控件）
-  document.querySelectorAll('#newTaskDrawer .radio-cards.three .radio-card[data-load]')
-    .forEach(c => c.addEventListener("click", () => setTimeout(papiRenderLoadExtra, 0)));
 }
 
 /* ------------------------------------------------------------------ 轮询 */
@@ -863,6 +895,12 @@ function startPerfPolling() {
 }
 
 /* ------------------------------------------------------------------ boot */
+/* 负载来源卡切换 + 初次条件渲染：顶层无条件执行（mock 模式不接后端也要出表单；
+   数据集下拉随后由 wirePerfDatasets → papiFillLoadDatasets 回填清单） */
+document.querySelectorAll('#newTaskDrawer .radio-cards.three .radio-card[data-load]')
+  .forEach(c => c.addEventListener("click", () => setTimeout(papiRenderLoadExtra, 0)));
+papiRenderLoadExtra();
+
 async function papiBoot() {
   let live = false;
   try {
@@ -897,7 +935,6 @@ async function papiBoot() {
       papiToast(`${label}对接失败（该板块保持演示数据）：${err.message}`, true);
     }
   }
-  papiRenderLoadExtra();
   // 脚本库页保持演示数据：脚注显式声明（避免被当成真实清单）
   const foot = document.querySelector('main.page-host [data-page="scripts"] .foot-note span');
   if (foot) foot.textContent = "脚本库暂未落库（无 /perf/scripts 端点）· 当前为演示数据 · 压测请从「任务列表 → 新建」自定义编排发起";
