@@ -202,22 +202,6 @@ async function showAccTask(taskId) {
   const dur = (t.started_at && t.finished_at)
     ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";
 
-  const failBlock = (f, i) => {
-    const cid = f.case_id || f.case || f.id || f.sample_id || `#${i + 1}`;
-    const why = f.reason || f.error || f.why || "";
-    const extra = { ...f };
-    delete extra.case_id; delete extra.case; delete extra.id; delete extra.sample_id;
-    delete extra.reason; delete extra.error; delete extra.why;
-    return `<details style="border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);
-        border-radius:10px;padding:8px 12px;margin-top:8px">
-      <summary style="cursor:pointer;font-size:12.5px;color:var(--bad)" class="mono">✕ ${cid}</summary>
-      ${why ? `<div class="kv" style="margin-top:8px"><span>原因</span>
-        <pre style="white-space:pre-wrap;margin:0">${String(why)}</pre></div>` : ""}
-      ${Object.keys(extra).length ? `<div class="kv"><span>明细</span>
-        <pre style="white-space:pre-wrap;margin:0;font-size:12px">${JSON.stringify(extra, null, 2)}</pre></div>` : ""}
-    </details>`;
-  };
-
   detail.innerHTML = `
     <header class="topbar">
       <div><h1>${t.name || "(未命名)"} ${badge(t.status)}</h1>
@@ -265,7 +249,7 @@ async function showAccTask(taskId) {
       <section class="card">
         <div class="card-head"><div><h3>失败样本 <span class="dim">(全部 ${failures.length} 条)</span></h3>
           <div class="sub">完整可追溯 · 详情落盘 failures.jsonl（work_dir）</div></div></div>
-        <div class="detail-stack">${failures.length ? failures.map(failBlock).join("")
+        <div class="detail-stack">${failures.length ? failures.map(accFailBlock).join("")
           : '<div class="ds-empty">无失败样本记录</div>'}</div>
       </section>
       ${runId ? `<section class="card">
@@ -297,6 +281,52 @@ async function showAccTask(taskId) {
 
 /* 逐样本明细（详情卡懒加载）：数据源 /runs/{id}/samples（reviews/*.jsonl）。
    seq 防串页：详情快速切换时旧请求不得回填新页面。 */
+
+/* 失败样本三段式分色块：输入 / 标准答案 / 模型输出各自色标+底色，一眼分清。
+   颜色约定：输入=蓝(--run) · 标准答案=绿(--ok) · 模型输出=琥珀(--warn)。 */
+const accTriBlock = (label, color, body) => {
+  const text = String(body ?? "").trim();
+  if (!text) return "";
+  return `<div style="margin-top:8px;border-left:3px solid ${color};
+      background:color-mix(in srgb,${color} 8%,transparent);
+      border-radius:6px;padding:7px 12px">
+    <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:.5px">${label}</div>
+    <pre style="white-space:pre-wrap;margin:3px 0 0;font-size:12px">${text}</pre>
+  </div>`;
+};
+
+const accTriBlocks = (s) => {
+  const input = s.question || s.input || s.prompt || s.user_input || "";
+  const golds = [...new Set([s.target, s.correct_answer, s.expected, s.answer]
+    .filter(v => v != null && String(v).trim() !== ""))];
+  const outs = [s.extracted_prediction ? `提取答案：${s.extracted_prediction}` : "",
+    s.prediction || s.output || s.response || s.generated || s.actual || ""].filter(Boolean);
+  return accTriBlock("输 入", "var(--run)", input) +
+    accTriBlock("标准答案", "var(--ok)", golds.join("\n")) +
+    accTriBlock("模型输出", "var(--warn)", outs.join("\n"));
+};
+
+/* 失败样本卡：已知三段字段抽出分色展示，其余键保留 JSON 明细兜底。 */
+const accFailBlock = (f, i) => {
+  const cid = f.case_id || f.case || f.id || f.sample_id || `#${i + 1}`;
+  const why = f.reason || f.error || f.why || f.detail || "";
+  const extra = { ...f };
+  delete extra.case_id; delete extra.case; delete extra.id; delete extra.sample_id;
+  delete extra.reason; delete extra.error; delete extra.why; delete extra.detail;
+  for (const k of ["question", "input", "prompt", "user_input", "target", "correct_answer",
+    "expected", "answer", "prediction", "output", "response", "generated", "actual",
+    "extracted_prediction"]) delete extra[k];
+  return `<details style="border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);
+      border-radius:10px;padding:8px 12px;margin-top:8px">
+    <summary style="cursor:pointer;font-size:12.5px;color:var(--bad)" class="mono">✕ ${cid}</summary>
+    ${why ? `<div class="kv" style="margin-top:8px"><span>原因</span>
+      <pre style="white-space:pre-wrap;margin:0">${String(why)}</pre></div>` : ""}
+    ${accTriBlocks(f)}
+    ${Object.keys(extra).length ? `<div class="kv"><span>明细</span>
+      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${JSON.stringify(extra, null, 2)}</pre></div>` : ""}
+  </details>`;
+};
+
 const accSampleBlock = (s) => {
   const mark = s.passed === true ? '<span style="color:var(--good)">✓</span>'
     : s.passed === false ? '<span style="color:var(--bad)">✕</span>'
@@ -308,13 +338,8 @@ const accSampleBlock = (s) => {
     <summary style="cursor:pointer;font-size:12.5px" class="mono">${mark} ${s.dataset || "—"}
       #${s.index ?? s.sample_id ?? "?"} · 得分 ${score}${s.extracted_prediction ? ` · 答 ${s.extracted_prediction}` : ""}${s.target ? ` · 标 ${s.target}` : ""}
       ${q1 ? `<span class="dim" style="font-weight:400"> · ${q1}</span>` : ""}</summary>
-    ${s.question ? `<div class="kv" style="margin-top:8px"><span>问题</span>
-      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.question}</pre></div>` : ""}
-    ${s.correct_answer && s.correct_answer !== s.target ? `<div class="kv"><span>标准答案全文</span>
-      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.correct_answer}</pre></div>` : ""}
-    <div class="kv"><span>模型原始输出</span>
-      <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.prediction || "—"}</pre></div>
-    ${s.explanation ? `<div class="kv"><span>判定说明</span>
+    ${accTriBlocks(s)}
+    ${s.explanation ? `<div class="kv" style="margin-top:8px"><span>判定说明</span>
       <pre style="white-space:pre-wrap;margin:0;font-size:12px">${s.explanation}</pre></div>` : ""}
     ${s.judge_summary ? `<div class="kv"><span>评委</span>
       <pre style="white-space:pre-wrap;margin:0;font-size:12px">${JSON.stringify(s.judge_summary)}</pre></div>` : ""}
