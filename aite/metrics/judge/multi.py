@@ -8,13 +8,13 @@ from typing import ClassVar
 from aite.core.interfaces import Judge
 from aite.core.registry import register_judge
 from aite.core.types import MetricResult
-from aite.metrics.judge.base import ScoreJudge
+from aite.metrics.judge.base import ScoreJudge, _fingerprint
+from aite.metrics.llm_based import DEFAULT_RUBRIC
 
 
 @register_judge("multi")
 class MultiJudge(Judge):
     name: ClassVar[str] = "multi"
-    prompt_version = "multi-v1"
 
     def __init__(self, threshold: float | None = None, weight: float = 1.0,
                  rubric: str | None = None, models: list[str] | None = None, **params) -> None:
@@ -23,6 +23,9 @@ class MultiJudge(Judge):
         self.model_aliases = list(models or [])
         self.aggregation = str(self.params.get("aggregation", "mean"))  # mean | median
         self.scale_max = float(self.params.get("scale_max", 10.0))
+        # judge prompt version - persisted with results for reproducibility;
+        # rubric drives each sub judge's scoring prompt
+        self.prompt_version = f"multi-v1(rubric={_fingerprint(self.rubric or DEFAULT_RUBRIC)})"
 
     async def judge(self, *, case, response, baseline=None, ctx) -> MetricResult:
         if not self.model_aliases:
@@ -52,6 +55,7 @@ class MultiJudge(Judge):
         return MetricResult(
             metric=self.name, value=round(value, 6),
             raw={"scores": sub_results, "agreement": round(agreement, 4),
-                 "models": self.model_aliases, "errors": errors},
+                 "models": self.model_aliases, "errors": errors,
+                 "prompt_version": self.prompt_version},
             passed=passed,
         )

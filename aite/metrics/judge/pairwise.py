@@ -7,7 +7,7 @@ from typing import ClassVar
 from aite.core.interfaces import Judge
 from aite.core.registry import register_judge
 from aite.core.types import MetricResult
-from aite.metrics.judge.base import SYSTEM_PROMPT, _reference_text
+from aite.metrics.judge.base import SYSTEM_PROMPT, _fingerprint, _reference_text
 from aite.metrics.llm_based import parse_json_loose
 
 PROMPT = """## Instruction
@@ -26,12 +26,13 @@ Which answer is better overall? Output JSON only: {{"winner": "A" | "B" | "tie",
 @register_judge("pairwise")
 class PairwiseJudge(Judge):
     name: ClassVar[str] = "pairwise"
-    prompt_version = "pairwise-v1"
 
     def __init__(self, threshold: float | None = None, weight: float = 1.0,
                  model: str | None = None, **params) -> None:
         super().__init__(threshold=threshold, weight=weight, **params)
         self.model_alias = model
+        # judge prompt version - persisted with results for reproducibility
+        self.prompt_version = f"pairwise-v1(prompt={_fingerprint(SYSTEM_PROMPT + PROMPT)})"
 
     async def judge(self, *, case, response, baseline=None, ctx) -> MetricResult:
         if response.error:
@@ -60,7 +61,9 @@ class PairwiseJudge(Judge):
         passed = None
         if self.threshold is not None:   # threshold on win-rate scale (0~1)
             passed = score >= self.threshold
-        return MetricResult(metric=self.name, value=score, raw=detail, passed=passed)
+        return MetricResult(
+            metric=self.name, value=score,
+            raw={**detail, "prompt_version": self.prompt_version}, passed=passed)
 
     async def _ask(self, ctx, question, a: str, b: str, reference_block: str) -> str:
         user = PROMPT.format(question=question, answer_a=a, answer_b=b,

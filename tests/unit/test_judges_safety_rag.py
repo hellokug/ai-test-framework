@@ -16,10 +16,11 @@ from aite.metrics.agent_metrics import (
     ToolArgCorrectness,
     ToolCallCorrectness,
 )
-from aite.metrics.judge.base import ScoreJudge
+from aite.metrics.judge import pairwise as pairwise_mod
+from aite.metrics.judge.base import ScoreJudge, _fingerprint
 from aite.metrics.judge.multi import MultiJudge
 from aite.metrics.judge.pairwise import PairwiseJudge
-from aite.metrics.llm_based import looks_like_refusal, parse_json_loose
+from aite.metrics.llm_based import DEFAULT_RUBRIC, looks_like_refusal, parse_json_loose
 from aite.metrics.reliability import (
     PerturbationRobustness,
     RepeatConsistency,
@@ -118,6 +119,21 @@ class TestPairwiseJudge:
         assert res.value == 0.5
         assert res.raw["position_bias"] is True
 
+    @pytest.mark.asyncio
+    async def test_prompt_version_persisted_in_raw(self):
+        judge = PairwiseJudge(model="j")
+        ctx, _ = ctx_with(script=['{"winner": "A"}', '{"winner": "B"}'])
+        res = await judge.judge(case=TestCase(id="c", input="q", expected="ref"),
+                                response=TargetResponse(output="cand"),
+                                baseline=TargetResponse(output="base"), ctx=ctx)
+        assert res.raw["prompt_version"] == judge.prompt_version
+
+    def test_prompt_version_tracks_prompt_changes(self, monkeypatch):
+        before = PairwiseJudge(model="j").prompt_version
+        monkeypatch.setattr(pairwise_mod, "PROMPT",
+                            pairwise_mod.PROMPT + "\nPenalize verbosity.")
+        assert PairwiseJudge(model="j").prompt_version != before
+
 
 class TestMultiJudge:
     @pytest.mark.asyncio
@@ -128,6 +144,13 @@ class TestMultiJudge:
                                 response=TargetResponse(output="x"), ctx=ctx)
         assert res.error
 
+    def test_prompt_version_tracks_rubric(self):
+        default = MultiJudge().prompt_version
+        assert default == f"multi-v1(rubric={_fingerprint(DEFAULT_RUBRIC)})"
+        wit = MultiJudge(rubric="Score on wit").prompt_version
+        brief = MultiJudge(rubric="Score on brevity").prompt_version
+        assert wit != brief and wit != default
+
     @pytest.mark.asyncio
     async def test_ensemble_mean(self):
         judge = MultiJudge(models=["a", "b"], threshold=6.0)
@@ -136,6 +159,7 @@ class TestMultiJudge:
                                 response=TargetResponse(output="x"), ctx=ctx)
         assert res.raw["scores"] == [8.0, 6.0]
         assert res.value == 0.7 and res.passed
+        assert res.raw["prompt_version"] == judge.prompt_version
 
 
 class TestSafety:
