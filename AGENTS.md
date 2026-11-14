@@ -69,8 +69,11 @@ token、单工具请求占比、最慢的调用和撑大上下文的输出。
 - **教学门禁**（`scripts/hooks/stop_teach_gate.py`）：本轮 Write/Edit 过代码文件
   （.py/.js/.ts/.cjs/.mjs/.html/.css；.md 文档不算）而最终回复没有「### 教学」或
   「### 设计说明」小节 → 阻止收尾。按 CLAUDE.md 教学义务四段式写（做什么 → 为什么
-  这么做 → 用了什么模式/机制 → 以后改哪里），简化语言、结论直接给表格；琐碎修复
-  （错字/一行日志等）在回复加 `<!--teach-skip-->` 显式跳过。
+  这么做 → 用了什么模式/机制 → 以后改哪里），简化语言、结论直接给表格；改动清单
+  必须给「文件:行号 + 函数 + 改动一句话」结构表格，模式段点名具体设计模式并按
+  「解决什么问题 → 代码体现 → 替代方案代价」展开（2026-11-13 owner 要求，见
+  CLAUDE.md 总纲 1/5）；琐碎修复（错字/一行日志等）在回复加 `<!--teach-skip-->`
+  显式跳过。
 - 新钩子在下会话启动时弹信任审批，owner 批准后生效；状态查
   `python scripts/hooks/hook_status.py`，回归测试在 `tests/unit/test_zcode_hooks.py`。
 
@@ -182,6 +185,9 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
 - 补丁内容含反引号 / `${}` / 多行中文时不要走 bash heredoc（会截断），先
   Write 成临时脚本文件再执行，用完即删；批量改文件用「精确匹配替换 + assert」，
   禁止按 index 切片拼接（会切碎相邻代码块，2026-11-08 曾切碎 accuracy2.html）。
+- Edit 的 old_string/new_string 涉及既有缩进块（try/with 内层语句）时，必须从
+  本轮 Read 输出原样复制缩进，不要凭记忆重打——缩进差异会被归一化匹配到错误
+  位置，替换文本带着错误缩进入文件即语法损坏（2026-11-13 为此返工 2 轮）。
 
 ## 静态稿（web-ui/mockups/v1）
 
