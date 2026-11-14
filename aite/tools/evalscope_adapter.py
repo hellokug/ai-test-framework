@@ -252,7 +252,10 @@ print(json.dumps(out, ensure_ascii=False))
 
         新版 evalscope 对 LLM 判官类基准强制要求显式 judge.models（不配起跑
         即拒，旧的「被测模型自判」缺省已移除）；这里映射成 TaskConfig 原生
-        ``judge.models[]`` 结构，语义校验交给 evalscope 侧。"""
+        ``judge.models[]`` 结构。评分语义键（prompt_template/system_prompt/
+        score_type/score_mapping）映射为原生 ``judge.contract``，由 evalscope
+        合入每个 LLMJudge——自定义评分 rubric 即 prompt_template（占位符
+        {question}/{pred}/{gold}）。语义校验交给 evalscope 侧。"""
         if "judge" in extra:
             raise ValueError(
                 "tools.judge（预制引用）与 tools.extra_args.judge（原生透传）同时配置——二选一")
@@ -266,6 +269,11 @@ print(json.dumps(out, ensure_ascii=False))
         if isinstance(judge.get("params"), dict):
             model["generation_config"] = judge["params"]
         cfg["judge"] = {"models": [model]}
+        contract = {k: judge[k] for k in ("prompt_template", "system_prompt",
+                                          "score_type", "score_mapping")
+                    if judge.get(k) is not None}
+        if contract:              # 评分语义契约，evalscope 侧合入每个 LLMJudge
+            cfg["judge"]["contract"] = contract
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         python_exe = (req.extra or {}).get("python_exe")

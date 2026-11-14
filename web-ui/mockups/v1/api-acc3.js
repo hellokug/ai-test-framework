@@ -391,7 +391,8 @@ function aapiSpecSnap(spec) {
   ];
   rows.push(["抽样", `${tools.limit_per_subset ? `每子集 ${tools.limit_per_subset}` : "全量"}`
     + (tools.cases ? ` · 定向 ${tools.cases.length} 例` : "")]);
-  rows.push(["Judge", tools.judge?.profile ? `profile: ${tools.judge.profile}` : "不配置（规则判分）"]);
+  rows.push(["Judge", tools.judge?.profile ? `profile: ${tools.judge.profile}`
+    + (tools.judge.prompt_template ? " · 评分标准已自定义" : "") : "不配置（规则判分）"]);
   const th = tools.metric_thresholds;
   rows.push(["阈值判定", th === "auto" ? "auto（内置推荐阈值）"
     : th && typeof th === "object" ? Object.entries(th).map(([k, v]) => `${k} ≥ ${v}`).join(" · ")
@@ -717,6 +718,11 @@ function aapiCollectCustomSpec() {
   })() : undefined;
   const judge = $("accJudgeSel").value;
   if (judge) tools.judge = { profile: judge };
+  const rubric = $("accJudgeRubric").value.trim();
+  if (rubric) {
+    if (!judge) throw new Error("评分标准（rubric）需先选择 Judge 裁判模型");
+    tools.judge.prompt_template = rubric;
+  }
   const resume = $("accResumeSel").value;
   if (resume && resume !== "auto") tools.resume = resume;
   // 阈值判定

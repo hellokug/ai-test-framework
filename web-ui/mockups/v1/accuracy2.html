@@ -356,6 +356,9 @@
           <option value="">不配置（默认 · 仅规则判分）</option>
         </select></div>
       <div class="p-row">
+        <span class="p-label">评分标准（rubric）<span class="qmark">?<span class="tip">自定义判官评分提示词，透传为 evalscope 判官契约 prompt_template；占位符 {question}/{pred}/{gold}（问题/模型作答/标准答案）。仅对走通用 LLM 判官契约的基准生效，内置专用判分的基准沿用官方 prompt；留空 = 官方默认</span></span></span>
+        <textarea class="in" id="accJudgeRubric" rows="3" style="max-width:440px" placeholder="示例：按准确性/要点覆盖/表达清晰三个维度 1-10 打分，最后输出分数与理由（{question} {pred} {gold}）"></textarea></div>
+      <div class="p-row">
         <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
         <div style="display:flex;gap:8px;align-items:center;max-width:440px">
           <input class="in" id="accVerIn" list="accVerDl2" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
@@ -1042,6 +1045,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=9"></script>
+<script src="api-acc3.js?v=10"></script>
 </body>
 </html>

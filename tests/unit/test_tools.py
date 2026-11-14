@@ -192,6 +192,19 @@ class TestEvalscopeAdapter:
         req = make_request(extra={"judge": {"strategy": "rule"}})
         assert EvalscopeAdapter().build_config(req)["judge"] == {"strategy": "rule"}
 
+    def test_build_config_judge_contract_semantics(self):
+        """tools.judge 语义契约键 → 原生 judge.contract（前端评分标准 rubric 走此映射）。"""
+        req = make_request(judge={"base_url": "http://x/v1", "model": "j",
+                                  "prompt_template": "按 rubric 评分：{question} {pred} {gold}"})
+        cfg = EvalscopeAdapter().build_config(req)
+        assert cfg["judge"]["contract"] == {
+            "prompt_template": "按 rubric 评分：{question} {pred} {gold}"}
+
+    def test_build_config_judge_no_contract_by_default(self):
+        """不配语义键时原生 judge 不带 contract（保持官方默认评分提示词）。"""
+        req = make_request(judge={"base_url": "http://x/v1", "model": "j"})
+        assert "contract" not in EvalscopeAdapter().build_config(req)["judge"]
+
     def test_dispatch_line_splits_progress_and_log_mirror(self):
         """日志行分流：进度模式驱动进度条，其余行镜像为 log 事件（空行丢、长行截断）。"""
         from aite.tools.evalscope_adapter import _dispatch_line

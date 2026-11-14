@@ -188,7 +188,7 @@ run_name/description/module/target/report/output_dir/storage；`datasets`/
 | `datasets` | list | 必填 | evalscope 基准名（`aite tool benchmarks evalscope` 查全部 257+；首跑自动拉 HF，`HF_ENDPOINT` 缺省 hf-mirror） |
 | `limit_per_subset` | int | 全量 | 每科目条数（evalscope `limit` 语义：ceval limit=3 实跑 52×3=156 题） |
 | `metric_thresholds` | map\|"auto" | 无 | 判定线；键须对齐报告指标名（`acc`↔`mean_acc` 双向容错）。`"auto"` = 按随机基线推荐（仅选择题类：4选1=0.25、2选1=0.5；开放题不给默认） |
-| `judge` | map | — | 判官预制：`{profile: <common 模型预制>}` 一行引用（内联键逐键覆盖，如 `model:`），或全内联 `{base_url, model, api_key_env, params}`。新版 evalscope 对 LLM 判官类基准**强制要求显式 judge**（不配起跑即拒）。与 `extra_args.judge`（原生透传）互斥 |
+| `judge` | map | — | 判官预制：`{profile: <common 模型预制>}` 一行引用（内联键逐键覆盖，如 `model:`），或全内联 `{base_url, model, api_key_env, params}`。新版 evalscope 对 LLM 判官类基准**强制要求显式 judge**（不配起跑即拒）。与 `extra_args.judge`（原生透传）互斥。语义键 `prompt_template`（评分标准 rubric，占位符 `{question}/{pred}/{gold}`，占 evalscope 通用判官 DEFAULT_PROMPT_TEMPLATE 的位置）、`system_prompt`/`score_type`/`score_mapping` 透传为原生 `judge.contract`，由 evalscope 合入每个 LLMJudge；仅对走通用判官契约的基准生效（内置专用判分的基准沿用官方 prompt）。前端「自定义评估」Judge 区的评分标准文本域即落 `prompt_template` |
 | `resume` | auto\|true\|false | auto | 断点续推档位（CLI `--resume` / API `resume` 同名透传）。**auto（缺省，状态感知）**：最近一次输出目录没跑完（断电/402 中断）→ 就地续推只补缺失项；跑完 → 再跑自动全新起跑。**true（force）**：强制复用最近目录——改判官后只重判不重生成、或对已完成目录重出报告；旧版目录无状态文件时照续（身份交 evalscope 校验）。**false**：永远全新目录。任一档位下，生成侧身份（模型/端点/数据集/limit/生成参数，见 `run_state.json` 的 identity_hash）变更一律全新起跑，续推不混入不可比预测；判官变更不算身份变更（走 rerun_review 重判）。evalscope 侧身份快照缺失/异版本校验不符时自动降级 `rerun_review` 一次 |
 | `cases` | list[str] | 全部 | pytest 引擎用例 id 过滤 |
 | `tests_dir` | str | — | pytest 引擎自建用例目录（datasets 可空） |
