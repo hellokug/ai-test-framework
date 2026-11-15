@@ -48,18 +48,9 @@ function aapiBadge(live) {
   el.textContent = live ? "LIVE · 精度域已对接真实后端" : "MOCK · 假数据（后端未启动，python serve.py + aite serve）";
 }
 
-function aapiToast(msg, bad = false) {
-  const el = document.createElement("div");
-  el.style.cssText = "position:fixed;top:16px;right:16px;z-index:99;max-width:440px;padding:10px 14px;" +
-    "border-radius:10px;font-size:12.5px;border:1px solid;backdrop-filter:blur(6px);" +
-    "background:" + (bad ? "rgba(60,20,20,.92)" : "rgba(20,32,48,.92)") + ";" +
-    "border-color:" + (bad ? "rgba(251,113,133,.5)" : "rgba(96,165,250,.5)") + ";color:#e8eefc";
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 4600);
-}
+function aapiToast(msg, bad = false) { return liveToast(msg, bad); }   // 实现统一在 live2.js
 
-function aapiShortTime(iso) { return (iso || "").slice(5, 16).replace("T", " "); }
+function aapiShortTime(iso) { return shortTime(iso); }   // 实现统一在 live2.js
 const aapiFirstLine = t => (t || "").split("\n").map(s => s.trim()).find(Boolean) || "";
 
 /* 任务层状态（succeeded=跑完，≠样本全过；样本分数看指标汇总） */
@@ -143,7 +134,7 @@ function startAccPolling() {
 /* ------------------------------------------------------- 任务详情（live） */
 function backToRuns() { showPage("runs"); }
 
-function aapiNum(v, digits = 4) {
+function aapiNum(v) {
   return v === null || v === undefined ? "—" :
     (Math.abs(v) <= 1.0001 ? (v * 100).toFixed(1) + "%" : String(v));
 }
@@ -197,10 +188,8 @@ async function showAccTask(taskId) {
   const failures = run?.details?.failures || [];
   const reports = run?.details?.reports || {};
   const running = t.status === "running" || t.status === "stopping" || t.status === "pending";
-  const fmtDur = s => s == null ? "—" :
-    s >= 3600 ? `${(s / 3600).toFixed(1)} 小时` : s >= 60 ? `${Math.round(s / 60)} 分钟` : `${Math.round(s)} 秒`;
   const dur = (t.started_at && t.finished_at)
-    ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";
+    ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";   // fmtDur 用 live2.js 共享实现
 
   detail.innerHTML = `
     <header class="topbar">

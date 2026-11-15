@@ -48,16 +48,7 @@ function fapiBadge(live) {
   el.textContent = live ? "LIVE · 已对接真实后端" : "MOCK · 假数据（后端未启动，python serve.py + aite serve）";
 }
 
-function fapiToast(msg, bad = false) {
-  const el = document.createElement("div");
-  el.style.cssText = "position:fixed;top:16px;right:16px;z-index:99;max-width:420px;padding:10px 14px;" +
-    "border-radius:10px;font-size:12.5px;border:1px solid;backdrop-filter:blur(6px);" +
-    "background:" + (bad ? "rgba(60,20,20,.92)" : "rgba(20,32,48,.92)") + ";" +
-    "border-color:" + (bad ? "rgba(251,113,133,.5)" : "rgba(96,165,250,.5)") + ";color:#e8eefc";
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 4200);
-}
+function fapiToast(msg, bad = false) { return liveToast(msg, bad); }   // 实现统一在 live2.js
 
 /* ---------------------------------------------------------------- 渲染小件 */
 function fapiVerdictBadge(v) {
@@ -67,7 +58,7 @@ function fapiVerdictBadge(v) {
 function fapiDist(d) {
   return Object.entries(d || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
 }
-function fapiShortTime(iso) { return (iso || "").slice(5, 16).replace("T", " "); }
+function fapiShortTime(iso) { return shortTime(iso); }   // 实现统一在 live2.js
 
 /* ---------------------------------------------------------- 脚本库（live） */
 /* 导航徽章（v1.js setNavCount）+ 任务列表统计卡共用的真实计数 */
