@@ -57,6 +57,28 @@ def tags_to_capabilities(tags: Iterable[str] | None) -> list[str]:
     return caps
 
 
+# 来源私有性（open=开源公开数据集 / self=自建自有数据）。与 origin（获取渠道
+# local/online）正交：内网 OBS 直链拉取的自有语料 origin=online 但 ownership=self；
+# 存储位置（本地/在线）是第三个维度，本机登记行恒为本地，只有基准菜单行有
+# 「未下载=在线」状态，由前端按下载标记判定。
+OWNERSHIP_VALUES = ("open", "self")
+
+
+def normalize_ownership(value: str | None) -> str:
+    key = str(value or "").strip().lower()
+    if key not in OWNERSHIP_VALUES:
+        raise ValueError(
+            f"未知来源（私有性）{value!r}（合法：{'/'.join(OWNERSHIP_VALUES)}）")
+    return key
+
+
+def ownership_from_source(source: str, upstream: str = "") -> str:
+    """来源缺省推导：HF 镜像导入（或注册表 upstream hf:）=开源，其余=自建。"""
+    if source == "hf" or upstream.startswith("hf:"):
+        return "open"
+    return "self"
+
+
 def check_type(dataset_type: str) -> str:
     if dataset_type not in _DATASET_TYPES:
         raise ValueError(
@@ -68,17 +90,21 @@ async def register_entry(repo: Any, *, dataset_type: str, name: str,
                          source: str, path: str, version: str = "",
                          stats: dict | None = None, notes: str = "",
                          schema_version: str = "1",
-                         capabilities: Iterable[str] | None = None) -> dict:
+                         capabilities: Iterable[str] | None = None,
+                         ownership: str | None = None) -> dict:
     """按 (type, name) 幂等登记/更新一条目录（repo.upsert 保证竞态安全）。
 
     capabilities=None 表示本次登记不动能力维度（场景生成等既有调用方不传即
-    保留旧值）；传列表（含空列表）则归一后整体覆盖。
+    保留旧值）；传列表（含空列表）则归一后整体覆盖。ownership=None 按
+    source 推导（hf=开源，其余=自建），显式传入则归一后采用。
     """
     check_type(dataset_type)
     entry: dict[str, Any] = {
         "type": dataset_type, "name": name, "version": version,
         "source": source, "schema_version": schema_version,
         "stats": stats or {}, "path": path, "notes": notes,
+        "ownership": (normalize_ownership(ownership) if ownership is not None
+                      else ownership_from_source(source)),
     }
     if capabilities is not None:
         entry["capabilities"] = normalize_capabilities(capabilities)

@@ -141,3 +141,28 @@ async def test_register_entry_capabilities_roundtrip(repo):
                                  source="local", path="y.jsonl",
                                  capabilities=[])
     assert clear["capabilities"] == []
+
+
+def test_ownership_normalize_and_source_derive():
+    from aite.datasets.catalog import normalize_ownership, ownership_from_source
+
+    # 归一：去空白/小写；未知值显式报错
+    assert normalize_ownership(" Open ") == "open"
+    with pytest.raises(ValueError, match="未知来源"):
+        normalize_ownership("nope")
+    # 缺省推导：hf 导入=开源；上传/生成/内网直链=自建；注册表按 upstream hf: 识别
+    assert ownership_from_source("hf") == "open"
+    assert ownership_from_source("remote") == "self"
+    assert ownership_from_source("upload") == "self"
+    assert ownership_from_source("registry", "hf:ceval/ceval-exam") == "open"
+
+
+async def test_register_entry_ownership_roundtrip(repo):
+    row = await register_entry(repo, dataset_type="accuracy", name="own-ds",
+                               source="upload", path="x.jsonl")
+    assert row["ownership"] == "self"          # upload 缺省推导=自建
+    # 上传的公开数据集副本可显式标开源（私有性与获取渠道正交）
+    row2 = await register_entry(repo, dataset_type="accuracy", name="own-ds",
+                                source="upload", path="x.jsonl",
+                                ownership="open")
+    assert row2["ownership"] == "open"

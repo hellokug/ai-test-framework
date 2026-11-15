@@ -27,7 +27,13 @@ from fastapi.concurrency import run_in_threadpool
 
 from aite.datasets import settings as ds_settings
 from aite.datasets import userstore
-from aite.datasets.catalog import check_type, register_entry, resolve_dataset_ref, tags_to_capabilities
+from aite.datasets.catalog import (
+    check_type,
+    ownership_from_source,
+    register_entry,
+    resolve_dataset_ref,
+    tags_to_capabilities,
+)
 
 _TEXT_SUFFIXES = (".jsonl", ".ndjson", ".json", ".csv")
 # perf 导入顺手统计真实输出长度的参考列（avg_output_chars，选 max_tokens 参考）。
@@ -86,7 +92,8 @@ def _write_canonical_jsonl(records: list[dict], path: Path) -> None:
 async def _import_perf_records(repo: Any, *, name: str, filename: str,
                                records: list[dict], notes: str,
                                source: str,
-                               capabilities: list[str] | None = None) -> dict:
+                               capabilities: list[str] | None = None,
+                               ownership: str | None = None) -> dict:
     """真实负载记录 → perf 型 canonical jsonl（input 字段）+ 登记。
 
     每条记录取扁平输入字段（local._INPUT_KEYS，与 perf_common.INPUT_KEYS
@@ -126,14 +133,16 @@ async def _import_perf_records(repo: Any, *, name: str, filename: str,
     return await register_entry(
         repo, dataset_type="perf", name=name, source=source,
         path=str(path).replace("\\", "/"), version="", stats=stats,
-        notes=notes or f"upload:{filename}", capabilities=capabilities)
+        notes=notes or f"upload:{filename}", capabilities=capabilities,
+        ownership=ownership)
 
 
 async def upload_dataset(repo: Any, *, dataset_type: str, name: str,
                          filename: str, content: str | bytes,
                          notes: str = "", force: bool = False,
                          source: str = "upload",
-                         capabilities: list[str] | None = None) -> dict:
+                         capabilities: list[str] | None = None,
+                         ownership: str | None = None) -> dict:
     """上传数据集：分类型校验 → 落位数据集目录 → 登记 catalog。
 
     functional 走 ingest_functional 真实校验器（cases.jsonl 文本）；
@@ -151,8 +160,8 @@ async def upload_dataset(repo: Any, *, dataset_type: str, name: str,
     text = content.decode("utf-8-sig") if isinstance(content, bytes) else content
 
     if dataset_type == "functional":
-        if capabilities:
-            raise ValueError("功能 cases 数据集不适用能力维度（仅 accuracy/perf）")
+        if capabilities or ownership:
+            raise ValueError("功能 cases 数据集不适用能力维度/来源标注（仅 accuracy/perf）")
         from aite.functional.ingest import ingest_functional
 
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False,
@@ -169,7 +178,8 @@ async def upload_dataset(repo: Any, *, dataset_type: str, name: str,
         return await _import_perf_records(
             repo, name=name, filename=filename,
             records=_parse_text_records(filename, text),
-            notes=notes, source=source, capabilities=capabilities)
+            notes=notes, source=source, capabilities=capabilities,
+            ownership=ownership)
 
     records = _parse_text_records(filename, text)
     stats = _validate_accuracy_records(records)
@@ -184,7 +194,7 @@ async def upload_dataset(repo: Any, *, dataset_type: str, name: str,
     return await register_entry(
         repo, dataset_type="accuracy", name=name, source=source,
         path=str(path).replace("\\", "/"), version="", stats=stats,
-        notes=notes, capabilities=capabilities)
+        notes=notes, capabilities=capabilities, ownership=ownership)
 
 
 async def resolve_download(repo: Any, ref: str) -> dict:
@@ -252,7 +262,8 @@ async def hf_import(repo: Any, *, hf_id: str, name: str | None = None,
                     n: int | None = None, seed: int = 42,
                     fields: Any = None, notes: str = "",
                     dataset_type: str = "accuracy",
-                    capabilities: list[str] | None = None) -> dict:
+                    capabilities: list[str] | None = None,
+                    ownership: str | None = None) -> dict:
     """HF 镜像仓导入（add_hf 管线）→ 落位 → 双登记（外部注册表 + catalog）。
 
     dataset_type 默认 accuracy（题库）；perf 用于开源语料池场景（如
@@ -273,13 +284,14 @@ async def hf_import(repo: Any, *, hf_id: str, name: str | None = None,
         path=str(path).replace("\\", "/"), version=split,
         stats={"count": registry.get("n")},
         notes=notes or f"hf:{hf_id}" + (f" ({subset})" if subset else ""),
-        capabilities=capabilities)
+        capabilities=capabilities, ownership=ownership)
 
 
 async def remote_import(repo: Any, *, dataset_type: str, name: str,
                         url: str = "", notes: str = "",
                         force: bool = False,
-                        capabilities: list[str] | None = None) -> dict:
+                        capabilities: list[str] | None = None,
+                        ownership: str | None = None) -> dict:
     """远程地址拉取（OBS 桶/任意 http 直链）→ 复用上传校验管线。
 
     url 缺省用设置里的 remote_url；结尾带 / 时按 ``<地址>/<name>.jsonl`` 拼接。
@@ -298,7 +310,7 @@ async def remote_import(repo: Any, *, dataset_type: str, name: str,
         repo, dataset_type=dataset_type, name=name,
         filename=Path(target).name or f"{name}.jsonl", content=content,
         notes=notes or f"remote pull: {target}", force=force, source="remote",
-        capabilities=capabilities)
+        capabilities=capabilities, ownership=ownership)
 
 
 def _probe(url: str, timeout: float = _PROBE_TIMEOUT_S) -> dict:
@@ -368,6 +380,9 @@ def merge_local_rows(rows: list[dict], only: str | None = None) -> list[dict]:
         row = dict(r)
         row["registered"] = True
         row["origin"] = _origin(row.get("source", ""))
+        # 私有性兜底：存量行 ownership 列为 NULL（迁移加列）→ 按 source 推导展示
+        row["ownership"] = (row.get("ownership")
+                            or ownership_from_source(row.get("source", "")))
         known.add((row["type"], row["name"]))
         if row.get("path"):
             seen_paths.add(str(row["path"]).replace("\\", "/"))
@@ -387,6 +402,8 @@ def merge_local_rows(rows: list[dict], only: str | None = None) -> list[dict]:
                 "id": f"local:{name}", "type": "accuracy", "name": name,
                 "version": "", "source": "registry",
                 "origin": _origin("registry", entry.get("upstream", "")),
+                "ownership": ownership_from_source("registry",
+                                                   entry.get("upstream", "")),
                 "schema_version": "1",
                 "stats": {"count": entry.get("n")},
                 "capabilities": [],
@@ -412,6 +429,7 @@ def merge_local_rows(rows: list[dict], only: str | None = None) -> list[dict]:
         out.append({
             "id": f"file:{p.stem}", "type": ds_type, "name": name,
             "version": "", "source": "local-file", "origin": "local",
+            "ownership": "self",
             "schema_version": "1",
             "stats": {"count": _count_lines(p)},
             "capabilities": [],
@@ -497,9 +515,10 @@ def online_benchmarks(engine: str = "evalscope") -> dict:
             tasks = adapter.list_tasks()
         except ImportError:
             tasks = _benchmarks_via_python_exe(adapter)
-        # 能力维度富化：evalscope 原生 tags → 平台画像（列举一次算好，缓存复用）
+        # 能力维度/私有性富化：evalscope 基准恒为开源（列举一次算好，缓存复用）
         _ONLINE_CACHE[engine] = [
-            {**t, "capabilities": tags_to_capabilities(t.get("tags"))}
+            {**t, "capabilities": tags_to_capabilities(t.get("tags")),
+             "ownership": "open"}
             for t in tasks]
     return {"engine": engine, "items": _ONLINE_CACHE[engine],
             "count": len(_ONLINE_CACHE[engine]), "cached": cached}

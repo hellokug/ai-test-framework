@@ -171,3 +171,4 @@ def test_online_benchmarks_capabilities_enriched(monkeypatch):
         dataset_files.reset_online_cache()
     caps = {i["name"]: i["capabilities"] for i in out["items"]}
     assert caps["gsm8k"] == ["math"] and caps["weird"] == []
+    assert all(i["ownership"] == "open" for i in out["items"])   # 基准恒为开源

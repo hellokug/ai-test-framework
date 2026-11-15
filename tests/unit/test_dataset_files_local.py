@@ -151,9 +151,9 @@ class TestOnlineBenchmarks:
         second = dataset_files.online_benchmarks("evalscope")
         assert calls == [1]
         assert first["cached"] is False and second["cached"] is True
-        # 列举即富化能力维度（无 tags → 空列表），缓存命中返回同一份富化结果
+        # 列举即富化能力维度与私有性（无 tags → 空列表；基准恒为开源），缓存命中返回同一份
         assert first["items"] == second["items"] == \
-            [{"name": "gsm8k", "capabilities": []}]
+            [{"name": "gsm8k", "capabilities": [], "ownership": "open"}]
 
     def test_fallback_via_python_exe_when_importerror(self, monkeypatch):
         from aite import tools as aite_tools
@@ -170,7 +170,8 @@ class TestOnlineBenchmarks:
         monkeypatch.setattr(profiles, "load_common", lambda: {
             "tools": {"extra_args": {"python_exe": "D:/fake/python.exe"}}})
         out = dataset_files.online_benchmarks("evalscope")
-        assert out["items"] == [{"name": "ceval", "capabilities": []}]
+        assert out["items"] == [{"name": "ceval", "capabilities": [],
+                                 "ownership": "open"}]
 
     def test_raises_when_no_evalscope_and_no_python_exe(self, monkeypatch):
         from aite import tools as aite_tools

@@ -44,6 +44,7 @@ class DatasetUploadIn(BaseModel):
     notes: str = ""
     force: bool = False
     capabilities: list[str] | None = None  # 能力维度（accuracy/perf 适用）
+    ownership: str | None = None  # 私有性 open/self；缺省按 source 推导（upload=自建）
 
 
 class HfImportIn(BaseModel):
@@ -57,6 +58,7 @@ class HfImportIn(BaseModel):
     fields: Any = None    # dict 或 "input=question,expected=answer" 形式
     notes: str = ""
     capabilities: list[str] | None = None  # 能力维度（基准库「选用」自动预填）
+    ownership: str | None = None  # 私有性 open/self；缺省按 source 推导（hf=开源）
 
 
 class RemoteImportIn(BaseModel):
@@ -66,6 +68,7 @@ class RemoteImportIn(BaseModel):
     notes: str = ""
     force: bool = False
     capabilities: list[str] | None = None  # 能力维度（accuracy/perf 适用）
+    ownership: str | None = None  # 私有性 open/self；缺省按 source 推导（remote=自建）
 
 
 @router.get("/datasets")
@@ -136,7 +139,8 @@ async def upload_dataset(body: DatasetUploadIn, state: Any = Depends(get_state))
         return await dataset_files.upload_dataset(
             state.repo, dataset_type=body.type, name=body.name,
             filename=body.filename, content=body.content, notes=body.notes,
-            force=body.force, capabilities=body.capabilities)
+            force=body.force, capabilities=body.capabilities,
+            ownership=body.ownership)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -149,7 +153,7 @@ async def hf_import(body: HfImportIn, state: Any = Depends(get_state)):
             state.repo, hf_id=body.hf_id, name=body.name,
             dataset_type=body.type, split=body.split, subset=body.subset,
             n=body.n, seed=body.seed, fields=body.fields, notes=body.notes,
-            capabilities=body.capabilities)
+            capabilities=body.capabilities, ownership=body.ownership)
     except RuntimeError as exc:          # datasets 库未安装
         raise HTTPException(400, str(exc)) from exc
     except ValueError as exc:            # 字段映射/记录形状问题
@@ -165,7 +169,7 @@ async def remote_import(body: RemoteImportIn, state: Any = Depends(get_state)):
         return await dataset_files.remote_import(
             state.repo, dataset_type=body.type, name=body.name, url=body.url,
             notes=body.notes, force=body.force,
-            capabilities=body.capabilities)
+            capabilities=body.capabilities, ownership=body.ownership)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except httpx.HTTPError as exc:

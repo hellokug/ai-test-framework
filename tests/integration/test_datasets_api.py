@@ -189,13 +189,16 @@ class TestDatasetsApi:
         content = "question,answer\n1+1=?,2\n"
         up = client.post("/api/v1/datasets/upload", json={
             "type": "accuracy", "name": "cap-qa", "filename": "toy.csv",
-            "content": content, "capabilities": ["Math", " reasoning "]})
+            "content": content, "capabilities": ["Math", " reasoning "],
+            "ownership": "open"})
         assert up.status_code == 201
         assert up.json()["capabilities"] == ["math", "reasoning"]
+        assert up.json()["ownership"] == "open"   # 上传的公开数据集副本显式标开源
         listed = client.get("/api/v1/datasets",
                             params={"type": "accuracy"}).json()
         row = next(r for r in listed["items"] if r["name"] == "cap-qa")
         assert row["capabilities"] == ["math", "reasoning"]
+        assert row["ownership"] == "open"
         func = client.post("/api/v1/datasets/upload", json={
             "type": "functional", "name": "cap-ft", "filename": "c.jsonl",
             "content": '{"id":"c1","desc":"d","messages":'
@@ -207,6 +210,10 @@ class TestDatasetsApi:
             "type": "accuracy", "name": "cap-bad", "filename": "toy.csv",
             "content": content, "capabilities": ["nope"]})
         assert bad.status_code == 422 and "未知能力维度" in bad.json()["detail"]
+        badown = client.post("/api/v1/datasets/upload", json={
+            "type": "accuracy", "name": "cap-bad2", "filename": "toy.csv",
+            "content": content, "ownership": "nope"})
+        assert badown.status_code == 422 and "未知来源" in badown.json()["detail"]
 
     def test_perf_upload_real_workload(self, client, tmp_path):
         """perf 真实负载导入：csv 输入+真实输出列 → canonical jsonl + 清单可见。"""
@@ -333,11 +340,13 @@ class TestDatasetsApi:
         {"name": "swe_bench_verified", "pretty_name": "SWE-bench Verified",
          "dataset_id": "princeton-nlp/SWE-bench_Verified",
          "metrics": ["mean_acc"], "tags": ["Coding"], "few_shot_num": 0,
-         "subsets": ["default"], "capabilities": ["code", "agent"]},
+         "subsets": ["default"], "capabilities": ["code", "agent"],
+         "ownership": "open"},
         {"name": "gsm8k", "pretty_name": "GSM8K",
          "dataset_id": "AI-ModelScope/gsm8k",
          "metrics": ["mean_acc"], "tags": ["Math"], "few_shot_num": 0,
-         "subsets": ["main"], "capabilities": ["math"]},
+         "subsets": ["main"], "capabilities": ["math"],
+         "ownership": "open"},
     ]
 
     def test_online_datasets_marks_local_availability(self, client, tmp_path,
@@ -364,6 +373,7 @@ class TestDatasetsApi:
         assert by_name["swe_bench_verified"]["local"] == "swebench_verified"
         assert by_name["gsm8k"]["local"] is None
         assert by_name["gsm8k"]["capabilities"] == ["math"]
+        assert by_name["gsm8k"]["ownership"] == "open"
 
     def test_online_datasets_unavailable_502(self, client, monkeypatch):
         from aite.service import dataset_files
@@ -390,6 +400,7 @@ class TestDatasetsApi:
         row = resp.json()
         assert row["source"] == "hf" and row["name"] == "gsm8k_mini"
         assert row["capabilities"] == ["math"]
+        assert row["ownership"] == "open"          # hf 导入缺省推导=开源
         listed = client.get("/api/v1/datasets",
                             params={"type": "accuracy"}).json()
         assert next(r for r in listed["items"]

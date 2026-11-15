@@ -25,6 +25,8 @@ _PENDING_COLUMNS: list[tuple[str, sa.Column]] = [
     ("reliability_task", sa.Column("history", sa.JSON(), nullable=True)),
     # 数据集目录能力维度（2026-11-15 目录筛选：来源细分自建/开源 + 能力画像）
     ("dataset_catalog", sa.Column("capabilities", sa.JSON(), nullable=True)),
+    # 来源私有性（open=开源 / self=自建；与获取渠道 origin 正交，存量行展示层按 source 推导）
+    ("dataset_catalog", sa.Column("ownership", sa.String(8), nullable=True)),
 ]
 
 

@@ -904,8 +904,9 @@ class SqlAlchemyRepository(Repository):
             if row is None:
                 row = DatasetCatalogRow(id=new_id())
                 session.add(row)
-            for key in ("type", "name", "version", "source", "schema_version",
-                        "stats", "capabilities", "path", "notes"):
+            for key in ("type", "name", "version", "source", "ownership",
+                        "schema_version", "stats", "capabilities",
+                        "path", "notes"):
                 if key in entry and entry[key] is not None:
                     setattr(row, key,
                             _json_safe(entry[key])
@@ -951,6 +952,7 @@ class SqlAlchemyRepository(Repository):
         return {
             "id": str(row.id), "type": row.type, "name": row.name,
             "version": row.version, "source": row.source,
+            "ownership": row.ownership,
             "schema_version": row.schema_version, "stats": row.stats,
             "capabilities": row.capabilities or [],
             "path": row.path, "notes": row.notes,

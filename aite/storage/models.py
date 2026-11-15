@@ -282,6 +282,7 @@ class DatasetCatalogRow(Base):
     name: Mapped[str] = mapped_column(sa.String(256), index=True)
     version: Mapped[str] = mapped_column(sa.String(64), default="")
     source: Mapped[str] = mapped_column(sa.String(32), default="local")
+    ownership: Mapped[str] = mapped_column(sa.String(8), default="self")
     schema_version: Mapped[str] = mapped_column(sa.String(16), default="1")
     stats: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
     capabilities: Mapped[list] = mapped_column(sa.JSON(), default=list)
