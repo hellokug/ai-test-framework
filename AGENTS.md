@@ -121,6 +121,9 @@ token、单工具请求占比、最慢的调用和撑大上下文的输出。
 pytest：`pyproject.toml` 的 addopts 已带 `-q -n 4`，命令行不要再加 `-q`（叠成 -qq 会吞掉
 「N passed」汇总行）；关并行用 `-n0`（`-p no:xdist` 会让 `-n 4` 变成无效参数）。
 
+新写 Python 代码默认 `zip(..., strict=True)`、简单赋值分支直接写三元式——仓库 ruff
+活跃规则 B905/SIM108 会拦（2026-11-15 写判官校准脚本为此返工两轮）。
+
 选测对照（全量只在跨域改动与发布前，CLAUDE.md 原则 4）：精度资产层改动 →
 `pytest tests/unit/test_accuracy_assets.py tests/unit/test_cli_accuracy_assets.py
 tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
