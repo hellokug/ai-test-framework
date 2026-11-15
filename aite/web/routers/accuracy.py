@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from aite.service import accuracy_assets as assets
+from aite.service import rubric_store
 from aite.web.deps import get_state
 
 router = APIRouter(tags=["accuracy"])
@@ -117,3 +118,60 @@ async def update_script(script_id: str, body: ScriptPatch,
 async def delete_script(script_id: str):
     with _asset_errors():
         return await assets.delete_script(script_id)
+
+
+# ------------------------------------------------ 判官评分标准（rubric）资产仓
+# 沉淀复用（owner 2026-11-15）：rubric 录入一次按 id 引用，任务整文落 spec
+# （快照自包含）；指纹随内容现算，改一字旧任务校准结论即失效。
+
+class RubricIn(BaseModel):
+    name: str = Field(description="评分标准名称（唯一，如「严格二分制-客服域」）")
+    content: str = Field(description="评分标准文本（判官用户提示词，含 {question}/{pred}/{gold} 占位符）")
+    score_type: str = Field(default="", description="打分语义备注（binary / graded-5…，仅展示用）")
+
+
+class RubricPatch(BaseModel):
+    name: str | None = None
+    content: str | None = None
+    score_type: str | None = None
+
+
+@contextmanager
+def _rubric_errors():
+    """rubric 仓业务异常 → HTTP 语义（404/409/422），复用资产层口径。"""
+    with _asset_errors():
+        try:
+            yield
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/accuracy/rubrics")
+async def list_rubrics(state: Any = Depends(get_state)):
+    items = rubric_store.list_rubrics()
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/accuracy/rubrics", status_code=201)
+async def create_rubric(body: RubricIn, state: Any = Depends(get_state)):
+    with _rubric_errors():
+        return rubric_store.create_rubric(body.name, body.content, body.score_type)
+
+
+@router.get("/accuracy/rubrics/{rid}")
+async def get_rubric(rid: str, state: Any = Depends(get_state)):
+    with _rubric_errors():
+        return rubric_store.get_rubric(rid)
+
+
+@router.patch("/accuracy/rubrics/{rid}")
+async def update_rubric(rid: str, body: RubricPatch, state: Any = Depends(get_state)):
+    with _rubric_errors():
+        return rubric_store.update_rubric(rid, **body.model_dump())
+
+
+@router.delete("/accuracy/rubrics/{rid}")
+async def delete_rubric(rid: str, state: Any = Depends(get_state)):
+    with _rubric_errors():
+        rubric_store.delete_rubric(rid)
+        return {"deleted": True}
