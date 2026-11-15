@@ -1,0 +1,30 @@
+{"question": "中国的首都是哪里？", "model_output": "中国的首都是北京。", "reference_answer": "北京", "human_score": 1}
+{"question": "水在标准大气压下的沸点是多少摄氏度？", "model_output": "100摄氏度。", "reference_answer": "100", "human_score": 1}
+{"question": "一年有多少个月？", "model_output": "一年有12个月。", "reference_answer": "12", "human_score": 1}
+{"question": "3 乘以 7 等于多少？", "model_output": "3×7=21。", "reference_answer": "21", "human_score": 1}
+{"question": "《红楼梦》的作者是谁？", "model_output": "曹雪芹。", "reference_answer": "曹雪芹", "human_score": 1}
+{"question": "地球绕太阳公转一圈大约需要多长时间？", "model_output": "大约365天，也就是一年。", "reference_answer": "约365天", "human_score": 1}
+{"question": "HTTP 404 状态码表示什么含义？", "model_output": "表示请求的资源在服务器上不存在（未找到）。", "reference_answer": "资源未找到", "human_score": 1}
+{"question": "世界上面积最大的海洋是哪个？", "model_output": "太平洋。", "reference_answer": "太平洋", "human_score": 1}
+{"question": "光在真空中的传播速度约为多少？", "model_output": "约每秒30万公里（3×10^8 米/秒）。", "reference_answer": "3×10^8 米/秒", "human_score": 1}
+{"question": "一个星期有几天？", "model_output": "7天。", "reference_answer": "7", "human_score": 1}
+{"question": "人民币的基本单位是什么？", "model_output": "元。", "reference_answer": "元", "human_score": 1}
+{"question": "Excel 中对一片区域求和的常用函数是什么？", "model_output": "SUM 函数。", "reference_answer": "SUM", "human_score": 1}
+{"question": "水在标准大气压下的沸点是多少摄氏度？", "model_output": "大约90摄氏度，高原地区还会更低一些。", "reference_answer": "100", "human_score": 0}
+{"question": "3 乘以 7 等于多少？", "model_output": "3×7=28。", "reference_answer": "21", "human_score": 0}
+{"question": "《红楼梦》的作者是谁？", "model_output": "罗贯中。", "reference_answer": "曹雪芹", "human_score": 0}
+{"question": "世界上面积最大的海洋是哪个？", "model_output": "大西洋。", "reference_answer": "太平洋", "human_score": 0}
+{"question": "中国的首都是哪里？", "model_output": "中国的首都是上海，经济中心所在。", "reference_answer": "北京", "human_score": 0}
+{"question": "HTTP 404 状态码表示什么含义？", "model_output": "是的，404 表示服务器内部错误。", "reference_answer": "404 是资源未找到；服务器内部错误是 500", "human_score": 0}
+{"question": "地球绕太阳公转一圈大约需要多长时间？", "model_output": "大约24小时。", "reference_answer": "约365天", "human_score": 0}
+{"question": "一个星期有几天？", "model_output": "8天，把双休两天分开算的话。", "reference_answer": "7", "human_score": 0}
+{"question": "光在真空中的传播速度约为多少？", "model_output": "大约每秒3万公里。", "reference_answer": "3×10^8 米/秒（每秒约30万公里）", "human_score": 0}
+{"question": "人民币的基本单位是什么？", "model_output": "角。", "reference_answer": "元", "human_score": 0}
+{"question": "珠穆朗玛峰位于中国和哪个国家的边界上？", "model_output": "位于中国和印度的边界上。", "reference_answer": "尼泊尔", "human_score": 0}
+{"question": "一打鸡蛋有多少个？", "model_output": "一打是10个。", "reference_answer": "12个", "human_score": 0}
+{"question": "万有引力定律是谁提出的？", "model_output": "万有引力定律由牛顿和胡克共同提出。", "reference_answer": "牛顿", "human_score": 0}
+{"question": "世界上最高的山峰是哪座？", "model_output": "乞力马扎罗山是非洲最高峰，也是世界著名的高峰之一。", "reference_answer": "珠穆朗玛峰", "human_score": 0}
+{"question": "中国的国庆节是哪一天？", "model_output": "10月1日，假期通常会调休连放七天。", "reference_answer": "10月1日", "human_score": 1}
+{"question": "二次方程 x²-5x+6=0 的两个解是什么？", "model_output": "x=2 或 x=3，两根之积为5。", "reference_answer": "x=2 和 x=3（两根之积为6）", "human_score": 0}
+{"question": "黄河是中国最长的河流吗？", "model_output": "不是。黄河是中国第二长河，最长的是长江。", "reference_answer": "不是（长江最长，黄河第二）", "human_score": 1}
+{"question": "春节是农历的哪一天？", "model_output": "农历正月初一，是中国最重要的传统节日。", "reference_answer": "农历正月初一", "human_score": 1}
