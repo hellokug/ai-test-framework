@@ -1329,3 +1329,21 @@
 > 转义渲染全过；accuracy2 空态占位正常）。已知未竟：v1.js wireKeySelect（secrets 名裸插）与
 > perf 域 papi 系列收敛待「停止能力」会话释放后做；api-acc3 accSampleBlock（逐样本块）转义
 > 未盘点；RUNS/ACC_* 等跨文件状态收权未动（建议单独立项）。纯静态稿改动，刷新页面即生效。
+
+## 2026-11-15（停止能力会话：性能任务立即/强制停止，api-perf v6）
+
+> 对应后端与测试同批落库（taskkit force_event/stop(mode)/停止桥重做、协停 wrapper、
+> Popen 监督循环、db 兜底统计，详见 git log 与 README「停止」节）。前端改动：
+> **perf2.html**：①压力参数区新增「强制停止时长（分钟 · 可选）」抽屉字段（#perfForceStopIn，
+> tip 标明仅 evalscope-perf 生效；到时强停、未返回请求不计入统计）②任务列表页脚注改为
+> 停止双档语义说明③api-perf bump `?v=6`。**api-perf.js**：①stopPerfTask(taskId, mode)
+> 双档停止（graceful/force 分文案 confirm，POST body {mode}）②live 任务行 running/stopping
+> 出「停止 + 强停」双按钮③详情页 actions「立即停止 + 强制停止」双按钮④详情页新增
+> 「强制停止截断 / 立即停止已收口」警示卡（数据源 run.details.perf._stop 或 timeseries.stop，
+> 含 reason 与创建配置回显）⑤runId 解析兜底执行历史轮（取消任务 result 为 null 时仍可跳
+> 大屏）⑥papiCollectSpec 采集 force_stop_minutes。USERS mock 数据改字面量数组（同体函数
+> 误报规避）。验证：mockup_symbols --check 过、node --check 过、后端选测 184+35 过；
+> IAB 隔离实例（iab_sandbox + 直写库灌 running/cancelled 伪任务）：任务行双按钮、抽屉字段
+> + spec 组装（force_stop_minutes: 15）、截断收口卡与 run 引用、强停点击全链路
+> （confirm 文案 → POST {mode:force} → stopping）全过。静态稿改动，刷新页面即生效，
+> 后端代码改动需重启 aite serve。
