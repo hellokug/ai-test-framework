@@ -2,7 +2,9 @@
 
 load：dataset / prompt / synthetic 三选一；mode：baseline / ramp / soak（probe 为
 evalscope-perf 特有，由 allow_probe 控制）；duration：整场总时长与 level_duration
-每档秒数二选一（probe+duration → 看门狗语义仅 perf 使用）。
+每档秒数二选一（probe+duration → 看门狗语义仅 perf 使用）；梯度：ramp（并发）
+与 rate（QPS 开环）统一 {from, to, step} 展开，sla 键随载体（ramp.sla /
+rate.sla，{指标: 阈值}）驱动逐档熔断。
 两适配器共用同一套错误文案、校验口径、阈值方向（LOWER_IS_BETTER）、指标行
 发射（append_metric_rows）与时序落盘（write_timeseries）——任何一处出现第二
 份副本即漂移温床（教训：_LOWER_IS_BETTER 双份定义曾致 evalscope 的
@@ -32,6 +34,14 @@ LOWER_IS_BETTER = frozenset(
     | {f"{base}_{tier}_ms" for base in ("ttft", "latency", "tpot", "itl")
        for tier in LATENCY_TIERS}
     | {"error_rate"})
+# SLA 爬坡可判指标 = 档级指标行的键全集（_SUMMARY_METRICS + latency_avg + 分位
+# 档 + max 档 + error_rate）；方向复用 LOWER_IS_BETTER，不另设第二份方向表。
+LEVEL_SLA_METRICS = frozenset({
+    "ttft_ms", "tpot_ms", "itl_ms", "latency_avg_ms", "error_rate",
+    "qps", "output_tps", "avg_input_tokens", "avg_output_tokens",
+    *{f"{base}_{tier}_ms" for base in ("ttft", "latency", "tpot", "itl")
+      for tier in LATENCY_TIERS},
+})
 # 平台数据集输入键约定（与 aite/datasets/local 一致，自包含避免深 import）
 INPUT_KEYS = ("input", "question", "instruction", "prompt", "query", "user")
 
@@ -42,18 +52,96 @@ def positive_ints(value) -> bool:
                     for v in value))
 
 
-def expand_ramp(ramp: dict) -> list[int]:
-    """from/to/step → 并发梯度（to 必含：爬坡终点即最大并发）。"""
+# 梯度载体的合法键：展开三键 + sla（SLA 熔断判据随载体走，与 probe.sla 同构）
+GRADIENT_KEYS = frozenset({"from", "to", "step", "sla"})
+
+
+def expand_gradient(spec: dict, *, name: str, integer: bool) -> tuple[list, dict]:
+    """{from, to, step[, sla]} → (梯度值列表, sla 载体剥离)。
+
+    并发 ramp（integer=True，整数档）与 QPS 开环 rate（integer=False，浮点档）
+    共用同一展开与校验；to 必含且必含在梯度里（爬坡终点即最大值）。
+    用户不再手写档位数组——给最小/最大/跨度三值自动展开（owner 2026-11-15
+    指正：手写 "1,2,3,4,5,5,6,7,8" 既是输入负担也是错值温床）。
+    """
+    if not isinstance(spec, dict):
+        raise ValueError(f"perf.{name} 梯度须为 {{from, to, step}} 对象")
+    unknown = set(spec) - GRADIENT_KEYS
+    if unknown:
+        raise ValueError(f"perf.{name} 未知键 {sorted(unknown)}"
+                         f"（可用: {sorted(GRADIENT_KEYS)}）")
     try:
-        start, stop, step = int(ramp["from"]), int(ramp["to"]), int(ramp["step"])
+        start, stop, step = (int(spec["from"]) if integer else float(spec["from"]),
+                             int(spec["to"]) if integer else float(spec["to"]),
+                             int(spec["step"]) if integer else float(spec["step"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("perf.ramp 需要 from / to / step 整数") from exc
-    if start < 1 or stop < start or step < 1:
-        raise ValueError("perf.ramp 需要 1 ≤ from ≤ to 且 step ≥ 1")
-    levels = list(range(start, stop + 1, step))
+        raise ValueError(f"perf.{name} 需要 from / to / step "
+                         f"{'整数' if integer else '数值'}") from exc
+    if start < 1 or stop < start or step <= 0:
+        raise ValueError(f"perf.{name} 需要 from ≥1、to ≥ from 且 step > 0")
+    n = int((stop - start) / step + 1e-9)
+    levels = [round(start + i * step, 6) if not integer else start + i * step
+              for i in range(n + 1)]
     if levels[-1] != stop:
         levels.append(stop)
+    return levels, dict(spec.get("sla") or {})
+
+
+def expand_ramp(ramp: dict) -> list[int]:
+    """from/to/step → 并发梯度（to 必含：爬坡终点即最大并发）。"""
+    levels, _sla = expand_gradient(ramp, name="ramp", integer=True)
     return levels
+
+
+def resolve_sla(cfg: dict, *, allow: bool) -> dict:
+    """爬坡 SLA（ramp.sla / rate.sla，{指标: 阈值}）→ 校验后的副本（空 = 未配）。
+
+    判定方向复用 LOWER_IS_BETTER（≤ 阈值合规），其余 ≥（如 qps ≥ 10）；
+    配置后压测逐档收口判定、首次违反即停（不再升档）并报告最大合规档。
+    allow=False（无逐档熔断能力的引擎）配了即报错——错误显式化，不静默忽略。
+    """
+    sla: dict = {}
+    for key in ("ramp", "rate"):
+        carrier = cfg.get(key)
+        if isinstance(carrier, dict) and carrier.get("sla") is not None:
+            if sla:
+                raise ValueError("perf.ramp.sla 与 perf.rate.sla 只能配一处"
+                                 "（两载体互斥，正常不会同时出现）")
+            sla = carrier["sla"]
+    if not sla:
+        return {}
+    if not allow:
+        raise ValueError("SLA 爬坡自动停止仅 evalscope-perf 引擎支持"
+                         "（需逐档起压、档间收口判定）；locust 如需摸高请分档"
+                         "建多次任务，或移除 sla 配置")
+    if not isinstance(sla, dict) or not sla:
+        raise ValueError("perf.sla 须为 {指标: 阈值} 非空对象")
+    unknown = set(sla) - LEVEL_SLA_METRICS
+    if unknown:
+        raise ValueError(f"SLA 未知指标 {sorted(unknown)}"
+                         f"（可用: {sorted(LEVEL_SLA_METRICS)}）")
+    for v in sla.values():
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ValueError("SLA 阈值须为正数（指标上限/下限）")
+    return dict(sla)
+
+
+def sla_verdict(metrics: dict, sla: dict) -> tuple[bool, str | None]:
+    """档级指标 × SLA → (是否全部合规, 首个违反指标)。
+
+    方向按 LOWER_IS_BETTER（≤ 阈值合规），其余 ≥；该指标本档未产出（None）
+    不判定——宁缺毋错，不让缺数据误触发熔断。
+    """
+    violated = None
+    for name, thr in sla.items():
+        value = metrics.get(name)
+        if value is None:
+            continue
+        ok = (float(value) <= float(thr) if name in LOWER_IS_BETTER
+              else float(value) >= float(thr))
+        if not ok and violated is None:
+            violated = name
+    return violated is None, violated
 
 
 def resolve_load(cfg: dict) -> tuple[str, str, dict | None]:

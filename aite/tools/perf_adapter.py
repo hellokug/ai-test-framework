@@ -27,10 +27,23 @@ TTFT/TPOT/ITL/吞吐原生分档），aite 负责编排与统一入库——不�
 **模式**（``perf.mode`` 四选一；省略 = 兼容直配 ``parallel``/``number``）：
 
 - ``baseline``：固定并发基准 → 单值 ``--parallel``
-- ``ramp``：爬坡（from/to/step 展开为并发梯度，``to`` 必含）→ 多值 ``--parallel``
+- ``ramp``：并发爬坡（``ramp: {from, to, step}`` 自动展开为梯度，``to`` 必含，
+  不手写档位数组）→ 多值 ``--parallel``；配 ``ramp.sla`` 后转为逐档熔断执行
 - ``probe``：摸高（SLA 约束下二分搜索最大可持续并发）→ ``--sla-auto-tune``；
   ``sla: {指标: 上限}`` 全部按 ``<`` 组成 AND 组
 - ``soak``：长稳（时间驱动）→ ``--parallel`` + ``--duration``
+
+**QPS 开环爬坡**（``perf.rate``，与 parallel/mode 互斥）：标量 = 单档；
+``{from, to, step}`` = 自动展开梯度（开环 ``--rate`` sweep，等价 ramp 的 QPS
+版）；配 ``rate.sla`` 后同样逐档熔断。
+
+**SLA 爬坡自动停止**（``ramp.sla`` / ``rate.sla``，``{指标: 阈值}``，指标 ∈
+``LEVEL_SLA_METRICS``）：配置后整场改为**逐档独立起子进程**，每档收口即读
+档级 summary/db 判定 SLA（方向复用 LOWER_IS_BETTER：≤ 阈值合规，qps 等反之），
+**首次违反即停**——不再升档，结论（``perf.sla`` / ``timeseries.sla``）报告
+最大合规并发/QPS：``verdict`` ∈ violated（违反档 + 观测值）/ all_passed
+（全档合规，最大 = 末档）/ stopped（人工停止或预算截断，最大 = 最后完成档）。
+不配 sla 行为完全不变（单进程 sweep，evalscope 原生档间无缝）。
 
 **时长**（``duration`` 与 ``level_duration`` 二选一）：
 
@@ -89,12 +102,15 @@ from aite.tools.perf_common import (
     DURATION_DRIVEN_NUMBER_CAP,
     append_metric_rows,
     dataset_output_tokens,
+    expand_gradient,
     export_prompts,
     generate_synthetic_prompts,
     positive_ints,
     resolve_durations,
     resolve_load,
     resolve_mode_parallel,
+    resolve_sla,
+    sla_verdict,
     write_timeseries,
 )
 from aite.tools.subproc import (
@@ -299,7 +315,8 @@ def _resolve_rate(cfg: dict) -> list[float] | None:
 
     开环语义（evalscope --open-loop --rate）：按 Poisson 到达率发射请求、并发
     无界——服务端拖慢时排队/过载真实显现（与闭环限速的 locust qps 相对）。
-    rate 列表即梯度（替代 parallel sweep）。
+    标量 = 单档；列表 = 显式梯度；``{from, to, step}`` = 自动展开（QPS 爬坡
+    与并发 ramp 同一交互：最小/最大/跨度三值，不手写档位数组）。
     """
     rate = cfg.get("rate")
     if rate is None:
@@ -310,10 +327,14 @@ def _resolve_rate(cfg: dict) -> list[float] | None:
     if cfg.get("mode"):
         raise ValueError("perf.rate（QPS 模式）与 perf.mode 互斥——rate 列表本身"
                          "即梯度（等价 ramp 的 QPS 版）")
+    if isinstance(rate, dict):
+        levels, _sla = expand_gradient(rate, name="rate", integer=False)
+        return levels
     values = [rate] if isinstance(rate, (int, float)) and         not isinstance(rate, bool) else list(rate)
     if not values or not all(isinstance(v, (int, float))
                              and not isinstance(v, bool) and v > 0 for v in values):
-        raise ValueError("perf.rate 须为 >0 的数字（标量或梯度数组，req/s）")
+        raise ValueError("perf.rate 须为 >0 的数字（标量 / 梯度数组 / "
+                         "{from, to, step} 对象，req/s）")
     return [float(v) for v in values]
 
 
@@ -627,6 +648,33 @@ def _level_metrics(items: list[tuple[dict, dict, Path, int]]) -> tuple[dict, int
     return metrics, total
 
 
+def _level_sort_key(item) -> tuple:
+    """档位排序键：并发档按数值升序（perf:c4），开环 rate 档排后按数值。"""
+    label = item[0]
+    return ((0, int(label.rsplit("c", 1)[1])) if ":c" in label
+            else (1, float(label.rsplit("q", 1)[1])))
+
+
+def _level_timeseries_points(grouped: dict, bucket: float) -> tuple[
+        list[tuple[str, int, list[dict], float]], float | None, float]:
+    """各档 db → 桶级时序点（档序遍历）+ epoch 换算用的 raw 时钟跨度。
+
+    返回 (level_points, min_raw, max_raw)：各档 db 共用 perf 进程时钟（同源
+    相对秒），collect 换算 epoch 基准后点即可映射墙钟。"""
+    level_points: list[tuple[str, int, list[dict], float]] = []
+    min_raw, max_raw = None, 0.0
+    for label, items in sorted(grouped.items(), key=_level_sort_key):
+        for _d, _p, summary_path, users in items:
+            agg = _aggregate_level_db(
+                summary_path.parent / "benchmark_data.db", bucket)
+            if agg:
+                points, raw_t0 = agg
+                level_points.append((label, users, points, raw_t0))
+                min_raw = raw_t0 if min_raw is None else min(min_raw, raw_t0)
+                max_raw = max(max_raw, raw_t0 + points[-1]["t"] + bucket)
+    return level_points, min_raw, max_raw
+
+
 def _resolve_force_stop_seconds(cfg: dict) -> float | None:
     """强制停止时长（perf.force_stop_minutes，分钟）→ 秒；None = 不设。
 
@@ -671,18 +719,16 @@ class PerfAdapter(ToolAdapter):
         mode, parallel, probe_cfg = resolve_mode_parallel(cfg, allow_probe=True)
         if open_loop:
             parallel = rates   # rate 列表即梯度（档数载体：number 对齐/时长均分）
+        sla = resolve_sla(cfg, allow=True)   # ramp.sla / rate.sla → 逐档熔断
+        if sla and mode == "probe":
+            raise ValueError("perf.ramp.sla / perf.rate.sla 与 mode=probe 互斥"
+                             "（probe 自带 sla 判据：probe.sla）")
         plan = resolve_durations(cfg, mode=mode, n_levels=len(parallel))
         number = _resolve_number(cfg, plan, len(parallel), open_loop=open_loop)
-        args = _assemble_args(
-            cfg, url=url, model=model, api_key=api_key, parallel=parallel,
-            number=number, plan=plan, dataset=dataset, prompt=prompt,
-            synthetic=synthetic, output_dir=req.work_dir / "perf_raw",
-            probe_args=_probe_args(mode, probe_cfg), rates=rates)
         # 看门狗即总时长预算：覆盖 extra.timeout（用户显式给的整场预算优先于兜底超时）
         timeout = (int(plan.watchdog) if plan.watchdog is not None
                    else int(req.extra.get("timeout", DEFAULT_TIMEOUT)))
-        return {
-            "args": args,
+        base = {
             "env": {"PYTHONIOENCODING": "utf-8"},
             "timeout": timeout,
             "duration_watchdog": int(plan.watchdog) if plan.watchdog is not None else None,
@@ -692,6 +738,31 @@ class PerfAdapter(ToolAdapter):
             "synthetic": synthetic,   # run 阶段生成 prompt 文件用
             "open_loop": open_loop,   # collect 档位标签用（perf:q<rate>）
         }
+        if sla:
+            # SLA 爬坡：逐档执行计划——每档单值梯度独立拼参（probe_args 必空，
+            # 档间熔断逻辑取代 evalscope 进程内 sweep），档产出目录仍为
+            # parallel_N_number_M / rate_R_number_M（与 sweep 同布局，collect 不分叉）
+            base.update({
+                "args": None,
+                "levels": [
+                    _assemble_args(
+                        cfg, url=url, model=model, api_key=api_key,
+                        parallel=[value], number=[num], plan=plan,
+                        dataset=dataset, prompt=prompt, synthetic=synthetic,
+                        output_dir=req.work_dir / "perf_raw", probe_args=[],
+                        rates=[value] if open_loop else None)
+                    for value, num in zip(parallel, number, strict=True)],
+                "sla": sla,
+                "sla_values": list(parallel),   # 档位值（结论/标签共用载体）
+            })
+            return base
+        args = _assemble_args(
+            cfg, url=url, model=model, api_key=api_key, parallel=parallel,
+            number=number, plan=plan, dataset=dataset, prompt=prompt,
+            synthetic=synthetic, output_dir=req.work_dir / "perf_raw",
+            probe_args=_probe_args(mode, probe_cfg), rates=rates)
+        base["args"] = args
+        return base
 
     async def run(self, req: ToolRunRequest) -> ToolRunResult:
         cfg = self.build_config(req)
@@ -707,7 +778,9 @@ class PerfAdapter(ToolAdapter):
                         len(prompts), cfg["synthetic"]["prompt_length"])
         outcome = await run_sync_in_thread(self._exec, cfg, req.control)
         stop_info = self._stop_info(outcome, cfg)
-        return self.collect(req, stop_info=stop_info)
+        # SLA 爬坡结论（gated 路径 outcome.sla；单进程 sweep 无该键 → None）
+        sla_info = outcome.get("sla") if cfg.get("sla") else None
+        return self.collect(req, stop_info=stop_info, sla_info=sla_info)
 
     @staticmethod
     def _stop_info(outcome: dict, cfg: dict) -> dict | None:
@@ -742,9 +815,12 @@ class PerfAdapter(ToolAdapter):
     def _exec(self, cfg: dict, control: ToolRunControl | None = None) -> dict:
         """Popen + 监督循环执行 evalscope perf（经协停 wrapper）；日志流式落盘。
 
-        返回 {how, stop_requested, force_reason?}：exit=自然退出（含 wrapper
+        SLA 爬坡（cfg.levels 非空）转逐档熔断执行 _exec_gated；单进程路径返回
+        {how, stop_requested, force_reason?}：exit=自然退出（含 wrapper
         软退出）；timeout=整场预算耗尽（看门狗/产物兜底语义不变）；force=
         强制杀树（在途即弃，已完成请求经 db 兜底收集）。"""
+        if cfg.get("levels"):
+            return self._exec_gated(cfg, control)
         binary = which_or_fail("evalscope",
                                "未找到 evalscope CLI——压测经其子进程执行，"
                                "请 pip install evalscope")
@@ -765,6 +841,134 @@ class PerfAdapter(ToolAdapter):
             outcome["how"] = how
         self._settle_outcome(outcome, cfg, log_path, proc)
         return outcome
+
+    def _exec_gated(self, cfg: dict, control: ToolRunControl | None) -> dict:
+        """SLA 爬坡逐档执行：每档单值梯度独立起子进程，档间收口判定 SLA，
+        首次违反即停（不再升档）；停止/强停/整场预算在档间即时生效（不发起
+        新档）。档产出与 sweep 同布局（parallel_N_number_M），collect 不分叉。
+
+        返回在单进程语义（how/stop_requested/force_reason）上增 sla 结论：
+        verdict ∈ violated / all_passed / stopped（halt_reason 注明中断缘由）。"""
+        binary = which_or_fail("evalscope",
+                               "未找到 evalscope CLI——压测经其子进程执行，"
+                               "请 pip install evalscope")
+        output_dir = Path(cfg["output_dir"])
+        log_path = output_dir.parent / "logs" / "perf.log"
+        stop_file = output_dir.parent / "perf_control" / STOP_FILE_NAME
+        stop_file.parent.mkdir(parents=True, exist_ok=True)
+        launch, wrapped = self._launch_command(binary, stop_file)
+        env = dict(os.environ) | {"PYTHONIOENCODING": "utf-8"} | cfg.get("env", {})
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        outcome: dict = {"how": _HOW_EXIT, "stop_requested": False,
+                         "sla": self._sla_state(cfg)}
+        start = time.monotonic()
+        deadline = start + cfg["timeout"]
+        force_at = (start + cfg["force_stop_seconds"]
+                    if cfg.get("force_stop_seconds") is not None else None)
+        halted = None
+        with open(log_path, "w", encoding="utf-8", errors="replace") as log_fh:
+            for index, args in enumerate(cfg["levels"]):
+                label = self._sla_level_label(cfg, index)
+                now = time.monotonic()
+                halted = self._gate_halt(control, outcome, cfg, force_at,
+                                         deadline, now)
+                if halted:
+                    outcome["how"] = {"force": _HOW_FORCE,
+                                      "timeout": _HOW_TIMEOUT}.get(halted,
+                                                                   _HOW_EXIT)
+                    self._log_marker(log_path,
+                                     f"SLA GATE HALT before {label} ({halted})")
+                    break
+                stop_file.unlink(missing_ok=True)   # 档级隔离：上档残留作废
+                self._log_marker(log_path, f"LEVEL {label} START")
+                proc = subprocess.Popen([*launch, *args], stdout=log_fh,
+                                        stderr=subprocess.STDOUT, env=env)
+                view = {**cfg, "level_label": label,
+                        "timeout": max(int(deadline - now), 1)}
+                if force_at is not None:
+                    view["force_stop_seconds"] = max(force_at - now, 0.001)
+                outcome["how"] = self._supervise(proc, view, control, stop_file,
+                                                 log_path, wrapped, outcome)
+                self._settle_outcome(outcome, view, log_path, proc)
+                if outcome["how"] != _HOW_EXIT:
+                    halted = outcome["how"]
+                    break
+                state = outcome["sla"]
+                state["levels_run"].append(label)
+                passed, bad, observed = self._sla_check(cfg, label)
+                if not passed:
+                    state.update(verdict="violated", violated_label=label,
+                                 violated_metric=bad, observed=observed)
+                    self._log_marker(log_path,
+                                     f"SLA GATE STOP — {label} violates "
+                                     f"{bad}={observed.get(bad)} "
+                                     f"(阈值 {cfg['sla'][bad]})")
+                    break
+                state["max_compliant"] = cfg["sla_values"][index]
+                state["max_compliant_label"] = label
+            else:
+                outcome["sla"]["verdict"] = "all_passed"
+        if halted and outcome["sla"]["verdict"] == "running":
+            outcome["sla"].update(verdict="stopped", halt_reason=str(halted))
+        return outcome
+
+    @staticmethod
+    def _sla_level_label(cfg: dict, index: int) -> str:
+        """档位标签（与 collect/_group_summaries 同规则：c<并发> / q<rate:g>）。"""
+        value = cfg["sla_values"][index]
+        return f"perf:q{value:g}" if cfg["open_loop"] else f"perf:c{value}"
+
+    @staticmethod
+    def _sla_state(cfg: dict) -> dict:
+        """SLA 结论骨架（运行中逐步填充；终值语义见模块 docstring SLA 段）。"""
+        return {
+            "metrics": dict(cfg["sla"]),   # {指标: 阈值} 判据回显
+            "axis": "rate" if cfg["open_loop"] else "parallel",
+            "values": list(cfg["sla_values"]),   # 计划梯度全档（未跑完的说明口径）
+            "verdict": "running",
+            "levels_run": [],
+            "max_compliant": None,
+            "max_compliant_label": None,
+            "violated_label": None,
+            "violated_metric": None,
+            "observed": {},
+        }
+
+    @staticmethod
+    def _gate_halt(control: ToolRunControl | None, outcome: dict, cfg: dict,
+                   force_at: float | None, deadline: float, now: float) -> str | None:
+        """档间闸门：返回非 None 中断原因（stop/force/timeout），None = 继续升档。"""
+        if control is not None and control.force_event is not None \
+                and control.force_event.is_set():
+            outcome["force_reason"] = "强制停止（人工）：后续档位不再发起"
+            return "force"
+        if control is not None and control.cancel_event is not None \
+                and control.cancel_event.is_set():
+            outcome["stop_requested"] = True
+            return "stop"
+        if force_at is not None and now >= force_at:
+            outcome["force_reason"] = (f"强制停止时长到（{cfg['force_stop_seconds'] / 60.0:g} 分钟），"
+                                       "后续档位不再发起")
+            return "force"
+        if now >= deadline:
+            return "timeout"
+        return None
+
+    def _sla_check(self, cfg: dict, label: str) -> tuple[bool, str | None, dict]:
+        """档收口 → (合规?, 首个违反指标, SLA 指标观测值)。
+
+        读取路径与 collect 同源（_group_summaries 分组 + _level_metrics 合成，
+        含强制停止 db 兜底）；档产出缺失 = 执行异常（进程 exit 0 却无产物），
+        显式抛错不静默放行。"""
+        grouped, _ = _group_summaries(Path(cfg["output_dir"]))
+        items = grouped.get(label)
+        if not items:
+            raise RuntimeError(f"SLA 爬坡档 {label} 无压测产出"
+                               "（summary 与 db 均缺失），查看 logs/perf.log")
+        metrics, _total = _level_metrics(items)
+        observed = {name: metrics.get(name) for name in cfg["sla"]}
+        passed, bad = sla_verdict(metrics, cfg["sla"])
+        return passed, bad, observed
 
     def _supervise(self, proc: subprocess.Popen, cfg: dict,
                    control: ToolRunControl | None, stop_file: Path,
@@ -866,7 +1070,9 @@ class PerfAdapter(ToolAdapter):
                 return
             raise RuntimeError(f"压测超时（{cfg['timeout']}s），日志: {log_path}")
         if proc.returncode != 0:
-            raise RuntimeError(f"evalscope perf 执行失败（exit={proc.returncode}），"
+            where = f"档 {cfg['level_label']} " if cfg.get("level_label") else ""
+            raise RuntimeError(f"evalscope perf {where}执行失败"
+                               f"（exit={proc.returncode}），"
                                f"{self._api_error_hint(out)}"
                                f"日志: {log_path}\n{out[-2000:]}")
 
@@ -890,14 +1096,14 @@ class PerfAdapter(ToolAdapter):
         return f"服务端拒绝（HTTP {code}）——{msg[:200]}。"
 
     def collect(self, req: ToolRunRequest,
-                stop_info: dict | None = None) -> ToolRunResult:
+                stop_info: dict | None = None,
+                sla_info: dict | None = None) -> ToolRunResult:
         """解析各档 benchmark_summary/percentile → 指标行（dataset=perf:c<并发>）。
 
-        统一 glob ``**/benchmark_summary.json``：普通模式 ``parallel_X_number_Y/``
-        与摸高模式 ``sla_tuning/sla_parallel_N_run_i/`` 两种布局都覆盖；
-        同并发多 run（probe 的 runs>1）按均值聚合、count 求和。强制停止截断的
-        档位（有 db 无 summary）按库兜底合成，stop_info 经 _stop 标记随结果
-        与 timeseries 落盘（前端展示截断口径）。"""
+        统一 glob ``**/benchmark_summary.json``：sweep/摸高/SLA 爬坡逐档进程三种
+        布局都覆盖；同并发多 run 按均值聚合、count 求和；截断档位（有 db 无
+        summary）按库兜底合成。stop_info/sla_info 经 _stop/sla 标记随结果与
+        timeseries 双落（前端截断口径卡与 SLA 结论卡数据源）。"""
         cfg = self.build_config(req)   # 纯函数，重复调用拿 output_dir
         out = ToolRunResult()
         grouped, partial_labels = _group_summaries(Path(cfg["output_dir"]))
@@ -905,27 +1111,12 @@ class PerfAdapter(ToolAdapter):
         timeseries: dict = {"engine": self.name, "run_name": req.run_name,
                             "bucket_seconds": bucket,
                             "series": [], "combined": [], "errors": []}
-
-        def _label_key(item):
-            label = item[0]
-            return (0, int(label.rsplit("c", 1)[1])) if ":c" in label                 else (1, float(label.rsplit("q", 1)[1]))
-
         # 各档 db 共用 perf 进程时钟（同源相对秒）——换算 epoch 基准后点即可
         # 映射墙钟；combined 用同源原值直接拼接（天然连续，无近似偏移）
-        level_points: list[tuple[str, int, list[dict], float]] = []
-        min_raw, max_raw = None, 0.0
-        for label, items in sorted(grouped.items(), key=_label_key):
-            for _d, _p, summary_path, users in items:
-                agg = _aggregate_level_db(
-                    summary_path.parent / "benchmark_data.db", bucket)
-                if agg:
-                    points, raw_t0 = agg
-                    level_points.append((label, users, points, raw_t0))
-                    min_raw = raw_t0 if min_raw is None else min(min_raw, raw_t0)
-                    max_raw = max(max_raw, raw_t0 + points[-1]["t"] + bucket)
+        level_points, min_raw, max_raw = _level_timeseries_points(grouped, bucket)
         epoch_base = (time.time() - max_raw - 1.0) if max_raw else 0.0
 
-        for label, items in sorted(grouped.items(), key=_label_key):
+        for label, items in sorted(grouped.items(), key=_level_sort_key):
             metrics, total = _level_metrics(items)
             append_metric_rows(out.rows, req.metric_thresholds, label,
                                metrics, total)
@@ -948,6 +1139,11 @@ class PerfAdapter(ToolAdapter):
         if total_failed:
             # evalscope 错误文本在 pickle 响应里，只给计数（文本级错误分布见 locust）
             timeseries["errors"] = [{"key": "failed", "count": total_failed}]
+        if sla_info:
+            # SLA 结论：timeseries（大屏/历史轮）+ result.perf（details 持久化，
+            # 前端详情页结论卡数据源）
+            timeseries["sla"] = sla_info
+            out.perf["sla"] = sla_info
         if stop_info or partial_labels:
             timeseries["stop"] = {**(stop_info or {}),
                                   "truncated_levels": partial_labels}

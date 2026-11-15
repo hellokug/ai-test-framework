@@ -10,7 +10,8 @@ evalscope-perf 的分工：后者 LLM 原生指标（TPOT/ITL/吞吐分档）更
 - 负载：``dataset``（jsonl/csv 逐行 prompt）/ ``prompt``（固定提示词）/
   ``synthetic``（确定性合成）三选一
 - 模式：``baseline`` / ``ramp`` / ``soak`` / 省略 mode 直配 ``parallel``；
-  **probe 不支持**（SLA 二分搜索是 evalscope perf 专有，配置即报错）
+  **probe 不支持**（SLA 二分搜索是 evalscope perf 专有，配置即报错）；
+  **ramp.sla / rate.sla 熔断不支持**（需逐档起压收口判定，配置即报错）
 - 时长：``duration``（整场总时长，多档均分）/ ``level_duration``（每档秒数）
   二选一——locust 每档是独立 ``-t`` 进程，到点自退出，无看门狗
 - ``spawn_rate``：每档用户拉起速率（用户/秒），缺省 = 档位并发（瞬时拉满）
@@ -53,6 +54,7 @@ from aite.tools.perf_common import (
     resolve_durations,
     resolve_load,
     resolve_mode_parallel,
+    resolve_sla,
     write_timeseries,
 )
 from aite.tools.subproc import glob_report_files, run_tool_subprocess, which_or_fail
@@ -297,6 +299,7 @@ class LocustAdapter(ToolAdapter):
             raise ValueError("locust 需要 target.model")
         url, api_key = api_endpoint(req.target)
         dataset, prompt, synthetic = resolve_load(cfg)
+        resolve_sla(cfg, allow=False)   # ramp.sla/rate.sla 显式拒绝（无档间熔断）
         mode, parallel, _probe = resolve_mode_parallel(cfg, allow_probe=False)
         if cfg.get("number") is not None:
             logger.info("locust 忽略 perf.number（locust 按时长/用户数驱动）")

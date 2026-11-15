@@ -77,6 +77,21 @@ class TestDomainTasksApi:
         assert client.delete("/api/v1/perf/tasks/nope").status_code == 404
         assert client.post("/api/v1/perf/tasks/nope/run").status_code == 404
 
+    def test_perf_sla_ramp_spec_fail_fast(self, client):
+        """SLA 爬坡 spec 校验 fail-fast：未知 SLA 指标 → 任务 failed，
+        error 直达根因（校验在 adapter build_config，经 API 错误通道上浮）。"""
+        task = self._create(client, "perf", {
+            "engine": "evalscope-perf",
+            "target": {"type": "openai_compatible",
+                       "base_url": "http://x/v1", "model": "m"},
+            "perf": {"prompt": "p", "mode": "ramp",
+                     "ramp": {"from": 1, "to": 4, "step": 3,
+                              "sla": {"nope": 1}}}}, name="sla-bad")
+        run = client.post(f"/api/v1/perf/tasks/{task['id']}/run")
+        assert run.status_code == 202
+        final = self._wait_status(client, "perf", task["id"], {"failed"})
+        assert "未知指标" in final["error"]
+
     @pytest.mark.parametrize("domain", ["functional", "accuracy", "perf"])
     def test_run_fail_fast_then_rerun(self, client, domain):
         """无效 suite spec（缺 datasets）fail-fast → failed；终态可改配置/重跑

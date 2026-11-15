@@ -8,14 +8,17 @@ from pathlib import Path
 import pytest
 
 from aite.tools.base import ToolRunControl, ToolRunRequest
+from aite.tools.locust_adapter import LocustAdapter
 from aite.tools.perf_adapter import (
     PerfAdapter,
     _sla_params_json,
 )
 from aite.tools.perf_common import (
     DURATION_DRIVEN_NUMBER_CAP,
+    expand_gradient,
     expand_ramp,
     export_prompts,
+    sla_verdict,
 )
 
 
@@ -501,6 +504,215 @@ class TestRateQPS:
         result = PerfAdapter().collect(make_request(work_dir=tmp_path))
         labels = {r.dataset for r in result.rows}
         assert labels == {"perf:q10", "perf:q20"}
+
+
+class TestSlaRamp:
+    """SLA 爬坡（ramp.sla / rate.sla）：梯度对象展开 + 逐档熔断执行 + 结论。
+
+    语义（owner 2026-11-15 指正）：爬坡给最小/最大/跨度三值自动展开档位，
+    配 SLA（如 ttft_ms ≤ 3000）后逐档收口判定、首次违反即停，报告最大合规
+    并发/QPS——不再手写档位数组、不让超 SLA 的档白跑完整场。"""
+
+    @staticmethod
+    def _level_summary(tmp_path, concurrency, ttft_ms, number=8):
+        d = tmp_path / "perf_raw" / "m" / f"parallel_{concurrency}_number_{number}"
+        d.mkdir(parents=True)
+        (d / "benchmark_summary.json").write_text(json.dumps(
+            dict(SUMMARY, Concurrency=concurrency, **{"TTFT (ms)": ttft_ms})),
+            encoding="utf-8")
+
+    @staticmethod
+    def _stub_gated(monkeypatch, tmp_path, launches):
+        """逐档子进程替身：每次 Popen 记参并返回立即退出(rc=0)的假进程。"""
+        import shutil as sh
+        import subprocess as sp
+
+        import aite.tools.perf_adapter as pp
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        exe = bin_dir / "evalscope.exe"
+        exe.write_text("", encoding="utf-8")
+        monkeypatch.setattr(sh, "which", lambda name: str(exe))
+
+        def fake_popen(cmd, **_kw):
+            launches.append(cmd)
+            return _FakeProc([0])
+        monkeypatch.setattr(sp, "Popen", fake_popen)
+        monkeypatch.setattr(pp, "SUPERVISE_POLL_INTERVAL_S", 0.01)
+
+    @staticmethod
+    def _gated_request(work_dir=None, ramp=None):
+        perf = {"prompt": "p", "mode": "ramp",
+                "ramp": {"from": 1, "to": 9, "step": 4, "sla": {"ttft_ms": 3000}},
+                "number": 8}
+        if ramp is not None:
+            perf["ramp"] = ramp
+        return make_request(work_dir=work_dir, perf=perf)
+
+    def test_rate_gradient_object_expands(self):
+        """rate {from,to,step} 对象 → 浮点梯度（含 to 终值）；step ≤ 0 校验。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "rate": {"from": 1, "to": 2.4, "step": 0.7},
+            "number": 20}))
+        assert cfg["open_loop"] is True and "levels" not in cfg   # 无 sla 不熔断
+        i = cfg["args"].index("--rate")
+        assert cfg["args"][i + 1:i + 4] == ["1.0", "1.7", "2.4"]
+        with pytest.raises(ValueError, match="step > 0"):
+            expand_gradient({"from": 1, "to": 4, "step": 0},
+                            name="rate", integer=False)
+
+    def test_gradient_unknown_key_rejected(self):
+        """梯度对象未知键（拼写漂移）显式报错；sla 键合法并剥离。"""
+        with pytest.raises(ValueError, match="未知键"):
+            expand_gradient({"form": 1, "to": 4, "step": 1},
+                            name="ramp", integer=True)
+        levels, sla = expand_gradient(
+            {"from": 1, "to": 4, "step": 3, "sla": {"ttft_ms": 3000}},
+            name="ramp", integer=True)
+        assert levels == [1, 4] and sla == {"ttft_ms": 3000}
+
+    def test_sla_verdict_direction(self):
+        """判定方向复用 LOWER_IS_BETTER：时延 ≤ 阈值合规、qps ≥ 阈值合规。"""
+        metrics = {"ttft_ms": 500.0, "qps": 8.0}
+        passed, bad = sla_verdict(metrics, {"ttft_ms": 3000, "qps": 5})
+        assert passed is True and bad is None
+        passed, bad = sla_verdict(metrics, {"ttft_ms": 3000, "qps": 10})
+        assert passed is False and bad == "qps"
+        # 缺值指标不判定（宁缺毋错）
+        passed, bad = sla_verdict({"error_rate": None}, {"tpot_p95_ms": 100})
+        assert passed is True and bad is None
+
+    def test_sla_validation(self):
+        """SLA 白名单/正数阈值校验；locust 配置即拒绝。"""
+        with pytest.raises(ValueError, match="未知指标"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "mode": "ramp",
+                "ramp": {"from": 1, "to": 4, "step": 3, "sla": {"nope": 1}}}))
+        with pytest.raises(ValueError, match="正数"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "mode": "ramp",
+                "ramp": {"from": 1, "to": 4, "step": 3, "sla": {"ttft_ms": 0}}}))
+        with pytest.raises(ValueError, match="evalscope-perf"):
+            LocustAdapter().build_config(make_request(perf={
+                "prompt": "p", "mode": "ramp",
+                "ramp": {"from": 1, "to": 4, "step": 3, "sla": {"ttft_ms": 3000}},
+                "duration": 60}))
+
+    def test_sla_probe_mutex(self):
+        """ramp.sla 与 mode=probe 互斥（probe 自带 sla 判据，两处配置必歧义）。"""
+        with pytest.raises(ValueError, match="互斥"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "mode": "probe",
+                "probe": {"max_parallel": 8, "sla": {"avg_ttft": 100}},
+                "ramp": {"from": 1, "to": 4, "step": 3, "sla": {"ttft_ms": 3000}}}))
+
+    def test_build_config_gated_levels(self):
+        """SLA 爬坡 → levels 每档单值梯度独立拼参；时长均分与 number 对齐不变。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "mode": "ramp",
+            "ramp": {"from": 1, "to": 9, "step": 4, "sla": {"ttft_ms": 3000}},
+            "duration": 30, "number": 5}))
+        assert cfg["args"] is None and len(cfg["levels"]) == 3
+        assert cfg["sla"] == {"ttft_ms": 3000} and cfg["sla_values"] == [1, 5, 9]
+        for i, value in enumerate((1, 5, 9)):
+            args = cfg["levels"][i]
+            j = args.index("--parallel")
+            assert args[j + 1:j + 2] == [str(value)]          # 单值档
+            assert args[args.index("--number") + 1] == "5"
+            assert args[args.index("--duration") + 1] == "10"  # 总 30s 均分 3 档
+            assert "--sla-auto-tune" not in args
+
+    def test_build_config_gated_rate(self):
+        """QPS 开环 SLA 爬坡：rate 对象 + sla → 单值 --rate 档位。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p",
+            "rate": {"from": 2, "to": 4, "step": 2, "sla": {"ttft_p95_ms": 800}},
+            "level_duration": 20, "number": 30}))
+        assert cfg["open_loop"] is True and cfg["sla_values"] == [2.0, 4.0]
+        assert len(cfg["levels"]) == 2
+        i = cfg["levels"][1].index("--rate")
+        assert cfg["levels"][1][i + 1] == "4.0"
+        assert cfg["levels"][0][i + 1] == "2.0"
+
+    def test_exec_gated_stops_on_violation(self, tmp_path, monkeypatch):
+        """档 2 违反 SLA → 档 3 不再发起；结论 violated + 最大合规 = 档 1。"""
+        self._level_summary(tmp_path, 1, 500.0)      # 合规（≤ 3000）
+        self._level_summary(tmp_path, 5, 5000.0)     # 违反（> 3000）
+        launches: list[list[str]] = []
+        self._stub_gated(monkeypatch, tmp_path, launches)
+        cfg = PerfAdapter().build_config(self._gated_request(tmp_path))
+        outcome = PerfAdapter()._exec(cfg)
+        assert len(launches) == 2                    # 档 3（c9）未发起
+        sla = outcome["sla"]
+        assert sla["verdict"] == "violated"
+        assert sla["violated_label"] == "perf:c5"
+        assert sla["violated_metric"] == "ttft_ms"
+        assert sla["observed"] == {"ttft_ms": pytest.approx(5000.0)}
+        assert sla["max_compliant"] == 1
+        assert sla["max_compliant_label"] == "perf:c1"
+        assert sla["levels_run"] == ["perf:c1", "perf:c5"]
+        assert outcome["how"] == "exit"
+
+    def test_exec_gated_all_passed(self, tmp_path, monkeypatch):
+        """全档合规 → 跑满梯度；verdict all_passed + 最大合规 = 末档。"""
+        for value in (1, 5, 9):
+            self._level_summary(tmp_path, value, 500.0)
+        launches: list[list[str]] = []
+        self._stub_gated(monkeypatch, tmp_path, launches)
+        cfg = PerfAdapter().build_config(self._gated_request(tmp_path))
+        outcome = PerfAdapter()._exec(cfg)
+        assert len(launches) == 3
+        assert outcome["sla"]["verdict"] == "all_passed"
+        assert outcome["sla"]["max_compliant"] == 9
+        assert outcome["sla"]["levels_run"] == ["perf:c1", "perf:c5", "perf:c9"]
+
+    def test_exec_gated_cancel_before_levels(self, tmp_path, monkeypatch):
+        """档间闸门：cancel 已置位 → 不发起任何档，结论 stopped。"""
+        import asyncio
+
+        control = ToolRunControl(cancel_event=asyncio.Event())
+        control.cancel_event.set()
+        launches: list[list[str]] = []
+        self._stub_gated(monkeypatch, tmp_path, launches)
+        cfg = PerfAdapter().build_config(self._gated_request(tmp_path))
+        outcome = PerfAdapter()._exec(cfg, control)
+        assert launches == []
+        assert outcome["stop_requested"] is True
+        assert outcome["sla"]["verdict"] == "stopped"
+        assert outcome["sla"]["halt_reason"] == "stop"
+
+    def test_exec_gated_missing_output_raises(self, tmp_path, monkeypatch):
+        """档进程 exit 0 却无产出 → 显式报错（不静默放行熔断判定）。"""
+        launches: list[list[str]] = []
+        self._stub_gated(monkeypatch, tmp_path, launches)
+        cfg = PerfAdapter().build_config(self._gated_request(tmp_path))
+        with pytest.raises(RuntimeError, match="压测产出"):
+            PerfAdapter()._exec(cfg)
+
+    def test_collect_attaches_sla(self, tmp_path):
+        """collect 透传 sla_info → result.perf 与 timeseries.json 双落。"""
+        import sqlite3
+
+        d = tmp_path / "perf_raw" / "m" / "parallel_2_number_8"
+        d.mkdir(parents=True)
+        (d / "benchmark_summary.json").write_text(
+            json.dumps(dict(SUMMARY, Concurrency=2)), encoding="utf-8")
+        conn = sqlite3.connect(d / "benchmark_data.db")
+        conn.execute("CREATE TABLE result (start_time REAL, completed_time REAL,"
+                     " latency REAL, first_chunk_latency REAL, success INT,"
+                     " completion_tokens INT, time_per_output_token REAL,"
+                     " inter_token_latencies TEXT)")
+        conn.execute("INSERT INTO result VALUES (0.0, 4.0, 1.0, 0.1, 1, 40,"
+                     " 0.05, '[0.1, 0.2]')")
+        conn.commit()
+        conn.close()
+        sla_info = {"verdict": "all_passed", "max_compliant": 2}
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path),
+                                       sla_info=sla_info)
+        assert result.perf["sla"] == sla_info
+        ts = json.loads((tmp_path / "timeseries.json").read_text(encoding="utf-8"))
+        assert ts["sla"] == sla_info
 
 
 class TestDatasetLoad:
