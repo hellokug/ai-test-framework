@@ -1216,3 +1216,64 @@
   抽屉真提交（创建+run 202）/数据集生成失败与成功双路径/克隆回填/大屏 stub 时序
   八图渲染/档级过滤/probe+locust 联动全过。api-perf.js 顶层符号全 papi/PERF_ 前缀，
   mockup_symbols --check 过；perf2 引用 v=2。
+
+## 2026-11-13（数据集目录分页 + 开源基准行加载加固）
+
+- 目录表分页（owner 要求全量展示 + 分页）：api32.js dsPageOf/dsPagerHtml/dsRenderTable
+  （mock/live 一套，每页 15/30/50/全部，筛选/搜索改选回第 1 页，页码窗口 1 2 … n-1 n n+1 … 末页；
+  单页只留条数下拉当「全部」逃生口）；common2.html 加 #dsBenchBanner/#dsPager 容器 + kicker 补分页说明。
+- 开源基准行不再「又没了」：wireCommonDatasetsPage 拆出 dsLoadBench（与本机列表并行起跑），
+  列举失败不再清空 DS_BENCH——已灌过的 live 行保留、首载失败才清（DS_BENCH_LIVE 防 mock 演示行冒充），
+  目录上方横幅给原因 + 重试（dsBenchBanner，点击委托在 dsBindDatasetsTable）。
+- mock 演示数据 6→23 条真实 evalscope 基准（名称/dataset_id/subset_count 取 2026-11 实清单快照；
+  subsets 只存前 3 个预览，dsSubCount 统一取 subset_count 计数），静态稿离线也能看全量+分页效果。
+- api32 v24（本轮沿用并行会话已 bump 的版本号，common2/functional2 同版）；门禁
+  mockup_symbols --check + node --check 过；IAB live 实测：共 266 行 · 基准 257 全量、翻页/每页条数/
+  筛选回第 1 页、fetch 断连模拟横幅出现且 257 行不清空、重试恢复、guardWrites 0 写 0 错。
+
+## 2026-11-14（精度详情失败样本三段分色）
+
+- 精度详情两处失败展示拆三段分色块（owner：失败请求里输入/标准答案/实际模型输出分不清）：
+  api-acc3.js 新增 accTriBlock/accTriBlocks（输入=蓝 --run · 标准答案=绿 --ok · 模型输出=琥珀 --warn，
+  色标 + 8% 底色 + 左色条，空字段不出块；target 与 correct_answer 相同自动去重）。
+- accSampleBlock（逐样本明细，含「只看答错」）原来三行同款式 kv 改用三段分色块，
+  判定说明/评委/评分状态保持 kv 次级行；failBlock 闭包提升为顶层 accFailBlock（失败样本卡）：
+  reason/error/why/detail 提升为「原因」，已知三段字段抽出分色展示，其余键仍 JSON 明细兜底不重复渲染。
+- api-acc3 v=9（仅 accuracy2.html 引用）；门禁 mockup_symbols --check 过；临时切片断言脚本
+  （accSampleBlock/accFailBlock 五组用例：分色标记/答案去重/后端 {dataset,case,detail} 形状/
+  未知键保留/空字段容错）全过，用完即删。
+
+## 2026-11-14（自定义评估判官评分标准 rubric）
+
+- 自定义评估「Judge 裁判模型」下新增「评分标准（rubric）」文本域（accuracy2.html
+  accJudgeRubric，qmark 提示占位符 {question}/{pred}/{gold} 与生效范围）；api-acc3.js
+  aapiCollectCustomSpec 校验「先选判官再填 rubric」后落 spec.tools.judge.prompt_template，
+  aapiSpecSnap Judge 行加「· 评分标准已自定义」标记。
+- 后端 evalscope_adapter._apply_judge 新增语义契约映射：tools.judge 的 prompt_template/
+  system_prompt/score_type/score_mapping → evalscope 原生 judge.contract（合入每个
+  LLMJudge；仅通用判官契约基准生效，内置专用判分沿用官方 prompt；不配语义键不带
+  contract）。config-reference tools.judge 行同步；api-acc3 v=10（仅 accuracy2.html 引用）。
+- 门禁 mockup_symbols --check / ruff / pytest test_tools 63 passed 全过；临时切片断言
+  （rubric 三态 + 既有 spec 结构不扰动）4/4 过，用完即删。
+
+## 2026-11-14（perf 任务创建六项整改）
+
+- perf2.html 新建抽屉重排：任务名称置顶为抽屉第一个字段（id 仍 perfTaskName2，
+  双面板共用）；负载来源三选一改「平台数据集 / 固定输入输出」双卡（互斥渲染进
+  perfLoadExtra：平台卡 = perfDatasetSel 下拉 + ＋生成新数据集按钮，固定卡 =
+  条数/输入长度/输出长度三字段）；「高级（阈值判定）」去掉 chaos 故障注入下拉，
+  脚本面板与大屏的 chaos 文案同步清除。
+- api-perf.js（v=4）：papiRenderLoadExtra 双分支重写；负载卡切换 + 初次条件渲染
+  提到顶层执行（mock 模式也出表单，原先绑在 live-only 的 bindPerfSubmit 里）；
+  papiCollectSpec 固定输入输出 = synthetic{count,prompt_length} + max_tokens 定长
+  （优先于模型参数区 max_tokens）；新增采样参数收集 temperature/top_p/top_k/seed/
+  min_tokens/stop/frequency_penalty/repetition_penalty/query_template/
+  apply_chat_template/tokenizer_path（显式填写才透传）。
+- 后端 perf_adapter._assemble_args 透传上述参数（旗标对齐 evalscope 1.15）；
+  build_config 落 max_tokens 优先级：任务显式 > 数据集 meta（同名 .stats.json 的
+  output_tokens 定长兜底，perf_common.dataset_output_tokens）。单测补
+  test_generation_params_passthrough / test_dataset_meta_output_tokens_priority。
+- 门禁：mockup_symbols --check / ruff / lint-imports / audit_func_len（存量
+  run_tool_suite 超长不涉本次）/ pytest perf 三件套全过；IAB 隔离实例双模式
+  提交实测（固定输入输出 synthetic+定长 max_tokens、平台数据集+采样参数，
+  spec 落库逐键核对）。aite/ 有改动需重启 aite serve；perf2 刷新即生效。
