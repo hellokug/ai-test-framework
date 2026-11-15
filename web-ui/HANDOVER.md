@@ -1432,3 +1432,28 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
 - 测试 30 例全过（rubric CRUD/执行器 MockTransport/集成 HTTP 端到端含桩判官线程）；门禁
   ruff / lint-imports / audit_func_len / mockup_symbols --check 全过。沙箱收尾注意：down 只杀
   登记里的 PID，启动即退的残留会让真后端漏杀，手动 taskkill 后再 down。
+
+## 2026-11-15（性能任务编辑能力：终态/非运行中改参重跑，api-perf v8）
+
+- owner 指正「性能失败的任务不支持编辑」。后端本就支持（四域通用 PATCH /perf/tasks/{id}：
+  kit.update 守卫 pending+终态可改、running/stopping 409，test_domain_tasks_api::test_run_fail_fast_then_rerun
+  已覆盖终态改配置），缺口纯前端。perf2.html/api-perf.js 补「编辑」：列表行 pending=运行+编辑 /
+  终态=重试+编辑；详情页 topbar 加编辑按钮（running/stopping 不出）。
+- 编辑 = 复用新建抽屉：papiFillSpec 与 papiCollectSpec 键位互为镜像。关键机制：①引擎/模式卡直置
+  on + renderPerfParams 同步重渲（卡片 click 监听走 setTimeout 滞后重渲，会清掉后续填的值）；
+  ②负载 dataset/synthetic 二选一回填，原 dataset 路径不在下拉清单时补「原任务配置」兜底项；
+  ③压力参数按 label 正则回填，正则与 papiSetModeField 采集侧一一对应；④目标模型 profile/端点
+  命中 PERF_MODEL_SOURCES 选下拉，否则落自定义面板；⑤编辑态标记 PERF_EDIT_ID，任一
+  [data-open-drawer="newTaskDrawer"] 新建入口点击即 papiExitEditMode；抽屉标题/提交按钮加 id
+  （newTaskTitle/perfSubmitBtn）随模式切文案；PAPI 补 patch 方法。保存 = PATCH 原任务，
+  toast 按 pending/终态分别引导「运行」/「重试」；每轮运行快照当时 spec 入执行历史，改配置不影响
+  历史轮审计。
+- 顺修现存 bug：papiCollectSpec probe 分支 `perf.probe = { max_parallel, … }` 简写引用了不存在的
+  变量（本地叫 maxp）——probe 模式任务一提交就 ReferenceError「发起失败」，改 max_parallel: maxp。
+- IAB 验证（私有端口 8311/8777——iab_sandbox 的 STATE 是单槽，并行会话同用 8310/8776 会互杀，
+  多会话并行验证期改私有端口手工起后端+反代）：cancelled 失败任务行编辑 → 回填逐项命中 → 切
+  synthetic 改并发保存 → PATCH 落库（状态保持、历史轮保留）+ toast 正确；pending 回填保真
+  （engine/模式卡/synthetic 三项/自定义端点）；新建入口退编辑态；详情页编辑按钮。已知边界：
+  非表单引擎的旧 spec（如 engine=pytest 的 CLI/测试任务）打开抽屉引擎卡无命中、回退
+  evalscope-perf 显示，保存会采纳表单引擎值。门禁 node --check + mockup_symbols --check 过；
+  无 Python 改动。perf2 bump api-perf ?v=8。

@@ -150,7 +150,7 @@
 
 <!-- 新建压测任务抽屉（脚本复用 / 自定义编排 双态） -->
 <div class="drawer drawer-lg" id="newTaskDrawer" hidden>
-  <div class="drawer-head"><h3>新建压测任务</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-head"><h3 id="newTaskTitle">新建压测任务</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body" data-src-toggle>
 
     <div class="field" style="margin-top:0"><label>任务名称</label><input class="in" id="perfTaskName2" placeholder="留空自动生成，如 baseline-u8-1114"></div>
@@ -269,7 +269,7 @@
   </div>
     </div>
   </div>
-  <div class="drawer-foot"><span class="hint" id="perfSaveHint" hidden style="margin-right:auto">✓ 已保存为脚本「DeepSeek 网关容量摸高」（目标模型不沉淀），到「脚本库」查看</span><button class="btn" id="perfSaveScript">保存为脚本</button><button class="btn" data-close>取消</button><button class="btn primary">启动压测</button></div>
+  <div class="drawer-foot"><span class="hint" id="perfSaveHint" hidden style="margin-right:auto">✓ 已保存为脚本「DeepSeek 网关容量摸高」（目标模型不沉淀），到「脚本库」查看</span><button class="btn" id="perfSaveScript">保存为脚本</button><button class="btn" data-close>取消</button><button class="btn primary" id="perfSubmitBtn">启动压测</button></div>
 </div>
 
 <!-- 生成器抽屉 -->
@@ -536,6 +536,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=7"></script>
+<script src="api-perf.js?v=8"></script>
 </body>
 </html>

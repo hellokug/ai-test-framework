@@ -33,6 +33,7 @@ const PAPI = {
   },
   get(p) { return this.req("GET", p); },
   post(p, b) { return this.req("POST", p, b ?? {}); },
+  patch(p, b) { return this.req("PATCH", p, b ?? {}); },
 };
 
 function papiBadge(live) {
@@ -81,6 +82,7 @@ let PERF_LAST_TASK = null;      // 大屏「← 任务详情」回跳目标
 let PERF_DATASETS = [];         // /perf/datasets items（负载下拉 + 数据集页）
 let PERF_MODEL_SOURCES = [];    // [{key, label, profile|target}]
 let PERF_DETAIL_TIMER = null;
+let PERF_EDIT_ID = null;        // 编辑模式：非 null = 抽屉保存走 PATCH 该任务（非新建+run）
 const PERF_TS = {};             // 当前大屏/详情 timeseries（图表 builder 全局读）
 
 function papiModeLabel(spec) {
@@ -139,9 +141,10 @@ function papiRerenderTasks() {
     <td>${t.status === "running" || t.status === "stopping"
       ? `<button class="btn sm danger" onclick="event.stopPropagation();stopPerfTask('${t.id}','graceful')">停止</button>
          <button class="btn sm danger" onclick="event.stopPropagation();stopPerfTask('${t.id}','force')">强停</button>`
-      : t.status === "pending"
+      : `${t.status === "pending"
         ? `<button class="btn sm primary" onclick="event.stopPropagation();runPerfTask('${t.id}')">运行</button>`
-        : `<button class="btn sm" onclick="event.stopPropagation();retryPerfTask('${t.id}')">重试</button>`}</td></tr>`;
+        : `<button class="btn sm" onclick="event.stopPropagation();retryPerfTask('${t.id}')" title="同配置立即再跑一轮">重试</button>`}
+         <button class="btn sm" onclick="event.stopPropagation();papiEditPerfTask('${t.id}')" title="改配置（非运行中可改）：引擎/模式/负载/压力/目标模型，保存后以 重试/运行 用新配置跑">编辑</button>`}</td></tr>`;
   }).join("")
     : '<tr><td colspan="6" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
 }
@@ -194,6 +197,158 @@ async function retryPerfTask(taskId) {
     await wirePerfTasks();
     showPerfTask(taskId);
   } catch (err) { papiToast(`重试失败：${err.message}`, true); }
+}
+
+/* --------------------------------------- 任务编辑（pending/终态 · 非运行中可改） */
+/* 入口 = 列表/详情「编辑」：复用新建抽屉回填任务 spec（papiFillSpec 与
+   papiCollectSpec 键位一一对应），保存 = PATCH /perf/tasks/{id}——后端
+   kit.update 守卫：pending 改首发配置 / 终态改完「重试」以新配置再跑一轮，
+   running/stopping 409。失败任务由此获得「改参重跑」入口（与功能域对齐）；
+   每轮运行快照当时 spec 入执行历史，改配置不影响历史轮审计。 */
+function papiSetModeField(labelRe, value) {   // papiFieldVal 的写侧镜像（select 选项缺则补）
+  if (value == null || value === "") return;
+  const f = [...document.querySelectorAll("#perfParams > .field")]
+    .find(el => labelRe.test(el.querySelector("label")?.textContent || ""));
+  const inp = f?.querySelector("input.in, select.in");
+  if (!inp) return;
+  if (inp.tagName === "SELECT" && ![...inp.options].some(o => o.value === String(value))) {
+    const opt = document.createElement("option");
+    opt.value = String(value);
+    opt.textContent = String(value);
+    inp.appendChild(opt);
+  }
+  inp.value = value;
+}
+
+function papiFillTarget(target) {   // 目标模型回填：登记项命中选下拉，否则自定义面板手填
+  const sel = document.getElementById("perfModelSel");
+  const pane = document.getElementById("perfModelCustom");
+  if (!sel || !pane) return;
+  const hit = PERF_MODEL_SOURCES.find(s => target?.profile && s.profile === target.profile)
+    || PERF_MODEL_SOURCES.find(s => target?.type === "openai_compatible" && s.target
+      && s.target.base_url === (target.base_url || "") && s.target.model === (target.model || ""));
+  if (hit) { sel.value = hit.key; pane.hidden = true; return; }
+  sel.value = "__custom__";
+  pane.hidden = false;
+  const vals = [target?.base_url || "", target?.model || "", target?.api_key_env || ""];
+  [...pane.querySelectorAll("input.in")].slice(0, 3).forEach((inp, i) => { inp.value = vals[i]; });
+}
+
+function papiFillSpec(t) {
+  const spec = t.spec || {};
+  const p = spec.perf || {};
+  const $ = id => document.getElementById(id);
+  // 脚本来源切「自定义编排」：编辑走 spec 全量回填，脚本面板不参与
+  document.querySelector('#newTaskDrawer .chip[data-src="custom"]')?.click();
+  // 引擎/模式卡直置 on 并同步重渲（click 监听经 setTimeout 滞后重渲，会清掉后续填值）
+  const mode = p.probe ? "probe" : p.ramp ? "ramp" : p.soak ? "soak" : "baseline";
+  document.querySelectorAll('#newTaskDrawer .radio-card[data-e]')
+    .forEach(x => x.classList.toggle("on", x.dataset.e === spec.engine));
+  document.querySelectorAll('#newTaskDrawer .radio-card[data-m]')
+    .forEach(x => x.classList.toggle("on", x.dataset.m === mode));
+  renderPerfParams();
+  $("perfTaskName2").value = t.name || "";
+  // 负载二选一：dataset → 下拉（原路径不在清单时补兜底项）；synthetic → 三项直填
+  const kind = p.synthetic ? "synthetic" : "dataset";
+  document.querySelectorAll('#newTaskDrawer .radio-cards.three .radio-card[data-load]')
+    .forEach(x => x.classList.toggle("on", x.dataset.load === kind));
+  papiRenderLoadExtra();
+  if (kind === "dataset") {
+    const sel = $("perfDatasetSel");
+    if (sel && p.dataset && ![...sel.options].some(o => o.value === p.dataset)) {
+      const opt = document.createElement("option");
+      opt.value = p.dataset;
+      opt.textContent = `${p.dataset}（原任务配置）`;
+      sel.appendChild(opt);
+    }
+    if (sel && p.dataset) sel.value = p.dataset;
+    const mt = p.max_tokens;
+    $("perfMaxTokIn").value = Array.isArray(mt) ? `[${mt[0]}, ${mt[1]}]` : mt ?? "";
+  } else {
+    $("perfSynCount").value = p.synthetic?.count ?? "";
+    $("perfSynLen").value = p.synthetic?.prompt_length ?? "";
+    $("perfSynOut").value = p.max_tokens ?? "";
+  }
+  // 生成 / 采样参数（显式键回填，留空 = 端点缺省）
+  $("perfTempIn").value = p.temperature ?? "";
+  $("perfTopPIn").value = p.top_p ?? "";
+  $("perfTopKIn").value = p.top_k ?? "";
+  $("perfSeedIn").value = p.seed ?? "";
+  $("perfMinTokIn").value = p.min_tokens ?? "";
+  $("perfFreqIn").value = p.frequency_penalty ?? "";
+  $("perfRepIn").value = p.repetition_penalty ?? "";
+  $("perfTplIn").value = p.query_template || "";
+  $("perfChatTplIn").value = p.apply_chat_template == null ? "" : String(p.apply_chat_template);
+  $("perfStopIn").value = Array.isArray(p.stop) ? p.stop.join(", ") : p.stop || "";
+  $("perfTokIn").value = p.tokenizer_path || "";
+  // 压力参数（label 正则与 papiCollectSpec 采集侧一一对应）
+  if (mode === "baseline") {
+    papiSetModeField(/^并发数/, p.baseline?.parallel ?? "");
+    papiSetModeField(/^QPS/, p.rate ?? "");
+    papiSetModeField(/^duration 总时长/, p.duration ?? "");
+  } else if (mode === "ramp") {
+    const r = p.ramp || {};
+    const levels = [];
+    if (r.from != null && r.to != null && r.step > 0)
+      for (let v = r.from; v <= r.to && levels.length < 64; v += r.step) levels.push(v);
+    papiSetModeField(/^并发梯度/, levels.join(", "));
+    papiSetModeField(/^level_duration/, p.level_duration ?? "");
+    papiSetModeField(/^duration 总时长/, p.duration ?? "");
+  } else if (mode === "probe") {
+    const sla = Object.entries(p.probe?.sla || {})[0] || [];
+    papiSetModeField(/^SLA 指标/, sla[0] ?? "");
+    papiSetModeField(/^SLA 上限/, sla[1] ?? "");
+    papiSetModeField(/^并发搜索起点|^SLA 起点/, p.probe?.from ?? "");
+    papiSetModeField(/^并发上界/, p.probe?.max_parallel ?? "");
+    papiSetModeField(/^每档重复/, p.probe?.runs ?? "");
+    papiSetModeField(/^总预算|^duration/, p.duration ?? "");
+  } else {
+    papiSetModeField(/^并发数/, p.soak?.parallel ?? "");
+    papiSetModeField(/^duration 总时长|^duration/, p.duration ?? "");
+  }
+  // 引擎附加参数
+  if (spec.engine === "evalscope-perf") {
+    papiSetModeField(/^warmup/, p.warmup_num ?? "");
+  } else if (spec.engine === "locust") {
+    papiSetModeField(/^spawn_rate|^起压速率/, p.spawn_rate ?? "");
+    papiSetModeField(/^arrival|^到达模型/, p.arrival ?? "");
+    papiSetModeField(/^jitter|^到达抖动/, p.jitter ?? "");
+  }
+  $("perfForceStopIn").value = p.force_stop_minutes ?? "";
+  $("perfThrIn").value = spec.tools?.metric_thresholds
+    ? JSON.stringify(spec.tools.metric_thresholds) : "";
+  papiFillTarget(spec.target);
+}
+
+function papiSetDrawerEditMode(on, task) {   // 抽屉标题/提交按钮文案随模式切换
+  const title = document.getElementById("newTaskTitle");
+  const btn = document.getElementById("perfSubmitBtn");
+  if (title) title.textContent = on
+    ? `编辑任务配置 · ${(task?.id || "").slice(0, 8)} · ${task?.name || "(未命名)"}`
+    : "新建压测任务";
+  if (btn) btn.textContent = on ? "保存配置" : "启动压测";
+}
+
+async function papiEditPerfTask(taskId) {
+  if (!PAPI.live) { papiToast("该操作需 live 模式（后端启动后）可用", true); return; }
+  let t;
+  try { t = await PAPI.get(`/perf/tasks/${taskId}`); }
+  catch (err) { papiToast(`载入任务失败：${err.message}`, true); return; }
+  if (t.status === "running" || t.status === "stopping") {
+    papiToast(`运行中/停止中不可编辑（当前 ${t.status}），停止收口后再改`, true);
+    return;
+  }
+  PERF_EDIT_ID = t.id;
+  papiFillSpec(t);
+  papiSetDrawerEditMode(true, t);
+  const drawer = document.getElementById("newTaskDrawer");
+  if (drawer) drawer.hidden = false;
+}
+
+function papiExitEditMode() {
+  if (!PERF_EDIT_ID) return;
+  PERF_EDIT_ID = null;
+  papiSetDrawerEditMode(false);
 }
 
 /* ------------------------------------------------------- 任务详情（live） */
@@ -295,6 +450,8 @@ async function showPerfTask(taskId, opts = {}) {
         ${runId ? `<button class="btn" onclick="showPerfDashboard('${runId}')">压测大屏 ↗</button>` : ""}
         ${running ? `<button class="btn danger" onclick="stopPerfTask('${taskId}','graceful')">立即停止</button>
         <button class="btn danger" onclick="stopPerfTask('${taskId}','force')">强制停止</button>` : ""}
+        ${t.status !== "running" && t.status !== "stopping"
+          ? `<button class="btn" onclick="papiEditPerfTask('${taskId}')" title="改配置（非运行中可改）：保存后以 重试/运行 用新配置跑">编辑</button>` : ""}
         <button class="btn" onclick="showPerfTask('${taskId}')">刷新</button>
         <button class="btn" onclick="showPage('tasks')">← 任务列表</button></div>
     </header>
@@ -821,7 +978,7 @@ function papiCollectSpec() {
     if (!metric || slaVal === undefined) throw new Error("probe 需要 SLA 指标与上限值");
     const maxp = papiNumIn(papiFieldVal(/^并发上界/), "probe.max_parallel");
     if (maxp === undefined) throw new Error("probe 需要并发搜索上界 max_parallel");
-    perf.probe = { max_parallel, sla: { [metric]: slaVal } };
+    perf.probe = { max_parallel: maxp, sla: { [metric]: slaVal } };
     const from = papiNumIn(papiFieldVal(/^并发搜索起点|^SLA 起点/), "probe.from");
     if (from !== undefined) perf.probe.from = from;
     const runs = papiNumIn(papiFieldVal(/^每档重复/), "probe.runs");
@@ -889,6 +1046,20 @@ function bindPerfSubmit() {
     const fromScript = !!drawer.querySelector('.chip[data-src="script"].on');
     try {
       if (fromScript) throw new Error("脚本库暂未落库（后端缺口）：请切「自定义编排」发起压测");
+      if (PERF_EDIT_ID) {   // 编辑态：PATCH 原任务（pending 改首发配置 / 终态改完可重跑）
+        const { spec, name } = papiCollectSpec();
+        const updated = await PAPI.patch(`/perf/tasks/${PERF_EDIT_ID}`,
+          { name: name || undefined, spec });
+        const isPending = updated.status === "pending";
+        papiExitEditMode();
+        drawer.hidden = true;
+        papiToast(isPending
+          ? `配置已保存：${updated.id.slice(0, 8)}（pending）——点「运行」以新配置首发`
+          : `配置已保存：${updated.id.slice(0, 8)}——点「重试」以新配置再跑一轮`);
+        await wirePerfTasks();
+        if (PERF_LAST_TASK === updated.id) showPerfTask(updated.id);
+        return;
+      }
       const { spec, name } = papiCollectSpec();
       const task = await PAPI.post("/perf/tasks", { name: name || undefined, spec });
       await PAPI.post(`/perf/tasks/${task.id}/run`);
@@ -941,6 +1112,9 @@ function startPerfPolling() {
 document.querySelectorAll('#newTaskDrawer .radio-cards.three .radio-card[data-load]')
   .forEach(c => c.addEventListener("click", () => setTimeout(papiRenderLoadExtra, 0)));
 papiRenderLoadExtra();
+/* 任一「新建」入口打开抽屉先退编辑态：编辑态只能从列表/详情行内「编辑」进入 */
+document.querySelectorAll('[data-open-drawer="newTaskDrawer"]')
+  .forEach(b => b.addEventListener("click", () => papiExitEditMode()));
 
 async function papiBoot() {
   let live = false;
