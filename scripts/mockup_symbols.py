@@ -10,8 +10,8 @@ accuracy2 → api-acc3.js），经典脚本共享全局作用域：后加载的�
     python scripts/mockup_symbols.py functional2 nsFillRowFromData nsRevealRow
         # 按加载顺序列出每个符号的全部顶层定义并标出生效处；有符号未找到 → exit 1
     python scripts/mockup_symbols.py --check
-        # 全部页面：跨脚本同名覆盖、同脚本重复定义、
-        # 同一本地资产在各页面的 ?v= 不一致 → 逐条列出并 exit 1
+        # 全部页面：跨脚本同名覆盖、同脚本重复定义、同页逐字相同函数体（异名同义
+        # 拷贝）、同一本地资产在各页面的 ?v= 不一致 → 逐条列出并 exit 1
 
 识别口径：行首（列 0）的 function / async function / const / let / var / class 与
 ``window.X =`` 赋值视为顶层定义（静态稿惯例顶层不缩进）；缩进的嵌套定义不计。
@@ -37,6 +37,7 @@ _DECL = re.compile(
     r"|window\.(?P<win>[A-Za-z_$][\w$]*)\s*=(?!=))",
     re.M,
 )
+_WIN_ASSIGN = re.compile(r"\bwindow\.([A-Za-z_$][\w$]*)\s*=(?!=)")   # 任意缩进的运行期改写
 
 
 @dataclass(frozen=True)
@@ -81,11 +82,21 @@ def page_sources(page: Path) -> list[Source]:
 
 def definitions(source: Source) -> list[Definition]:
     found = []
+    seen_win: set[tuple[str, int]] = set()
     for match in _DECL.finditer(source.text):
         name = match.group("fn") or match.group("binding") or match.group("win")
         kind = "function" if match.group("fn") else (match.group("kw") or "window")
-        found.append(Definition(name, kind, source,
-                                source.line0 + source.text.count("\n", 0, match.start())))
+        line = source.line0 + source.text.count("\n", 0, match.start())
+        if kind == "window":
+            seen_win.add((name, line))
+        found.append(Definition(name, kind, source, line))
+    # 任意缩进的 window.X = 运行期改写也计入（查询口径完整：common2.html 函数内的
+    # window.DS_FILTERS 曾不可见）；kind=window.set，不参与覆盖检查（见 symbol_issues）
+    for match in _WIN_ASSIGN.finditer(source.text):
+        name = match.group(1)
+        line = source.line0 + source.text.count("\n", 0, match.start())
+        if (name, line) not in seen_win:
+            found.append(Definition(name, "window.set", source, line))
     return found
 
 
@@ -128,16 +139,91 @@ def symbol_issues(page: Path) -> list[str]:
             by_name.setdefault(d.name, []).append(d)
     issues = []
     for name, defs in sorted(by_name.items()):
-        if len(defs) < 2:
+        # 运行期 window.X = 改写（window.set）不参与覆盖检查：内联 mock ← 对接层 live
+        # 接管是本仓库惯例（DS_FILTERS），同脚本多次改写也是正常状态变更；只查列 0 声明
+        decls = [d for d in defs if d.kind != "window.set"]
+        if len(decls) < 2:
             continue
-        if _lexical_clash(defs):
-            issues.append(f"[跨脚本重复声明] {page.name}: {name} 定义于 {_where(defs)}"
-                          f" —— const/let/class 重名，{defs[-1].source.file} 整体 SyntaxError 不执行")
-        elif len({d.source for d in defs}) > 1:
-            issues.append(f"[跨脚本覆盖] {page.name}: {name} 定义于 {_where(defs)}"
-                          f" —— 生效的是最后执行的 {defs[-1].source.file}，其余是死代码")
+        if _lexical_clash(decls):
+            issues.append(f"[跨脚本重复声明] {page.name}: {name} 定义于 {_where(decls)}"
+                          f" —— const/let/class 重名，{decls[-1].source.file} 整体 SyntaxError 不执行")
+        elif len({d.source for d in decls}) > 1:
+            issues.append(f"[跨脚本覆盖] {page.name}: {name} 定义于 {_where(decls)}"
+                          f" —— 生效的是最后执行的 {decls[-1].source.file}，其余是死代码")
         else:
-            issues.append(f"[同脚本重复] {page.name}: {name} 定义于 {_where(defs)}")
+            issues.append(f"[同脚本重复] {page.name}: {name} 定义于 {_where(decls)}")
+    return issues
+
+
+_IDENTICAL_MIN = 60   # 归一化函数体最小长度：放行薄委托与一行箭头（如 const nsEsc = escHtml）
+
+
+def _func_text(text: str, start: int) -> tuple[str, str] | None:
+    """返回（声明头, 函数体）：体 = 首个「()[]{} 深度 0 处的花括号」起至其配平 }（字符串
+    字面量不参与配平）；深度 0 处遇 ; 而体未开即止（数据数组/一行箭头没有函数体，不得
+    吞并后续声明）；无体返回 None。头 = 声明起点至体开括号（供 const 场景 => 探测）。"""
+    depth = 0
+    brace = 0
+    open_at = -1
+    state = None
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if state:
+            i += 2 if ch == "\\" else 1
+            if ch == state:
+                state = None
+            continue
+        if ch in "\"'`":
+            state = ch
+        elif ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == "{":
+            if open_at < 0 and depth == 0:
+                open_at = i
+                brace = 1
+            elif open_at >= 0:
+                brace += 1
+        elif ch == "}":
+            if open_at >= 0:
+                brace -= 1
+                if brace == 0:
+                    return text[start:open_at], text[open_at:i + 1]
+        elif ch == ";" and open_at < 0 and depth == 0:
+            return None   # 声明已终结仍无函数体
+        i += 1
+    return None
+
+
+def identical_body_issues(page: Path) -> list[str]:
+    """同页跨脚本逐字相同的函数体（异名同义拷贝）：后者多半是漏收敛的重复实现，
+    演化时只改其中一份就分叉漂移（toast 时长参数漂移即前车之鉴）。"""
+    by_body: dict[str, list[str]] = {}
+    for source in page_sources(page):
+        for match in _DECL.finditer(source.text):
+            if match.group("kw") not in (None, "const"):
+                continue
+            name = match.group("fn") or match.group("binding")
+            if not name:
+                continue
+            got = _func_text(source.text, match.start())
+            if not got:
+                continue
+            head, body = got
+            if match.group("kw") == "const" and "=>" not in head:
+                continue   # const 数据对象（无 => 的花括号字面量）不是函数，不比体
+            norm = re.sub(r"\s+", " ", body).strip()
+            if len(norm) < _IDENTICAL_MIN:
+                continue
+            line = source.line0 + source.text.count("\n", 0, match.start())
+            by_body.setdefault(norm, []).append(f"{name}({source.file}:L{line})")
+    issues = []
+    for hits in sorted(by_body.values()):
+        if len(hits) > 1:
+            issues.append(f"[同体函数] {page.name}: {'、'.join(hits)}"
+                          " —— 函数体逐字相同（异名同义拷贝），收敛到共享实现后删本地拷贝")
     return issues
 
 
@@ -160,11 +246,12 @@ def version_issues(pages: list[Path]) -> list[str]:
 
 
 def check(pages: list[Path]) -> int:
-    issues = [i for page in pages for i in symbol_issues(page)] + version_issues(pages)
+    issues = [i for page in pages for i in symbol_issues(page) + identical_body_issues(page)]
+    issues += version_issues(pages)
     for issue in issues:
         print(issue)
     print(f"静态稿检查：{len(issues)} 个问题" if issues
-          else f"静态稿检查通过（{len(pages)} 个页面）：无跨脚本覆盖、重复定义、资产版本不一致")
+          else f"静态稿检查通过（{len(pages)} 个页面）：无跨脚本覆盖、重复定义、同体函数、资产版本不一致")
     return 1 if issues else 0
 
 

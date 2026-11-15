@@ -2343,11 +2343,6 @@ let DS_ONLINE = [];
 let DS_ONLINE_ONLY = false;
 let DS_ONLINE_SEL = "";
 
-function dsOnlineBadgeCell(b) {
-  if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;
-  if (b.local_like) return `<span class="badge pending"><i></i>近似 · ${b.local_like}</span>`;
-  return '<span class="dim">—</span>';
-}
 function dsOnlineFiltered() {
   const q = (document.getElementById("dsOnlineSearch")?.value || "").trim().toLowerCase();
   return DS_ONLINE.filter(b => {

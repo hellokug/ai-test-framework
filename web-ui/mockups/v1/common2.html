@@ -370,7 +370,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
 <div class="ribbon">V1 静态稿 · 公共资源 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=17"></script>
-<script src="assets/live2.js?v=1"></script>
+<script src="assets/live2.js?v=2"></script>
 <script>
 /* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets ⊕ /datasets/online/datasets 重渲染） ---------- */
 const DS = [
@@ -460,11 +460,7 @@ const DS_ONLINE_MOCK = [
 ];
 let DS_ONLINE_MOCK_ONLY = false;
 let DS_ONLINE_MOCK_SEL = "";
-function dsOnlineMockBadge(b) {
-  if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;
-  if (b.local_like) return `<span class="badge pending"><i></i>近似 · ${b.local_like}</span>`;
-  return '<span class="dim">—</span>';
-}
+const dsOnlineMockBadge = dsOnlineBadgeCell;   // mock/live 同款徽章，实现统一在 live2.js
 function dsOnlineMockRender() {
   const tbl = document.getElementById("dsOnlineTbl");
   if (!tbl) return;
@@ -568,6 +564,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=26"></script>
+<script src="api32.js?v=27"></script>
 </body>
 </html>

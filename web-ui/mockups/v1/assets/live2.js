@@ -22,3 +22,10 @@ function fmtDur(s) {
   return s == null ? "—" : s >= 3600 ? `${(s / 3600).toFixed(1)} 小时`
     : s >= 60 ? `${Math.round(s / 60)} 分钟` : `${Math.round(s)} 秒`;
 }
+
+/* 在线数据集「本机已有/近似」徽章：common2 mock 渲染与 api32 live 渲染同款，实现只此一份 */
+function dsOnlineBadgeCell(b) {
+  if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;
+  if (b.local_like) return `<span class="badge pending"><i></i>近似 · ${b.local_like}</span>`;
+  return '<span class="dim">—</span>';
+}
