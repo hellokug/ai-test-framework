@@ -1399,3 +1399,13 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
 行刷新 + 「已更新」toast（带密钥未归档警示）+ GET 落库核对；＋注册按钮重置新建态；
 截图视觉确认。
 后端代码改动需重启 aite serve；静态稿刷新即生效。
+
+> **2026-11-15 会话补充——suite 任务 run 级失败前端呈现（api-acc3 v15 内）**：
+> 后端 SuiteTaskExecutor 对 report.status=error 抛 SuiteRunError 落任务 failed（1e097f2）后，
+> api-acc3.js 补历史任务兜底四处：①rebuildAccRuns 列表行 `result.status=error` 的 succeeded 旧行
+> 按 failed 展示；②showAccTask 详情「执行错误」卡改两源（t.error + run.error，escHtml 转义）；
+> ③runId 解析兜底执行历史轮（同 api-perf 口径）；④详情头部 badge 用 dispStatus（run error 旧行
+> 显示失败，与列表一致）。IAB 自定义端口（8321 后端 + 8768 代理，快照库含真实历史任务
+> 56a2d2fc）端到端验证：列表行失败 badge、详情失败 badge、报错卡完整 traceback（含
+> `No module named 'resource'` 根因）三项断言全过。注意：api-acc3 v15 同时含判官校准会话
+> （88ce02a）改动，两批改动同文件不同函数；本批 dispStatus badge 修复为独立收尾提交。

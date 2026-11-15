@@ -206,7 +206,7 @@ async function showAccTask(taskId) {
 
   detail.innerHTML = `
     <header class="topbar">
-      <div><h1>${escHtml(t.name || "(未命名)")} ${badge(t.status)}</h1>
+      <div><h1>${escHtml(t.name || "(未命名)")} ${badge(dispStatus)}</h1>
       <div class="crumb">task ${t.id} · 引擎 ${escHtml(spec.engine || run?.details?.tool || "自研")}
       · 数据集 ${escHtml(datasets)} · ${spec.version ? `版本 ${escHtml(spec.version)} · ` : ""}模型
       ${escHtml(spec.target?.profile || spec.target?.model || "-")}
