@@ -1277,3 +1277,16 @@
   run_tool_suite 超长不涉本次）/ pytest perf 三件套全过；IAB 隔离实例双模式
   提交实测（固定输入输出 synthetic+定长 max_tokens、平台数据集+采样参数，
   spec 落库逐键核对）。aite/ 有改动需重启 aite serve；perf2 刷新即生效。
+
+- 2026-11-15 数据集目录筛选整改（common2.html + api32.js v=25，functional2 同步
+  bump）：①来源筛选三分类——dsFKind 由「本机/基准」两态改为 自建（上传/生成）/
+  开源（HF·远程直链在线拉取，行 origin=online）/ evalscope 基准，行数统计同步
+  拆「自建 X · 开源 Y」；②新增能力维度筛选 dsFCap（基础知识/数学/代码/推理/
+  指令遵循/智能体/长文本/安全 8 维），本机行/基准行名称下方出能力 chips（基准行
+  无映射时回退展示原生 tags），两个详情抽屉加「能力维度」行，关键字搜索命中能力
+  中文标签；③导入抽屉加能力维度多选 chips（#dsCapChips，functional 模式隐藏，
+  dsEntry 打开即清残留勾选），开源基准「导入」按 b.capabilities 预填，上传/HF/
+  远程提交带 capabilities；mock 数据（DS / DS_ONLINE_MOCK）全部补 capabilities。
+  后端配套（catalog capabilities 列 + 三摄取端点透传 + 基准 tags 映射）见同日
+  backend 提交。门禁 mockup_symbols --check / render_check 全过；纯静态稿改动，
+  刷新页面即生效，后端要吃到 capabilities 字段需重启 aite serve。

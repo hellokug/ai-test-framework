@@ -211,7 +211,13 @@ REST 对应：`POST /datasets/upload`（文本内容 json 上传）、
 参数同 add-hf：hf_id/name/split/subset/n/seed/fields）、
 `POST /datasets/remote/import`（远程拉取，type/name/url）、
 `GET·PUT /datasets/settings`、`GET /datasets/online/status`。
-公共页「数据集管理」已全部对接（列表/筛选/删除/导入上传/设置/在线导入）。
+三个摄取端点均收可选 `capabilities`（评测能力维度，归一后登记 catalog，
+未知值 422，功能 cases 不适用）；`GET /datasets` 行带 `origin`
+（local/online，目录「来源」细分自建/开源的依据）与 `capabilities`，
+`GET /datasets/online/datasets` 基准行由 evalscope tags 自动映射 capabilities
+（映射表 datasets/catalog.tags_to_capabilities）。
+公共页「数据集管理」已全部对接（列表/来源三分类与能力维度筛选/删除/
+导入上传/设置/在线导入）。
 
 ## 命令速查
 

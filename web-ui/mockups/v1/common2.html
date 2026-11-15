@@ -69,7 +69,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       </div>
     </header>
 
-    <div class="ds-kicker"><span>数据集目录</span><i></i><em>GET /datasets ⊕ /datasets/online/datasets · 本机数据集 + evalscope 基准全集同表（本机在前；基准行「详情」看指标/subsets，「导入」一键预填） · 下拉筛选 类型/来源/本机状态 + 关键字搜索 · 分页 每页 15/30/50/全部 · 行内「详情」查看单个数据集的来源、统计与 notes</em></div>
+    <div class="ds-kicker"><span>数据集目录</span><i></i><em>GET /datasets ⊕ /datasets/online/datasets · 本机数据集 + evalscope 基准全集同表（本机在前；基准行「详情」看指标/subsets，「导入」一键预填） · 下拉筛选 类型/来源（自建·开源·基准）/能力维度/本机状态 + 关键字搜索 · 分页 每页 15/30/50/全部 · 行内「详情」查看单个数据集的来源、能力维度、统计与 notes</em></div>
     <section class="card">
       <div id="dsFilter" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
         <select class="in" id="dsFType" style="width:auto;min-width:120px" title="按类型筛选">
@@ -78,10 +78,22 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
           <option value="accuracy">精度 accuracy</option>
           <option value="perf">性能 perf</option>
         </select>
-        <select class="in" id="dsFKind" style="width:auto;min-width:150px" title="按来源筛选">
+        <select class="in" id="dsFKind" style="width:auto;min-width:150px" title="按来源筛选（自建=上传/生成，开源=HF/远程直链在线拉取，基准=evalscope 全集行）">
           <option value="">来源：全部</option>
-          <option value="local">本机数据集</option>
+          <option value="self">自建（上传/生成）</option>
+          <option value="open">开源（在线拉取）</option>
           <option value="bench">evalscope 基准</option>
+        </select>
+        <select class="in" id="dsFCap" style="width:auto;min-width:130px" title="按评测能力维度筛选（开源基准按 tags 自动映射，自建数据集导入时标注）">
+          <option value="">能力：全部</option>
+          <option value="knowledge">基础知识</option>
+          <option value="math">数学</option>
+          <option value="code">代码</option>
+          <option value="reasoning">推理</option>
+          <option value="instruction">指令遵循</option>
+          <option value="agent">智能体</option>
+          <option value="longcontext">长文本</option>
+          <option value="safety">安全</option>
         </select>
         <select class="in" id="dsFState" style="width:auto;min-width:130px" title="按本机状态筛选">
           <option value="">状态：全部</option>
@@ -305,6 +317,18 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       <div class="field"><label>名称（类型下唯一）</label><input class="in" id="dsImpName" placeholder="如 my-qa-100"></div>
       <div class="field"><label>notes（可选）</label><input class="in" id="dsImpNotes" placeholder="来源 / 用途说明，登记进 catalog 供详情查看"></div>
     </div>
+    <div class="field" id="dsCapField"><label>能力维度（可多选）<span class="qmark">?<span class="tip">数据集的评测能力画像（基础知识/数学/代码/推理…），目录「能力」下拉按此筛选；开源基准「导入」时按其 tags 自动预填；功能 cases 不适用</span></span></label>
+      <div class="chips" id="dsCapChips" data-nodirty style="margin:0">
+        <span class="chip" data-cap="knowledge">基础知识</span>
+        <span class="chip" data-cap="math">数学</span>
+        <span class="chip" data-cap="code">代码</span>
+        <span class="chip" data-cap="reasoning">推理</span>
+        <span class="chip" data-cap="instruction">指令遵循</span>
+        <span class="chip" data-cap="agent">智能体</span>
+        <span class="chip" data-cap="longcontext">长文本</span>
+        <span class="chip" data-cap="safety">安全</span>
+      </div>
+      <span class="hint">登记进 catalog capabilities · 上传 / HF 导入 / 远程直链共用 · 留空 = 未标注</span></div>
     <div class="field"><label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="dsImpForce"> 同名已存在时覆盖登记与文件（force）</label></div>
   </div>
   <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="dsImpGo">校验并导入</button></div>
@@ -349,12 +373,12 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
 <script>
 /* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets ⊕ /datasets/online/datasets 重渲染） ---------- */
 const DS = [
-  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）"],
-  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编"],
-  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full", "HF 镜像导入 · fields=input=question,expected=answer"],
-  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private", "私域题库（上传 jsonl）"],
-  ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）"],
-  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）"],
+  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）", []],
+  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编", []],
+  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full", "HF 镜像导入 · fields=input=question,expected=answer", ["knowledge"]],
+  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private", "私域题库（上传 jsonl）", ["knowledge"]],
+  ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）", ["knowledge"]],
+  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）", []],
 ];
 /* 行对象与后端合并行同形：筛选/渲染/详情由 api32.js 提供（mock 也走同一套代码，
    DOMContentLoaded 时灌进 DS_ROWS/DS_BENCH）；statsText 为演示规模文本（live 行走 stats） */
@@ -362,6 +386,7 @@ const DS_ROWS_MOCK = DS.map(d => ({
   type: d[0], name: d[1], version: d[2], source: d[3], id: "mock0000",
   origin: /hf:|remote/.test(d[3]) ? "online" : "local",
   registered: true, statsText: d[4], path: d[5], notes: d[6],
+  capabilities: d[7] || [],
 }));
 
 /* live 模式让位给 api32.js 的绑定与渲染（mock 才走下面这套）。
@@ -380,14 +405,19 @@ function dsSyncMode(mode) {
   document.querySelectorAll("#dsModeChips .chip").forEach(c =>
     c.classList.toggle("on", c.dataset.dsmode === mode));
   document.querySelectorAll("#dsImport .ds-mode").forEach(g => (g.hidden = g.dataset.mode !== mode));
+  const cap = document.getElementById("dsCapField");
+  if (cap) cap.hidden = mode === "functional";   // 功能 cases 不适用能力维度
 }
 function dsEntry(mode) {
   dsSyncMode(mode);
+  document.querySelectorAll("#dsCapChips .chip").forEach(c => c.classList.remove("on"));
   const d = document.getElementById("dsImport");
   if (d && d.hidden) d.hidden = false;
 }
 document.querySelectorAll("#dsModeChips .chip").forEach(c =>
   c.addEventListener("click", () => dsSyncMode(c.dataset.dsmode)));
+document.querySelectorAll("#dsCapChips .chip").forEach(c =>
+  c.addEventListener("click", () => c.classList.toggle("on")));
 
 /* mock 详情/表格不再单独实现：dsRenderTable/dsOpenDetail（api32.js）对 mock 行数据同样工作，
    写操作（下载/删除/导入）由委托里的 dsMockGuard 拦下 */
@@ -403,29 +433,29 @@ document.getElementById("dsDetailDl").addEventListener("click", e => {
    名称/dataset_id/指标/subset 数取自 evalscope 实清单（2026-11 快照）；subsets 只存前 3 个
    做预览，subset_count 存真实总数（目录行/详情/mock 抽屉表都取 subset_count 计数） */
 const DS_ONLINE_MOCK = [
-  { name: "gsm8k", pretty_name: "GSM8K", dataset_id: "AI-ModelScope/gsm8k", tags: ["Math", "Reasoning"], metrics: ["accuracy"], subsets: ["main"], subset_count: 1, few_shot_num: 4, local: null, local_like: null },
-  { name: "hellaswag", pretty_name: "HellaSwag", dataset_id: "evalscope/hellaswag", tags: ["Commonsense", "MCQ", "Knowledge"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "race", pretty_name: "RACE", dataset_id: "evalscope/race", tags: ["Reasoning", "MCQ"], metrics: ["accuracy"], subsets: ["high", "middle"], subset_count: 2, few_shot_num: 3, local: null, local_like: null },
-  { name: "agieval", pretty_name: "AGIEval", dataset_id: "opencompass/agieval", tags: ["Reasoning", "Knowledge", "Math", "MCQ"], metrics: ["accuracy"], subsets: ["aqua-rat", "logiqa-en", "lsat-ar"], subset_count: 21, few_shot_num: 0, local: null, local_like: null },
-  { name: "bbh", pretty_name: "BBH", dataset_id: "evalscope/bbh", tags: ["Reasoning"], metrics: ["accuracy"], subsets: ["temporal_sequences", "disambiguation_qa", "date_understanding"], subset_count: 27, few_shot_num: 3, local: null, local_like: null },
-  { name: "trivia_qa", pretty_name: "TriviaQA", dataset_id: "evalscope/trivia_qa", tags: ["QA", "ReadingComprehension"], metrics: ["accuracy"], subsets: ["rc.wikipedia"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "truthful_qa", pretty_name: "TruthfulQA", dataset_id: "evalscope/truthful_qa", tags: ["Knowledge"], metrics: ["multi_choice_acc"], subsets: ["multiple_choice"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "winogrande", pretty_name: "Winogrande", dataset_id: "AI-ModelScope/winogrande_val", tags: ["Reasoning", "MCQ"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "arc", pretty_name: "ARC", dataset_id: "allenai/ai2_arc", tags: ["Reasoning", "MCQ"], metrics: ["accuracy"], subsets: ["ARC-Easy", "ARC-Challenge"], subset_count: 2, few_shot_num: 0, local: null, local_like: null },
-  { name: "piqa", pretty_name: "PIQA", dataset_id: "extraordinarylab/piqa", tags: ["Reasoning", "Commonsense", "MCQ"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "logi_qa", pretty_name: "LogiQA", dataset_id: "extraordinarylab/logiqa", tags: ["Reasoning", "MCQ"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "drop", pretty_name: "DROP", dataset_id: "AI-ModelScope/DROP", tags: ["Reasoning"], metrics: ["exact_match", "f1"], subsets: ["default"], subset_count: 1, few_shot_num: 3, local: null, local_like: null },
-  { name: "math_500", pretty_name: "MATH-500", dataset_id: "AI-ModelScope/MATH-500", tags: ["Math", "Reasoning"], metrics: ["accuracy"], subsets: ["Level 1", "Level 2", "Level 3"], subset_count: 5, few_shot_num: 0, local: null, local_like: null },
-  { name: "aime25", pretty_name: "AIME-2025", dataset_id: "evalscope/aime25", tags: ["Math", "Reasoning"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "mmlu", pretty_name: "MMLU", dataset_id: "cais/mmlu", tags: ["Knowledge", "MCQ"], metrics: ["accuracy"], subsets: ["abstract_algebra", "anatomy", "astronomy"], subset_count: 57, few_shot_num: 5, local: null, local_like: null },
-  { name: "cmmlu", pretty_name: "C-MMLU", dataset_id: "evalscope/cmmlu", tags: ["Knowledge", "MCQ", "Chinese"], metrics: ["accuracy"], subsets: ["agronomy", "anatomy", "ancient_chinese"], subset_count: 67, few_shot_num: 0, local: null, local_like: null },
-  { name: "ceval", pretty_name: "C-Eval", dataset_id: "evalscope/ceval", tags: ["Knowledge", "MCQ", "Chinese"], metrics: ["accuracy"], subsets: ["computer_network", "operating_system", "computer_architecture"], subset_count: 52, few_shot_num: 5, local: null, local_like: "ceval_full" },
-  { name: "docmath", pretty_name: "DocMath", dataset_id: "yale-nlp/DocMath-Eval", tags: ["Reasoning", "Math", "LongContext"], metrics: ["accuracy"], subsets: ["complong_testmini", "compshort_testmini", "simplong_testmini"], subset_count: 4, few_shot_num: 0, local: null, local_like: null },
-  { name: "ifeval", pretty_name: "IFEval", dataset_id: "opencompass/ifeval", tags: ["InstructionFollowing"], metrics: ["prompt_level_strict", "inst_level_strict"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "humaneval", pretty_name: "HumanEval", dataset_id: "opencompass/humaneval", tags: ["Coding"], metrics: ["accuracy"], subsets: ["openai_humaneval"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
-  { name: "live_code_bench", pretty_name: "Live-Code-Bench", dataset_id: "evalscope/livecodebench_code_generation_lite_parquet", tags: ["Coding"], metrics: ["accuracy"], subsets: ["release_latest", "release_v1", "release_v2"], subset_count: 29, few_shot_num: 0, local: null, local_like: null },
-  { name: "swe_bench_verified", pretty_name: "SWE-bench Verified", dataset_id: "princeton-nlp/SWE-bench_Verified", tags: ["Coding", "Agent"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: "swebench_verified", local_like: null },
-  { name: "gpqa", pretty_name: "GPQA", dataset_id: "AI-ModelScope/gpqa", tags: ["Knowledge", "MCQ"], metrics: ["accuracy"], subsets: ["gpqa_main", "gpqa_extended", "gpqa_diamond"], subset_count: 3, few_shot_num: 0, local: null, local_like: null },
+  { name: "gsm8k", pretty_name: "GSM8K", dataset_id: "AI-ModelScope/gsm8k", tags: ["Math", "Reasoning"], capabilities: ["math", "reasoning"], metrics: ["accuracy"], subsets: ["main"], subset_count: 1, few_shot_num: 4, local: null, local_like: null },
+  { name: "hellaswag", pretty_name: "HellaSwag", dataset_id: "evalscope/hellaswag", tags: ["Commonsense", "MCQ", "Knowledge"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "race", pretty_name: "RACE", dataset_id: "evalscope/race", tags: ["Reasoning", "MCQ"], capabilities: ["reasoning"], metrics: ["accuracy"], subsets: ["high", "middle"], subset_count: 2, few_shot_num: 3, local: null, local_like: null },
+  { name: "agieval", pretty_name: "AGIEval", dataset_id: "opencompass/agieval", tags: ["Reasoning", "Knowledge", "Math", "MCQ"], capabilities: ["reasoning", "knowledge", "math"], metrics: ["accuracy"], subsets: ["aqua-rat", "logiqa-en", "lsat-ar"], subset_count: 21, few_shot_num: 0, local: null, local_like: null },
+  { name: "bbh", pretty_name: "BBH", dataset_id: "evalscope/bbh", tags: ["Reasoning"], capabilities: ["reasoning"], metrics: ["accuracy"], subsets: ["temporal_sequences", "disambiguation_qa", "date_understanding"], subset_count: 27, few_shot_num: 3, local: null, local_like: null },
+  { name: "trivia_qa", pretty_name: "TriviaQA", dataset_id: "evalscope/trivia_qa", tags: ["QA", "ReadingComprehension"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["rc.wikipedia"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "truthful_qa", pretty_name: "TruthfulQA", dataset_id: "evalscope/truthful_qa", tags: ["Knowledge"], capabilities: ["knowledge"], metrics: ["multi_choice_acc"], subsets: ["multiple_choice"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "winogrande", pretty_name: "Winogrande", dataset_id: "AI-ModelScope/winogrande_val", tags: ["Reasoning", "MCQ"], capabilities: ["reasoning"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "arc", pretty_name: "ARC", dataset_id: "allenai/ai2_arc", tags: ["Reasoning", "MCQ"], capabilities: ["reasoning"], metrics: ["accuracy"], subsets: ["ARC-Easy", "ARC-Challenge"], subset_count: 2, few_shot_num: 0, local: null, local_like: null },
+  { name: "piqa", pretty_name: "PIQA", dataset_id: "extraordinarylab/piqa", tags: ["Reasoning", "Commonsense", "MCQ"], capabilities: ["reasoning", "knowledge"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "logi_qa", pretty_name: "LogiQA", dataset_id: "extraordinarylab/logiqa", tags: ["Reasoning", "MCQ"], capabilities: ["reasoning"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "drop", pretty_name: "DROP", dataset_id: "AI-ModelScope/DROP", tags: ["Reasoning"], capabilities: ["reasoning"], metrics: ["exact_match", "f1"], subsets: ["default"], subset_count: 1, few_shot_num: 3, local: null, local_like: null },
+  { name: "math_500", pretty_name: "MATH-500", dataset_id: "AI-ModelScope/MATH-500", tags: ["Math", "Reasoning"], capabilities: ["math", "reasoning"], metrics: ["accuracy"], subsets: ["Level 1", "Level 2", "Level 3"], subset_count: 5, few_shot_num: 0, local: null, local_like: null },
+  { name: "aime25", pretty_name: "AIME-2025", dataset_id: "evalscope/aime25", tags: ["Math", "Reasoning"], capabilities: ["math", "reasoning"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "mmlu", pretty_name: "MMLU", dataset_id: "cais/mmlu", tags: ["Knowledge", "MCQ"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["abstract_algebra", "anatomy", "astronomy"], subset_count: 57, few_shot_num: 5, local: null, local_like: null },
+  { name: "cmmlu", pretty_name: "C-MMLU", dataset_id: "evalscope/cmmlu", tags: ["Knowledge", "MCQ", "Chinese"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["agronomy", "anatomy", "ancient_chinese"], subset_count: 67, few_shot_num: 0, local: null, local_like: null },
+  { name: "ceval", pretty_name: "C-Eval", dataset_id: "evalscope/ceval", tags: ["Knowledge", "MCQ", "Chinese"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["computer_network", "operating_system", "computer_architecture"], subset_count: 52, few_shot_num: 5, local: null, local_like: "ceval_full" },
+  { name: "docmath", pretty_name: "DocMath", dataset_id: "yale-nlp/DocMath-Eval", tags: ["Reasoning", "Math", "LongContext"], capabilities: ["reasoning", "math", "longcontext"], metrics: ["accuracy"], subsets: ["complong_testmini", "compshort_testmini", "simplong_testmini"], subset_count: 4, few_shot_num: 0, local: null, local_like: null },
+  { name: "ifeval", pretty_name: "IFEval", dataset_id: "opencompass/ifeval", tags: ["InstructionFollowing"], capabilities: ["instruction"], metrics: ["prompt_level_strict", "inst_level_strict"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "humaneval", pretty_name: "HumanEval", dataset_id: "opencompass/humaneval", tags: ["Coding"], capabilities: ["code"], metrics: ["accuracy"], subsets: ["openai_humaneval"], subset_count: 1, few_shot_num: 0, local: null, local_like: null },
+  { name: "live_code_bench", pretty_name: "Live-Code-Bench", dataset_id: "evalscope/livecodebench_code_generation_lite_parquet", tags: ["Coding"], capabilities: ["code"], metrics: ["accuracy"], subsets: ["release_latest", "release_v1", "release_v2"], subset_count: 29, few_shot_num: 0, local: null, local_like: null },
+  { name: "swe_bench_verified", pretty_name: "SWE-bench Verified", dataset_id: "princeton-nlp/SWE-bench_Verified", tags: ["Coding", "Agent"], capabilities: ["code", "agent"], metrics: ["accuracy"], subsets: ["default"], subset_count: 1, few_shot_num: 0, local: "swebench_verified", local_like: null },
+  { name: "gpqa", pretty_name: "GPQA", dataset_id: "AI-ModelScope/gpqa", tags: ["Knowledge", "MCQ"], capabilities: ["knowledge"], metrics: ["accuracy"], subsets: ["gpqa_main", "gpqa_extended", "gpqa_diamond"], subset_count: 3, few_shot_num: 0, local: null, local_like: null },
 ];
 let DS_ONLINE_MOCK_ONLY = false;
 let DS_ONLINE_MOCK_SEL = "";
@@ -464,10 +494,10 @@ function dsOnlineMockRender() {
    live 再由 fapiBoot→wireCommonDatasetsPage 拉真数据覆盖 */
 function dsDatasetsInit() {
   if (!document.getElementById("dsFilter")) return;
-  window.DS_FILTERS = { type: "", kind: "", state: "", q: "" };
+  window.DS_FILTERS = { type: "", kind: "", state: "", cap: "", q: "" };
   DS_ROWS = DS_ROWS_MOCK.map(r => ({ ...r, kind: "local" }));
   DS_BENCH = DS_ONLINE_MOCK.map(b => ({ ...b, kind: "bench", type: "accuracy" }));
-  ["dsFType", "dsFKind", "dsFState"].forEach(id =>
+  ["dsFType", "dsFKind", "dsFState", "dsFCap"].forEach(id =>
     document.getElementById(id).addEventListener("change", dsApplyFilters));
   document.getElementById("dsFQ").addEventListener("input", dsApplyFilters);
   dsBindDatasetsTable();
@@ -537,6 +567,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=24"></script>
+<script src="api32.js?v=25"></script>
 </body>
 </html>

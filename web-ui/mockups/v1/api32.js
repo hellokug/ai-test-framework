@@ -1922,18 +1922,29 @@ function dsOriginTag(r) {
     ? '<span class="tag t-online">在线</span>'
     : '<span class="tag">本地</span>';
 }
+/* 能力维度 key → 中文标签（与后端 aite/datasets/catalog.CAPABILITIES 同源） */
+const DS_CAPS = { knowledge: "基础知识", math: "数学", code: "代码",
+  reasoning: "推理", instruction: "指令遵循", agent: "智能体",
+  longcontext: "长文本", safety: "安全" };
+function dsCapChips(r) {
+  return (r.capabilities || []).map(k =>
+    `<span class="tag" title="能力维度">${dsEsc(DS_CAPS[k] || k)}</span>`).join(" ");
+}
 /* 统一筛选（mock/live 共用）：原生 select 单选 + 关键字搜索；原生下拉选中即自动收起 */
-window.DS_FILTERS = { type: "", kind: "", state: "", q: "" };
+window.DS_FILTERS = { type: "", kind: "", state: "", cap: "", q: "" };
 function dsFilterMatch(r, f) {
   if (f.type && r.type !== f.type) return false;
-  const kind = r.kind === "bench" ? "bench" : "local";
+  // 来源三分类：基准行=evalscope 基准；本机行按 origin 细分（在线拉取=开源，其余=自建）
+  const kind = r.kind === "bench" ? "bench" : (r.origin === "online" ? "open" : "self");
   if (f.kind && kind !== f.kind) return false;
   const state = kind === "bench" ? (r.local ? "in" : "out") : "in";
   if (f.state && state !== f.state) return false;
+  if (f.cap && !(r.capabilities || []).includes(f.cap)) return false;
   if (f.q) {
+    const caps = (r.capabilities || []).map(k => DS_CAPS[k] || k);
     const hay = kind === "bench"
-      ? [r.name, r.pretty_name, r.dataset_id, (r.tags || []).join(" ")]
-      : [r.name, r.notes, r.path, r.source];
+      ? [r.name, r.pretty_name, r.dataset_id, (r.tags || []).join(" "), ...caps]
+      : [r.name, r.notes, r.path, r.source, ...caps];
     if (!hay.some(v => String(v || "").toLowerCase().includes(f.q))) return false;
   }
   return true;
@@ -1983,9 +1994,11 @@ function dsPagerHtml(pages) {
 }
 function dsRenderTable() {
   const rows = dsAllRows().filter(r => dsFilterMatch(r, window.DS_FILTERS));
+  const local = DS_ROWS.filter(r => r.kind !== "bench");
+  const opened = local.filter(r => r.origin === "online").length;
   const cnt = document.getElementById("dsFCount");
   if (cnt) cnt.textContent =
-    `共 ${rows.length} 行 · 本机 ${DS_ROWS.filter(r => r.kind !== "bench").length}` +
+    `共 ${rows.length} 行 · 本机 ${local.length}（自建 ${local.length - opened} · 开源 ${opened}）` +
     ` · 基准 ${DS_BENCH.length}（本机已有 ${DS_BENCH.filter(b => b.local).length}）`;
   const { pages, slice } = dsPageOf(rows);
   document.getElementById("dsTbl").innerHTML = `
@@ -2001,11 +2014,12 @@ function dsLocalRow(r) {
   const originCell = dsOriginTag(r) + (unreg
     ? ' <span class="badge pending" title="本机已有（注册表/目录），尚未登记 catalog；走一次导入即可入册"><i></i>未登记</span>'
     : "");
-  const sub = r.notes
-    ? `<div class="rid faint" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${dsEsc(r.notes)}">${dsEsc(r.notes)}</div>`
+  const sub = dsCapChips(r) + (r.notes ? ` <span title="${dsEsc(r.notes)}">${dsEsc(r.notes)}</span>` : "");
+  const subHtml = sub
+    ? `<div class="rid faint" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sub}</div>`
     : '<div class="rid faint">&nbsp;</div>';
   return `<tr>
-  <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${dsEsc(r.name)}</b>${sub}</td>
+  <td><span class="tag">${r.type}</span></td><td class="rname"><b class="mono">${dsEsc(r.name)}</b>${subHtml}</td>
   <td style="white-space:nowrap">${originCell}</td>
   <td class="dim" style="white-space:normal">${r.statsText || dsStatsCell(r.stats)}</td>
   <td class="mono faint" style="font-size:11px">${r.path ? dsClip(r.path) : "—"}</td>
@@ -2020,11 +2034,14 @@ function dsBenchRow(b) {
     : b.local_like
       ? `<span class="badge pending" title="本机有近似名数据集（可能是同一基准的另一份转换）"><i></i>近似 · ${dsEsc(b.local_like)}</span>`
       : '<span class="dim" title="本机没有：导入后完全离线可用，跑任务时也会自动下载">未下载</span>';
+  const capHtml = dsCapChips(b) ||
+    (b.tags || []).slice(0, 3).map(t =>
+      `<span class="tag" title="evalscope 原生标签（未映射到平台能力维度）">${dsEsc(t)}</span>`).join(" ");
   return `<tr>
   <td><span class="tag">accuracy</span></td>
   <td class="rname"><b class="mono">${dsEsc(b.name)}</b>
     <div class="rid faint" style="overflow:hidden;white-space:nowrap">${b.pretty_name && b.pretty_name !== b.name ? dsEsc(b.pretty_name) : ""}
-      ${(b.tags || []).slice(0, 3).map(t => `<span class="tag">${dsEsc(t)}</span>`).join(" ")}</div></td>
+      ${capHtml}</div></td>
   <td style="white-space:nowrap"><span class="tag t-online">evalscope</span> ${badge}</td>
   <td class="dim" style="white-space:normal">${(b.metrics || []).join(", ") || "—"} · subsets ${dsSubCount(b)}${b.few_shot_num ? ` · few-shot ${b.few_shot_num}` : ""}</td>
   <td class="mono faint" style="font-size:11px">${b.dataset_id ? dsClip(b.dataset_id) : "—"}</td>
@@ -2041,6 +2058,7 @@ function dsOpenDetail(ref) {
     ["名称", `<b class="mono">${r.name}</b>`],
     ["登记 id", `<span class="mono faint">${r.id}</span>`],
     ["来源", `${dsOriginTag(r)} <span class="dim">${r.source || "—"}</span>`],
+    ["能力维度", dsCapChips(r) || "—"],
     ["version（复现凭证：HF split / 生成 seed）", r.version ? `<span class="tag mono">${r.version}</span>` : "—"],
     ["规模 stats", dsStatsCell(r.stats)],
     ["文件路径", r.path ? `<span class="mono" style="font-size:12px">${r.path}</span>` : "—"],
@@ -2074,6 +2092,7 @@ function dsOpenBenchDetail(name) {
     ["pretty_name", b.pretty_name || "—"],
     ["dataset_id", `<span class="mono">${b.dataset_id || "—"}</span>`],
     ["标签", (b.tags || []).map(t => `<span class="tag">${t}</span>`).join(" ") || "—"],
+    ["能力维度", dsCapChips(b) || "—"],
     ["指标", `<span class="mono dim">${(b.metrics || []).join(", ") || "—"}</span>`],
     ["subsets", `${subN} 个${subs.length ? `：${subs.slice(0, 6).join("、")}${subN > 6 ? " …" : ""}` : ""}`],
     ["few-shot", String(b.few_shot_num || 0)],
@@ -2096,6 +2115,9 @@ function dsBenchImport(name) {
   document.getElementById("dsHfId").value = b.dataset_id || b.name || "";
   set("dsImpName", b.name || "");
   dsEntry("hf");
+  // 能力维度按基准画像预填（dsEntry 已清掉上次打开的残留勾选）
+  document.querySelectorAll("#dsCapChips .chip").forEach(c =>
+    c.classList.toggle("on", (b.capabilities || []).includes(c.dataset.cap)));
   fapiToast(`已预填 ${b.dataset_id || b.name}：确认 split/采样参数后点「校验并导入」`);
 }
 function dsDownload(ref) {
@@ -2158,7 +2180,7 @@ function dsApplyFilters() {
   const val = id => ((document.getElementById(id) || {}).value || "").trim();
   window.DS_FILTERS = {
     type: val("dsFType"), kind: val("dsFKind"), state: val("dsFState"),
-    q: val("dsFQ").toLowerCase(),
+    cap: val("dsFCap"), q: val("dsFQ").toLowerCase(),
   };
   window.DS_PAGE.num = 1;                                // 换筛选回第 1 页
   dsRenderTable();
@@ -2259,6 +2281,7 @@ async function wireDatasetImportDrawer() {
     go.addEventListener("click", async () => {
       const mode = document.querySelector("#dsModeChips .chip.on")?.dataset.dsmode || "upload";
       const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+      const caps = [...document.querySelectorAll("#dsCapChips .chip.on")].map(c => c.dataset.cap);
       const name = val("dsImpName"), notes = val("dsImpNotes");
       const force = document.getElementById("dsImpForce").checked;
       try {
@@ -2281,14 +2304,14 @@ async function wireDatasetImportDrawer() {
             subset: val("dsHfSubset") || undefined,
             n: n ? Number(n) : undefined,
             seed: seed ? Number(seed) : 42,
-            fields: val("dsHfFields") || undefined, notes });
+            fields: val("dsHfFields") || undefined, notes, capabilities: caps });
           doneMsg = `已导入 ${row.type}/${row.name}（${(row.stats || {}).count ?? "—"} 条，之后完全离线可用）`;
         } else if (mode === "remote") {
           if (!name) { fapiToast("请填数据集名（类型下唯一）", true); return; }
           go.disabled = true;
           const row = await FAPI.post("/datasets/remote/import", {
             type: document.getElementById("dsRemoteType").value,
-            name, url: val("dsRemoteUrl"), notes, force });
+            name, url: val("dsRemoteUrl"), notes, force, capabilities: caps });
           doneMsg = `已导入 ${row.type}/${row.name}（${(row.stats || {}).count ?? "—"} 条）`;
         } else {
           if (!name) { fapiToast("请填数据集名（类型下唯一）", true); return; }
@@ -2297,7 +2320,8 @@ async function wireDatasetImportDrawer() {
           const text = await file.text();
           const row = await FAPI.post("/datasets/upload",
             { type: document.getElementById("dsImpType")?.value || "accuracy",
-              name, filename: file.name, content: text, notes, force });
+              name, filename: file.name, content: text, notes, force,
+              capabilities: caps });
           doneMsg = `已上传 ${row.type}/${row.name}（${(row.stats || {}).count ?? "—"} 条，规范化为 jsonl 落位数据集目录）`;
         }
         document.getElementById("dsImport").hidden = true;
