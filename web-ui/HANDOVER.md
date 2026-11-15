@@ -1361,3 +1361,18 @@ functional 域 api32.js wireModels 同款双来源合并，该文件在数据集
 释放后收敛。验证：node --check 两文件、去重逻辑沙箱断言（同名只一条 / 独有注册保留 /
 Judge 来源完整）、mockup_symbols --check 5 页过。静态稿改动，刷新页面即生效，无需重启
 后端。
+
+## 2026-11-15（数据集来源维度纠偏：私有性 ownership 独立成字段，api32 v28）
+
+owner 指正「开源/自建 = 数据集是否私有，在线/本地 = 存储位置，两者正交」——上一条目
+把 origin（获取渠道）错当私有性用（在线拉取=开源）。修正：
+①catalog 新增 `ownership`（open/self）：HF 导入缺省开源，上传/生成/远程直链缺省自建，
+导入抽屉单选 chips（#dsOwnChips，hf 模式默认开源、其余默认自建，functional 隐藏），
+三摄取端点透传；存量行迁移加列 NULL，展示层按 source 推导兜底（hf / upstream hf:=开源）。
+②「来源」筛选回归私有性语义：自建（自有/私域）/开源（公开数据集）/evalscope 基准；
+行内来源标签改 开源/自建（原「在线/本地」标签撤——那是 origin 获取渠道的语义，字段保留）。
+③「本机状态」筛选改「存储位置」：本地（已落盘）/在线（基准未下载，跑任务时自动拉）。
+④目录行数统计按 ownership 拆分；上传/HF/远程提交带 ownership。api32 v=27→28
+（common2/functional2 同步 bump）。门禁：ruff / 数据集域 pytest 64 例 / lint-imports /
+mockup_symbols --check / render_check 全过；纯静态稿刷新即生效，后端要吃到 ownership
+需重启 aite serve。

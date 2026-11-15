@@ -69,7 +69,7 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       </div>
     </header>
 
-    <div class="ds-kicker"><span>数据集目录</span><i></i><em>GET /datasets ⊕ /datasets/online/datasets · 本机数据集 + evalscope 基准全集同表（本机在前；基准行「详情」看指标/subsets，「导入」一键预填） · 下拉筛选 类型/来源（自建·开源·基准）/能力维度/本机状态 + 关键字搜索 · 分页 每页 15/30/50/全部 · 行内「详情」查看单个数据集的来源、能力维度、统计与 notes</em></div>
+    <div class="ds-kicker"><span>数据集目录</span><i></i><em>GET /datasets ⊕ /datasets/online/datasets · 本机数据集 + evalscope 基准全集同表（本机在前；基准行「详情」看指标/subsets，「导入」一键预填） · 下拉筛选 类型/来源（开源·自建，私有性）/存储（本地·在线）/能力维度 + 关键字搜索 · 分页 每页 15/30/50/全部 · 行内「详情」查看单个数据集的来源、能力维度、统计与 notes</em></div>
     <section class="card">
       <div id="dsFilter" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
         <select class="in" id="dsFType" style="width:auto;min-width:120px" title="按类型筛选">
@@ -78,10 +78,10 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
           <option value="accuracy">精度 accuracy</option>
           <option value="perf">性能 perf</option>
         </select>
-        <select class="in" id="dsFKind" style="width:auto;min-width:150px" title="按来源筛选（自建=上传/生成，开源=HF/远程直链在线拉取，基准=evalscope 全集行）">
+        <select class="in" id="dsFKind" style="width:auto;min-width:150px" title="按来源（私有性）筛选：开源=公开数据集（HF 基准等）；自建=自有/私域数据（上传/生成/内网直链）；基准=evalscope 全集菜单行">
           <option value="">来源：全部</option>
-          <option value="self">自建（上传/生成）</option>
-          <option value="open">开源（在线拉取）</option>
+          <option value="self">自建（自有/私域）</option>
+          <option value="open">开源（公开数据集）</option>
           <option value="bench">evalscope 基准</option>
         </select>
         <select class="in" id="dsFCap" style="width:auto;min-width:130px" title="按评测能力维度筛选（开源基准按 tags 自动映射，自建数据集导入时标注）">
@@ -95,10 +95,10 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
           <option value="longcontext">长文本</option>
           <option value="safety">安全</option>
         </select>
-        <select class="in" id="dsFState" style="width:auto;min-width:130px" title="按本机状态筛选">
-          <option value="">状态：全部</option>
-          <option value="in">已在本机</option>
-          <option value="out">未在本机</option>
+        <select class="in" id="dsFState" style="width:auto;min-width:130px" title="按存储位置筛选：本地=文件已在本机数据集目录；在线=基准未下载（跑任务时自动拉取）">
+          <option value="">存储：全部</option>
+          <option value="local">本地（已落盘）</option>
+          <option value="online">在线（未下载）</option>
         </select>
         <input class="in" id="dsFQ" placeholder="搜名称 / dataset_id / 标签 / notes…" style="flex:1;min-width:180px">
         <span class="hint" id="dsFCount"></span>
@@ -317,6 +317,12 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       <div class="field"><label>名称（类型下唯一）</label><input class="in" id="dsImpName" placeholder="如 my-qa-100"></div>
       <div class="field"><label>notes（可选）</label><input class="in" id="dsImpNotes" placeholder="来源 / 用途说明，登记进 catalog 供详情查看"></div>
     </div>
+    <div class="field" id="dsOwnField"><label>来源（私有性）<span class="qmark">?<span class="tip">开源=公开数据集（HF 基准等）；自建=自有/私域数据（上传、生成、内网直链拉取）。与「存储位置」正交：在线拉的开源集落盘后存储也是本地</span></span></label>
+      <div class="chips" id="dsOwnChips" data-nodirty style="margin:0">
+        <span class="chip" data-own="open">开源</span>
+        <span class="chip" data-own="self">自建</span>
+      </div>
+      <span class="hint">登记进 catalog ownership · 缺省：HF 导入=开源，上传/生成/远程直链=自建 · 可手改</span></div>
     <div class="field" id="dsCapField"><label>能力维度（可多选）<span class="qmark">?<span class="tip">数据集的评测能力画像（基础知识/数学/代码/推理…），目录「能力」下拉按此筛选；开源基准「导入」时按其 tags 自动预填；功能 cases 不适用</span></span></label>
       <div class="chips" id="dsCapChips" data-nodirty style="margin:0">
         <span class="chip" data-cap="knowledge">基础知识</span>
@@ -374,12 +380,12 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
 <script>
 /* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets ⊕ /datasets/online/datasets 重渲染） ---------- */
 const DS = [
-  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）", []],
-  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编", []],
-  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full", "HF 镜像导入 · fields=input=question,expected=answer", ["knowledge"]],
-  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private", "私域题库（上传 jsonl）", ["knowledge"]],
-  ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）", ["knowledge"]],
-  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）", []],
+  ["functional", "api-regression-mini", "v1", "local import", "12 cases · 断言键 http_status×6/nonempty×6", "data/datasets/functional/api-regression-mini/cases.jsonl", "API 回归用例（功能 cases 文本导入）", [], "self"],
+  ["functional", "agent-tasks", "builtin", "内置场景", "12 cases · tool/tool_args_contains/no_tool", "aite/functional/scenarios/agent_tasks/cases.jsonl", "内置 agent 场景收编", [], "self"],
+  ["accuracy", "ceval_full", "2024", "hf:ceval/ceval-exam 转换", "1606 题 · 52 学科 · group_by=subject", "data/datasets/accuracy/ceval_full", "HF 镜像导入 · fields=input=question,expected=answer", ["knowledge"], "open"],
+  ["accuracy", "finance_private", "seed42", "gen-domain", "12 题 · RAGAS 推荐指标 · gold+干扰文档", "data/datasets/accuracy/finance_private", "私域题库（上传 jsonl）", ["knowledge"], "self"],
+  ["accuracy", "obs-qa-pull", "—", "remote pull", "80 题 · OBS 桶直链拉取", "data/datasets/accuracy/obs-qa-pull.jsonl", "远程直链导入示例（内网通道）", ["knowledge"], "self"],
+  ["perf", "rag-prefix-50", "seed42", "generated", "2000 条 · 桶 80/320/640 · 前缀共享 0.5", "data/datasets/perf/rag-prefix-50-*.jsonl", "生成器产出（perf 页）", [], "self"],
 ];
 /* 行对象与后端合并行同形：筛选/渲染/详情由 api32.js 提供（mock 也走同一套代码，
    DOMContentLoaded 时灌进 DS_ROWS/DS_BENCH）；statsText 为演示规模文本（live 行走 stats） */
@@ -387,7 +393,7 @@ const DS_ROWS_MOCK = DS.map(d => ({
   type: d[0], name: d[1], version: d[2], source: d[3], id: "mock0000",
   origin: /hf:|remote/.test(d[3]) ? "online" : "local",
   registered: true, statsText: d[4], path: d[5], notes: d[6],
-  capabilities: d[7] || [],
+  capabilities: d[7] || [], ownership: d[8] || "self",
 }));
 
 /* live 模式让位给 api32.js 的绑定与渲染（mock 才走下面这套）。
@@ -408,6 +414,11 @@ function dsSyncMode(mode) {
   document.querySelectorAll("#dsImport .ds-mode").forEach(g => (g.hidden = g.dataset.mode !== mode));
   const cap = document.getElementById("dsCapField");
   if (cap) cap.hidden = mode === "functional";   // 功能 cases 不适用能力维度
+  const ownField = document.getElementById("dsOwnField");
+  if (ownField) ownField.hidden = mode === "functional";
+  // 私有性缺省：HF 导入=开源，上传/生成/远程直链=自建（单选，可手改）
+  document.querySelectorAll("#dsOwnChips .chip").forEach(c =>
+    c.classList.toggle("on", c.dataset.own === (mode === "hf" ? "open" : "self")));
 }
 function dsEntry(mode) {
   dsSyncMode(mode);
@@ -564,6 +575,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=27"></script>
+<script src="api32.js?v=28"></script>
 </body>
 </html>

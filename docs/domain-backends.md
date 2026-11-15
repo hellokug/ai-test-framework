@@ -377,8 +377,10 @@ REST（D3）：`GET /datasets?type=`、`GET /datasets/{id}`、`DELETE /datasets/
 `POST /datasets/hf/import`、`POST /datasets/remote/import`、
 `GET·PUT /datasets/settings`、`GET /datasets/online/status`。
 摄取端点可选 `capabilities`（评测能力维度画像，合法键见
-datasets/catalog.CAPABILITIES；evalscope 基准行由 tags 自动映射）；
-`GET /datasets` 行带 `origin`（local/online）与 `capabilities`。
+datasets/catalog.CAPABILITIES；evalscope 基准行由 tags 自动映射）与
+`ownership`（来源私有性 open/self，缺省按 source 推导：hf=开源、其余=自建，
+与 origin 获取渠道正交）；`GET /datasets` 行带 `origin`（local/online）、
+`ownership` 与 `capabilities`。
 路径/在线源设置收口 `datasets/settings.py`（环境变量 > 设置文件 > 默认；
 datasets_dir/cache_dir/hf_endpoint/remote_url 四键）。
 
