@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from aite.datasets import userstore
-from aite.datasets.local import _CONTEXT_KEYS, _EXPECTED_KEYS, _INPUT_KEYS
+from aite.datasets.local import _CONTEXT_KEYS, _EXPECTED_KEYS, _INPUT_KEYS, conversation_texts
 
 
 def convert_records(records: list[dict], fields: dict[str, str] | None = None) -> list[dict]:
@@ -34,12 +34,17 @@ def convert_records(records: list[dict], fields: dict[str, str] | None = None) -
       缺省按常见字段名自动识别（复用 local 加载器的键表）。
     - choices + 整数答案 → 转字母（如 cais/mmlu 的 ``answer: 2`` → ``"C"``）。
     - 未映射字段原样保留（choices 等，加载时自动进 metadata）。
+    - 纯对话记录（ShareGPT conversations / OpenAI messages 等，无扁平输入键）
+      原样保留不拍平：语料池与压测负载加载器直接消费话轮数组；扁平整条丢弃
+      会让这类数据集导入即空。``fields`` 显式映射时仍按映射拍平。
     """
     mapping = fields or {}
     out: list[dict] = []
     for i, rec in enumerate(records):
         src_in = mapping.get("input") or next((k for k in _INPUT_KEYS if k in rec), None)
         if src_in is None:
+            if not mapping and conversation_texts(rec):
+                out.append(dict(rec))
             continue
         src_exp = mapping.get("expected") or next(
             (k for k in _EXPECTED_KEYS if k in rec and k != src_in), None)
@@ -68,6 +73,13 @@ def convert_records(records: list[dict], fields: dict[str, str] | None = None) -
 def sanitize_name(name: str) -> str:
     """builtin id 只允许字母数字、下划线、连字符。"""
     return re.sub(r"[^0-9A-Za-z_-]+", "-", name).strip("-_") or "dataset"
+
+
+def _jsonl_line(item: dict) -> str:
+    """单行 JSONL 序列化：ensure_ascii=False 省体积，但 U+2028/U+2029 是合法
+    JSON 字符却会被按行分割（splitlines / JS）切断字符串——转义保住逐行记录。"""
+    return (json.dumps(item, ensure_ascii=False)
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
 def _apply_hf_env() -> None:
@@ -129,7 +141,7 @@ def add_hf_dataset(
     path = out_dir / f"{ds_id}.jsonl"
     with path.open("w", encoding="utf-8") as fh:
         for item in converted:
-            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+            fh.write(_jsonl_line(item) + "\n")
 
     userstore.upsert(ds_id, {
         "file": f"datasets/accuracy/{ds_id}.jsonl",

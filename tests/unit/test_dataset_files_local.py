@@ -86,6 +86,24 @@ class TestMergeLocalRows:
         assert [r["name"] for r in rows] == ["dupe"]
         assert all(r["registered"] is True for r in rows)
 
+    def test_registry_entry_shadowed_by_other_type_catalog(self, local_root):
+        """ShareGPT 语料池场景：同文件已按 perf 型登记时，registry 不再合成
+        accuracy 幻影行（perf 登记名≠accuracy 键表，靠文件路径去重）。"""
+        acc = local_root / "datasets" / "accuracy"
+        acc.mkdir(parents=True)
+        (acc / "sharegpt.jsonl").write_text('{"q":1}\n', encoding="utf-8")
+        userstore.upsert("sharegpt", {"file": "datasets/accuracy/sharegpt.jsonl",
+                                      "external": True,
+                                      "upstream": "hf:Aeala/ShareGPT_Vicuna_unfiltered",
+                                      "n": 1})
+        rows = dataset_files.merge_local_rows(
+            [_catalog_row("sharegpt",
+                          path=str(local_root / "datasets" / "accuracy"
+                                   / "sharegpt.jsonl").replace("\\", "/"),
+                          type_="perf")])
+        assert [r["name"] for r in rows] == ["sharegpt"]
+        assert all(r["type"] == "perf" and r["registered"] is True for r in rows)
+
 
 class TestSplitHfId:
     def test_parses_notes_and_upstream_forms(self):

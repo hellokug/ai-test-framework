@@ -398,6 +398,8 @@ def merge_local_rows(rows: list[dict], only: str | None = None) -> list[dict]:
         for name in sorted(k for k in registry if k not in acc_known):
             entry = registry[name]
             path = root / entry.get("file", f"datasets/accuracy/{name}.jsonl")
+            if str(path).replace("\\", "/") in seen_paths:
+                continue   # 同文件已按他型登记（如 ShareGPT 导为 perf），不再合成幻影行
             out.append({
                 "id": f"local:{name}", "type": "accuracy", "name": name,
                 "version": "", "source": "registry",
