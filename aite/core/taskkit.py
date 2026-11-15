@@ -445,6 +445,14 @@ class DomainTaskKit:
             # 频道；进程关闭场景交给 startup mark_stale 收敛
             raise
         except Exception as exc:
+            # 停止竞态（stop 桥已落 stopping，执行随后抛错）：与成功路径同口径，
+            # 以 cancelled 收口——failed 更新 expect RUNNING 会空转，直接写会把
+            # stopping 卡成无终态（startup 收 stale，停止语义被错误覆盖）
+            current = await self._require(repo, task_id)
+            if current["status"] == TASK_STOPPING:
+                await self._finish_cancelled(repo, task_id, ctx=ctx,
+                                             error=str(exc)[:2000])
+                return
             await repo.update_domain_task(
                 self.table, task_id, expect_status=TASK_RUNNING,
                 status=TASK_FAILED, error=str(exc)[:2000], finished_at=utcnow(),

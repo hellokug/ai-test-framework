@@ -7,7 +7,10 @@ import json
 import pytest
 
 from aite.core.engine import ExecutionEngine
+from aite.core.interfaces import Metric
 from aite.core.loader import load_suite
+from aite.core.registry import register_metric
+from aite.core.types import MetricResult
 from tests.fixtures.mock_components import MockConnector
 
 
@@ -280,3 +283,29 @@ async def test_case_payloads_in_report_details(repo, qa_file, tmp_path):
     assert "2+2" in payloads["q1"]["input"]
     assert payloads["q2"]["expected"] == "Paris"
     assert "Paris" in payloads["q2"]["output"]
+
+
+@register_metric("always_none_metric")
+class _AlwaysNoneMetric(Metric):
+    """指标判定全挂的替身：value=None + error（如 swe harness 起不来）。"""
+
+    aggregation = "mean"
+
+    async def compute(self, *, case, response, responses=None, ctx=None):
+        return MetricResult(metric="always_none_metric", value=None,
+                            error="harness down")
+
+
+@pytest.mark.asyncio
+async def test_all_metric_errors_error_status(repo, qa_file, tmp_path):
+    """指标判定全挂（每条 value=None+error）→ run 级 error 而非 passed：
+    decide_status 对空 summaries 返回 passed 是「未配阈值跑完即过」口径，
+    会把打分基建故障包装成成功；此处必须 error 且文案随 run 行落库。"""
+    suite = suite_config(tmp_path, metrics=[{"always_none_metric": {}}])
+    engine = ExecutionEngine(repo)
+    report = await engine.run_suite(suite, connector_override=MockConnector())
+    assert report.status == "error"
+    assert "harness down" in (report.details.get("error") or "")
+    row = await repo.get_run(report.run_id)
+    assert row["status"] == "error"
+    assert "harness down" in (row["error"] or "")

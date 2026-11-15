@@ -14,6 +14,22 @@ from aite.service.run_service import execute_suite
 from aite.service.version_results import archive_maybe
 
 
+class SuiteRunError(RuntimeError):
+    """run 级失败（report.status=error：框架/评测基建挂了，run 没跑成）→
+    任务层必须 failed。与评估结论 failed（指标低分/用例没过，run 跑成了）
+    严格区分：前者不抛错会被 taskkit 收口 succeeded，任务列表「已成功」
+    掩盖真实故障，错误文本也只在 run 行里前端不可见（owner 2026-11-15）。"""
+
+
+def run_error_text(report) -> str:
+    """error 报告 → 任务层 error 文案（details.error 由引擎/工具适配层统一落）。"""
+    detail = str((getattr(report, "details", None) or {}).get("error") or "").strip()
+    if detail:
+        return f"run 执行失败: {detail}"
+    return (f"run 执行失败（status=error，run_id={getattr(report, 'run_id', None)}，"
+            "无错误详情）")
+
+
 def suite_summary(report) -> dict:
     """RunReport → 套件型任务统一概要（suite 型域任务 result 形态，§10）。"""
     summary = {
@@ -63,4 +79,6 @@ class SuiteTaskExecutor(TaskExecutor):
                                      event_cb=ctx.emit_raw, resume=False,
                                      run_cb=ctx.run_cb, control=control)
         await archive_maybe(ctx.repo, ctx.spec, report)
+        if report.status == "error":
+            raise SuiteRunError(run_error_text(report))
         return suite_summary(report)

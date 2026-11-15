@@ -181,7 +181,18 @@ class ExecutionEngine:
 
             summaries = aggregate(records, self._metric_infos(config))
             report.summaries = summaries
+            # 指标判定全挂（每条记录 value=None 且带 error，如 swe harness 起不来/
+            # 判官前指标全错）：聚合为空 ≠ 通过——decide_status 对空集返回 passed
+            # 是「未配阈值跑完即过」的口径，会把打分基建故障包装成「已成功」；
+            # 此处覆写为 run 级 error（宁缺毋错），任务层凭 status=error 落 failed
+            metric_failed = bool(records) and not summaries \
+                and all(r.error for r in records)
+            if metric_failed:
+                first_err = next(r for r in records if r.error).error or "unknown"
+                report.details["error"] = f"metric evaluation failed: {first_err}"
             status, score = decide_status(summaries, config.pass_strategy, config.weights)
+            if metric_failed:
+                status, score = "error", None
             report.status = status
             report.details["overall_score"] = score
             report.details["gateway_stats"] = gateway.stats() if gateway else None
@@ -195,6 +206,8 @@ class ExecutionEngine:
                 error_cases=report.error_cases,
                 cost_usd=report.total_cost_usd,
                 finished_at=report.finished_at,
+                # 指标全挂的 error 文案随 run 行落库（前端报错卡的唯一来源）
+                error=report.details.get("error") if metric_failed else None,
             )
             if render:
                 report.details["reports"] = self._render_reports(config, report)

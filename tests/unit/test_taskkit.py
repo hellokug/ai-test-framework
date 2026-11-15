@@ -173,6 +173,22 @@ async def test_stop_running_task(repo):
     assert frames[1]["mode"] == "graceful"
 
 
+async def test_exception_during_stopping_cancels_with_error(repo):
+    """停止竞态异常收口：stop 已落 stopping 后执行器抛错（如排空中评测基建
+    崩了）→ 以 cancelled 收口并带 error 文案；不写 failed（覆盖停止语义），
+    也不把 stopping 卡成无终态（suite run error 路径 2026-11-15 新增）。"""
+    bus = EventBus()
+    kit = make_kit(FakeExecutor(wait_cancel=True, error="drain crashed"), bus)
+    task = await kit.create(repo, {"a": 1})
+    await kit.run(repo, task["id"])
+    await kit.stop(repo, task["id"])
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED
+    assert "drain crashed" in (done["error"] or "")
+    frames = await drain(bus, kit.channel(task["id"]))
+    assert [f["type"] for f in frames] == ["started", "progress", "cancelled", "end"]
+
+
 async def test_stop_force_sets_force_event(repo):
     """强制停止：force_event 置位、历史轮记 stop_mode=force（子进程型执行器
     据此杀树；未返回请求不计入统计由适配器保证，kit 只管状态机）。"""
