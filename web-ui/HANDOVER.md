@@ -1347,3 +1347,17 @@
 > + spec 组装（force_stop_minutes: 15）、截断收口卡与 run 引用、强停点击全链路
 > （confirm 文案 → POST {mode:force} → stopping）全过。静态稿改动，刷新页面即生效，
 > 后端代码改动需重启 aite serve。
+
+## 2026-11-15（模型下拉 judge-llm 重复修复，api-acc3 v13 / api-perf v7）
+
+模型管理注册（POST /models）会把同名预制同步进 data/common.yaml（upsert_model_profile），
+精度页 wireAccModels 把「/common/models（预制）+ /models（注册）」两来源拼进同一下拉，
+judge-llm（库里恰好有这条注册行）于是出现「预制 + 注册」两条。修法：合并时注册侧行与
+预制同名则只留预制一条（同名 = 同一配置的同步镜像；Judge 裁判下拉只认预制条目的
+profile 引用，不能反向去重预制侧）。**api-acc3.js** wireAccModels 加 commonNames 集合 +
+db 侧 filter，accModelSel / accScriptModelSel / accJudgeSel 三个下拉一并生效；
+**api-perf.js** wirePerfModels 同款处理（perf2 同 bug）；accuracy2 `?v=13`、perf2 `?v=7`。
+functional 域 api32.js wireModels 同款双来源合并，该文件在数据集会话认领中未动，待其
+释放后收敛。验证：node --check 两文件、去重逻辑沙箱断言（同名只一条 / 独有注册保留 /
+Judge 来源完整）、mockup_symbols --check 5 页过。静态稿改动，刷新页面即生效，无需重启
+后端。

@@ -598,10 +598,13 @@ async function wireAccModels() {
     AAPI.get("/models").catch(() => ({ items: [] })),
     AAPI.get("/secrets").catch(() => ({ items: [] })),
   ]);
+  // 模型注册（POST /models）会把同名预制同步进 common.yaml，两来源各渲染一条重复项：
+  // 同名只留预制一条（Judge 下拉依赖预制条目的 profile 引用，不能反向去重预制侧）
+  const commonNames = new Set(common.items.map(m => m.name));
   ACC_MODEL_SOURCES = [
     ...common.items.map(m => ({ key: `common:${m.name}`, profile: m.name,
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（预制）` })),
-    ...db.items.map(m => ({ key: `db:${m.id}`,
+    ...db.items.filter(m => !commonNames.has(m.name)).map(m => ({ key: `db:${m.id}`,
       target: { type: "openai_compatible", base_url: m.base_url || "",
                 model: m.model || "", ...(m.api_key_env ? { api_key_env: m.api_key_env } : {}) },
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（注册）` })),

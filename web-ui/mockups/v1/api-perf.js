@@ -646,10 +646,12 @@ async function wirePerfModels() {
     PAPI.get("/common/models").catch(() => ({ items: [] })),
     PAPI.get("/models").catch(() => ({ items: [] })),
   ]);
+  // 模型注册会同步同名预制进 common.yaml：合并时同名只留预制一条，避免下拉重复
+  const commonNames = new Set(common.items.map(m => m.name));
   PERF_MODEL_SOURCES = [
     ...common.items.map(m => ({ key: `common:${m.name}`, profile: m.name,
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（预制）` })),
-    ...db.items.map(m => ({ key: `db:${m.id}`,
+    ...db.items.filter(m => !commonNames.has(m.name)).map(m => ({ key: `db:${m.id}`,
       target: { type: "openai_compatible", base_url: m.base_url || "",
                 model: m.model || "", ...(m.api_key_env ? { api_key_env: m.api_key_env } : {}) },
       label: `${m.name}${m.model ? ` · ${m.model}` : ""}（注册）` })),
