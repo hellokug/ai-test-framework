@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aite.tools.base import ToolRunRequest
+from aite.tools.base import ToolRunControl, ToolRunRequest
 from aite.tools.perf_adapter import (
     PerfAdapter,
     _sla_params_json,
@@ -17,6 +17,21 @@ from aite.tools.perf_common import (
     expand_ramp,
     export_prompts,
 )
+
+
+class _FakeProc:
+    """监督循环的子进程替身：poll 序列驱动（耗尽后恒返回 rc 并同步 returncode）。"""
+
+    def __init__(self, polls, rc=0) -> None:
+        self._polls = list(polls)
+        self._rc = rc
+        self.returncode = None
+
+    def poll(self):
+        value = self._polls.pop(0) if self._polls else self._rc
+        if value is not None:
+            self.returncode = value
+        return value
 
 
 def make_request(**kw):
@@ -64,6 +79,18 @@ class TestBuildConfig:
     def test_timeout_from_extra(self):
         cfg = PerfAdapter().build_config(make_request(extra={"timeout": 60}))
         assert cfg["timeout"] == 60
+
+    def test_force_stop_minutes_mapping(self):
+        """强制停止时长（分钟）→ cfg 秒；不配为 None。"""
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "parallel": [4], "force_stop_minutes": 15}))
+        assert cfg["force_stop_seconds"] == 900.0
+        cfg = PerfAdapter().build_config(make_request(perf={
+            "prompt": "p", "parallel": [4]}))
+        assert cfg["force_stop_seconds"] is None
+        with pytest.raises(ValueError, match="force_stop_minutes"):
+            PerfAdapter().build_config(make_request(perf={
+                "prompt": "p", "parallel": [4], "force_stop_minutes": 0}))
 
     @pytest.mark.parametrize("perf,err_match", [
         ({"parallel": [1]}, "prompt"),                                   # 缺 prompt
@@ -230,38 +257,50 @@ class TestDuration:
             "prompt": "p", "mode": "baseline", "baseline": {"parallel": 4}}))
         assert cfg["args"][cfg["args"].index("--number") + 1] == "8"
 
-    def test_watchdog_exec_returns_normally(self, tmp_path, monkeypatch):
-        """_exec 看门狗分支：TimeoutExpired → 落日志不报错（截断语义）。"""
+    def _stub_evalscope(self, monkeypatch, tmp_path, proc, *, wrapped=True):
+        """_exec 子进程替身：shutil.which 指向 tmp 布局 + Popen 返回可控假进程。"""
+        import shutil as sh
         import subprocess as sp
+
+        import aite.tools.perf_adapter as pp
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        exe = bin_dir / "evalscope.exe"
+        exe.write_text("", encoding="utf-8")
+        if wrapped:
+            (bin_dir / "python.exe").write_text("", encoding="utf-8")
+        monkeypatch.setattr(sh, "which", lambda name: str(exe))
+        monkeypatch.setattr(sp, "Popen", lambda *a, **k: proc)
+        monkeypatch.setattr(pp, "SUPERVISE_POLL_INTERVAL_S", 0.01)
+        return exe
+
+    def test_watchdog_exec_returns_normally(self, tmp_path, monkeypatch):
+        """_exec 整场预算耗尽（probe 看门狗）→ 杀树落标记不报错（截断语义）。"""
+        import aite.tools.perf_adapter as pp
 
         cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
             "prompt": "p", "mode": "probe",
             "probe": {"max_parallel": 8, "sla": {"avg_ttft": 2000}}, "duration": 600}))
-
-        def fake_run(*args, **kw):
-            raise sp.TimeoutExpired(cmd="evalscope", timeout=600)
-
-        monkeypatch.setattr(sp, "run", fake_run)
-        import shutil as sh
-        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
-        PerfAdapter()._exec(cfg)                              # 不应抛错
+        cfg["timeout"] = 1
+        proc = _FakeProc([None] * 10_000)
+        kills: list[object] = []
+        monkeypatch.setattr(pp, "kill_tree", lambda p: kills.append(p))
+        self._stub_evalscope(monkeypatch, tmp_path, proc)
+        outcome = PerfAdapter()._exec(cfg)                    # 不应抛错
+        assert outcome["how"] == "timeout" and kills == [proc]
         log = (tmp_path / "logs" / "perf.log").read_text(encoding="utf-8")
         assert "DURATION_BUDGET_EXHAUSTED" in log
+        assert "SUBPROCESS TIMEOUT" in log
 
     def test_exec_plain_timeout_still_raises(self, tmp_path, monkeypatch):
-        """无看门狗的普通超时维持报错语义。"""
-        import subprocess as sp
-
+        """无看门狗的普通超时且无产物 → 维持报错语义。"""
         cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
             "prompt": "p", "parallel": [4], "number": 8}))
         cfg["timeout"] = 1
-
-        def fake_run(*args, **kw):
-            raise sp.TimeoutExpired(cmd="evalscope", timeout=1)
-
-        monkeypatch.setattr(sp, "run", fake_run)
-        import shutil as sh
-        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
+        import aite.tools.perf_adapter as pp
+        monkeypatch.setattr(pp, "kill_tree", lambda p: None)
+        self._stub_evalscope(monkeypatch, tmp_path, _FakeProc([None] * 10_000))
         with pytest.raises(RuntimeError, match="超时"):
             PerfAdapter()._exec(cfg)
 
@@ -281,8 +320,9 @@ class TestDuration:
     def test_exec_timeout_with_summary_collects(self, tmp_path, monkeypatch):
         """超时但测量产物已完整（典型：机器睡眠/唤醒进程未及退出）→
         显式告警后按完成处理，不整轮报错（污染数据由 error_rate 阈值显式 FAIL）。"""
-        import subprocess as sp
         from pathlib import Path
+
+        import aite.tools.perf_adapter as pp
 
         cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
             "prompt": "p", "parallel": [4], "number": 8}))
@@ -291,14 +331,105 @@ class TestDuration:
                    / "benchmark_summary.json")
         summary.parent.mkdir(parents=True)
         summary.write_text("{}", encoding="utf-8")
-
-        def fake_run(*args, **kw):
-            raise sp.TimeoutExpired(cmd="evalscope", timeout=1)
-
-        monkeypatch.setattr(sp, "run", fake_run)
-        import shutil as sh
-        monkeypatch.setattr(sh, "which", lambda name: "evalscope-stub")
+        monkeypatch.setattr(pp, "kill_tree", lambda p: None)
+        self._stub_evalscope(monkeypatch, tmp_path, _FakeProc([None] * 10_000))
         PerfAdapter()._exec(cfg)                              # 不应抛错
+
+    def test_exec_graceful_writes_stop_file(self, tmp_path, monkeypatch):
+        """立即停止：cancel_event 置位 → 写协停请求文件，子进程随后自然退出
+        （wrapper 软退出 rc=0）→ outcome 标记 stop_requested 且非强杀。"""
+        import asyncio
+
+        control = ToolRunControl(cancel_event=asyncio.Event())
+        control.cancel_event.set()
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        proc = _FakeProc([None, 0])                           # 排空后退出
+        self._stub_evalscope(monkeypatch, tmp_path, proc)
+        outcome = PerfAdapter()._exec(cfg, control)
+        assert outcome == {"how": "exit", "stop_requested": True}
+        stop_file = tmp_path / "perf_control" / "stop_request.json"
+        assert stop_file.is_file()
+        log = (tmp_path / "logs" / "perf.log").read_text(encoding="utf-8")
+        assert "GRACEFUL_STOP_REQUESTED" in log
+
+    def test_exec_force_event_kills_tree(self, tmp_path, monkeypatch):
+        """强制停止：force_event 置位 → 杀树 + FORCE_STOP_KILLED 标记，
+        rc 非 0 不抛错（截断收集语义）。"""
+        import asyncio
+
+        import aite.tools.perf_adapter as pp
+
+        control = ToolRunControl(force_event=asyncio.Event())
+        control.force_event.set()
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        proc = _FakeProc([None] * 10_000)
+        kills: list[object] = []
+        monkeypatch.setattr(pp, "kill_tree", lambda p: kills.append(p))
+        self._stub_evalscope(monkeypatch, tmp_path, proc)
+        outcome = PerfAdapter()._exec(cfg, control)
+        assert outcome["how"] == "force" and kills == [proc]
+        assert "在途请求已取消" in outcome["force_reason"]
+        log = (tmp_path / "logs" / "perf.log").read_text(encoding="utf-8")
+        assert "FORCE_STOP_KILLED" in log
+
+    def test_exec_force_stop_deadline_kills(self, tmp_path, monkeypatch):
+        """创建时配置的强制停止时长（force_stop_minutes→秒）到时 → 杀树。"""
+        import aite.tools.perf_adapter as pp
+
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8,
+            "force_stop_minutes": 0.001}))                    # 0.06s，到时即杀
+        assert cfg["force_stop_seconds"] == pytest.approx(0.06)
+        proc = _FakeProc([None] * 10_000)
+        kills: list[object] = []
+        monkeypatch.setattr(pp, "kill_tree", lambda p: kills.append(p))
+        self._stub_evalscope(monkeypatch, tmp_path, proc)
+        outcome = PerfAdapter()._exec(cfg)
+        assert outcome["how"] == "force" and kills == [proc]
+        assert "强制停止时长到" in outcome["force_reason"]
+
+    def test_exec_drain_budget_escalates_to_kill(self, tmp_path, monkeypatch):
+        """立即停止后服务端挂死：排空预算耗尽 → 升级强制杀树（stop 必达）。"""
+        import asyncio
+
+        import aite.tools.perf_adapter as pp
+
+        monkeypatch.setattr(pp, "GRACEFUL_DRAIN_BUDGET_S", 0.02)
+        control = ToolRunControl(cancel_event=asyncio.Event())
+        control.cancel_event.set()
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        proc = _FakeProc([None] * 10_000)
+        kills: list[object] = []
+        monkeypatch.setattr(pp, "kill_tree", lambda p: kills.append(p))
+        self._stub_evalscope(monkeypatch, tmp_path, proc)
+        outcome = PerfAdapter()._exec(cfg, control)
+        assert outcome["how"] == "force" and kills == [proc]
+        assert "升级强制停止" in outcome["force_reason"]
+
+    def test_exec_without_wrapper_degrades_to_force(self, tmp_path, monkeypatch):
+        """无同目录解释器（wrapper 不可用）→ 直接跑 evalscope；立即停止退化
+        为排空预算后杀树，仍显式告警。"""
+        import asyncio
+        import subprocess as sp
+
+        import aite.tools.perf_adapter as pp
+
+        monkeypatch.setattr(pp, "GRACEFUL_DRAIN_BUDGET_S", 0.02)
+        control = ToolRunControl(cancel_event=asyncio.Event())
+        control.cancel_event.set()
+        cfg = PerfAdapter().build_config(make_request(work_dir=tmp_path, perf={
+            "prompt": "p", "parallel": [4], "number": 8}))
+        launch_holder: dict = {}
+        self._stub_evalscope(monkeypatch, tmp_path, None, wrapped=False)
+        monkeypatch.setattr(sp, "Popen",
+                            lambda args, **k: launch_holder.update(
+                                args=list(args)) or _FakeProc([None] * 10_000))
+        monkeypatch.setattr(pp, "kill_tree", lambda p: None)
+        PerfAdapter()._exec(cfg, control)
+        assert launch_holder["args"][0].endswith("evalscope.exe")   # 直跑无 wrapper
 
     def test_collect_tolerates_truncated_summary(self, tmp_path):
         """看门狗截断可能杀在写盘中途：损坏产出跳过，其余轮次照常收集。"""
@@ -726,6 +857,87 @@ class TestCollect:
     def test_no_output_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="压测产出"):
             PerfAdapter().collect(make_request(work_dir=tmp_path))
+
+    def test_collect_db_fallback_partial_level(self, tmp_path):
+        """强制停止截断档（有逐请求库无 summary json）→ 按库兜底合成：
+        已完成请求计入统计，_stop 标记截断档位；summary+db 并存的完整档不受影响。"""
+        import sqlite3
+
+        self._write_level(tmp_path, "parallel_4_number_8", SUMMARY, PERCENTILE)
+        d = tmp_path / "perf_raw" / "m" / "parallel_16_number_16"   # 截断档：仅 db
+        d.mkdir(parents=True)
+        conn = sqlite3.connect(d / "benchmark_data.db")
+        conn.execute(
+            "CREATE TABLE result (start_time REAL, completed_time REAL,"
+            " latency REAL, first_chunk_latency REAL, success INT,"
+            " completion_tokens INT, prompt_tokens INT,"
+            " time_per_output_token REAL, inter_token_latencies TEXT)")
+        conn.executemany("INSERT INTO result VALUES (?,?,?,?,?,?,?,?,?)", [
+            (0.0, 2.0, 1.0, 0.1, 1, 40, 20, 0.02, json.dumps([0.02, 0.03])),
+            (0.1, 2.5, 2.5, 0.4, 1, 40, 20, 0.05, json.dumps([0.05, 0.04])),
+            (0.2, 3.0, None, None, 0, None, 20, None, None),   # 失败请求
+        ])
+        conn.commit()
+        conn.close()
+        stop_info = {"how": "force", "stop_requested": True, "graceful": False}
+        result = PerfAdapter().collect(make_request(work_dir=tmp_path),
+                                       stop_info=stop_info)
+        by_metric = {r.metric: r for r in result.rows if r.dataset == "perf:c16"}
+        assert by_metric["qps"].count == 3                # 已完成 3 条（含失败）
+        assert by_metric["error_rate"].value == pytest.approx(1 / 3)
+        assert by_metric["ttft_ms"].value == pytest.approx((100 + 400) / 2)
+        assert by_metric["qps"].value == pytest.approx(2 / 3.0)   # span 3.0s，成功 2 条
+        assert result.perf["_stop"]["truncated_levels"] == ["perf:c16"]
+        assert result.perf["_stop"]["how"] == "force"
+
+    def test_collect_db_fallback_zero_rows_skipped(self, tmp_path):
+        """截断档库存在但 0 行（无任何请求完成）→ 跳过不产空档。"""
+        import sqlite3
+
+        d = tmp_path / "perf_raw" / "m" / "parallel_16_number_16"
+        d.mkdir(parents=True)
+        conn = sqlite3.connect(d / "benchmark_data.db")
+        conn.execute("CREATE TABLE result (start_time REAL)")
+        conn.commit()
+        conn.close()
+        with pytest.raises(RuntimeError, match="压测产出"):
+            PerfAdapter().collect(make_request(work_dir=tmp_path))
+
+
+class TestStopWrapper:
+    """协停 wrapper 纯函数：stop 文件解析与时钟跳变（不导入 evalscope）。"""
+
+    def test_load_stop_request(self, tmp_path):
+        from aite.tools.perf_wrapper import load_stop_request
+
+        f = tmp_path / "stop.json"
+        assert load_stop_request(str(f)) is None          # 不存在
+        f.write_text('{"mode": "graceful"}', encoding="utf-8")
+        assert load_stop_request(str(f)) == {"mode": "graceful"}
+        f.write_text("{截断", encoding="utf-8")
+        assert load_stop_request(str(f)) is None          # 写盘中途
+
+    def test_trigger_stop_jumps_clocks(self):
+        import time as time_mod
+
+        import aite.tools.perf_wrapper as pw
+
+        pw.STATE["requested"] = False
+        clocks = [pw.StopClock(), pw.StopClock()]
+        pw.STATE["clocks"] = clocks
+        assert all(c.jump == 0.0 for c in clocks)
+        assert abs(clocks[0].perf_counter() - time_mod.perf_counter()) < 0.1
+        pw.trigger_stop()
+        assert clocks[0].perf_counter() > time_mod.perf_counter() + 1e5
+        pw.trigger_stop()                                  # 幂等
+        pw.STATE["requested"] = False
+        pw.STATE["clocks"] = []
+
+    def test_duration_sentinel_relationship(self):
+        """哨兵时长必须小于时钟跳变量（跳变后能命中 start+哨兵 的 deadline）。"""
+        from aite.tools.perf_wrapper import DURATION_SENTINEL_S, STOP_CLOCK_JUMP_S
+
+        assert DURATION_SENTINEL_S < STOP_CLOCK_JUMP_S
 
 
 class _FakePerfHandler(BaseHTTPRequestHandler):

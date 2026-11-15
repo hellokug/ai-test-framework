@@ -29,6 +29,10 @@ class TaskUpdateIn(BaseModel):
     spec: dict[str, Any] | None = None
 
 
+class TaskStopIn(BaseModel):
+    mode: str = "graceful"   # graceful=立即停止（排空在途）；force=强制停止（在途即弃）
+
+
 def _kit(state: Any, domain: str) -> DomainTaskKit:
     kit = state.task_kits.get(domain)
     if kit is None:  # pragma: no cover - 四域在启动装配，防御性兜底
@@ -93,8 +97,12 @@ def build_domain_tasks_router(domain: str) -> APIRouter:
         return await _call(_kit(state, domain).run, state.repo, task_id)
 
     @router.post(f"{base}/{{task_id}}/stop")
-    async def stop_task(task_id: str, state: Any = Depends(get_state)):
-        return await _call(_kit(state, domain).stop, state.repo, task_id)
+    async def stop_task(task_id: str, state: Any = Depends(get_state),
+                        body: TaskStopIn | None = None):
+        """发起停止立即返回：graceful=排空在途收口；force=杀树在途即弃。
+        终态经 SSE cancelled 帧 / 轮询可见。"""
+        return await _call(_kit(state, domain).stop, state.repo, task_id,
+                           mode=body.mode if body else "graceful")
 
     @router.post(f"{base}/{{task_id}}/retry", status_code=202)
     async def retry_task(task_id: str, state: Any = Depends(get_state)):

@@ -877,3 +877,41 @@ class TestResumeStateLifecycle:
         assert req.work_dir == stamp
 
 
+
+
+async def test_execute_tool_threads_control(tmp_path):
+    """域任务停止通道（ToolRunControl）经 execute_tool 透传到适配器 req.control；
+    CLI 直跑（control=None）保持 None——立即/强制停止只对任务域生效。"""
+    import asyncio
+
+    from aite.tools import ToolRunControl, execute_tool
+    from aite.tools.base import register_tool, unregister_tool
+
+    captured = {}
+
+    @register_tool("ctrl-stub")
+    class _Stub(ToolAdapter):
+        def build_config(self, req):
+            return {}
+
+        async def run(self, req):
+            captured["control"] = req.control
+            return ToolRunResult()
+
+        def list_tasks(self):
+            return []
+
+    try:
+        control = ToolRunControl(cancel_event=asyncio.Event(),
+                                 force_event=asyncio.Event())
+        _result, _snap, req = await execute_tool(
+            {"engine": "ctrl-stub", "run_name": "ctrl", "tools": {"datasets": ["x"]}},
+            work_dir=tmp_path, control=control)
+        assert captured["control"] is control
+        assert req.control is control
+        _result, _snap, req = await execute_tool(
+            {"engine": "ctrl-stub", "run_name": "ctrl", "tools": {"datasets": ["x"]}},
+            work_dir=tmp_path)
+        assert captured["control"] is None
+    finally:
+        unregister_tool("ctrl-stub")

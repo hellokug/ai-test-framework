@@ -78,6 +78,7 @@ async def execute_suite(
     chaos_raw: list[dict] | None = None,
     resume: str | bool | None = None,
     run_cb: Any = None,
+    control: Any | None = None,
 ) -> RunReport:
     """统一执行入口：engine 路由 → 工具适配层 / 自研引擎。
 
@@ -85,6 +86,8 @@ async def execute_suite(
     run details.chaos_events（I5 业务观测时间线）。resume（工具域断点续推
     档位 auto/true/false）仅工具域生效，None = 用 yaml 值/缺省 auto。
     run_cb：run 行建好即回调 run_id（域任务记执行历史轮用，引擎/工具两路都接）。
+    control：域任务停止通道（ToolRunControl，立即/强制停止事件），仅工具域
+    子进程型适配器消费（perf 监督循环）；CLI 直跑为 None。
     """
     sreq = resolve_suite(raw)
     if sreq.is_tool:
@@ -94,13 +97,13 @@ async def execute_suite(
 
         if not chaos_raw:
             return await run_tool_suite(raw, repo, event_cb=event_cb,
-                                        run_cb=run_cb)
+                                        run_cb=run_cb, control=control)
 
         from aite.chaos import run_with_chaos
         from aite.tools import execute_tool, persist_tool_result
 
         async def _business():
-            result, _snap, req = await execute_tool(raw)
+            result, _snap, req = await execute_tool(raw, control=control)
             return result, req
 
         (result, req), events = await run_with_chaos(chaos_raw, _business)

@@ -46,6 +46,17 @@ TTFT/TPOT/ITL/吞吐原生分档），aite 负责编排与统一入库——不�
 ``number``）时 number 自动放大安全上限（防默认条数提前结束），否则缺省 8。
 中途熔断上游不支持（SLA 档间判定），backlog。
 
+**停止（两段式，任务域 ToolRunControl 通道）**：
+
+- 立即停止（``cancel_event``）：监督循环写协停请求文件，wrapper（
+  ``perf_wrapper.py``）触发策略软退出——停止派发新请求、排空在途后当前档
+  正常收尾落盘，统计含排空返回的请求；排空超过 ``GRACEFUL_DRAIN_BUDGET_S``
+  仍未返回（服务端挂死）→ 升级杀树按强制停止兜底。
+- 强制停止（``force_event`` 或 ``perf.force_stop_minutes`` 到时）：监督循环
+  taskkill 杀整棵进程树，在途请求即弃；已完成请求已由 evalscope 逐条流式
+  写入 ``benchmark_data.db``，collect 对有库无 summary 的档位按库兜底合成
+  指标（未返回请求天然不在库中 = 不计入统计），并打 ``_stop`` 截断标记。
+
 collect 从各档 ``benchmark_summary.json`` / ``benchmark_percentile.json`` 提取
 指标 → 每档每指标一行 ``dataset="perf:c<并发>"``；阈值方向区分越高/越低越好。
 负载/模式/时长解析与 locust 适配器共用 ``perf_common``；子进程执行共用
@@ -54,14 +65,19 @@ collect 从各档 ``benchmark_summary.json`` / ``benchmark_percentile.json`` 提
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import sqlite3
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from aite.tools.base import (
     ToolAdapter,
+    ToolRunControl,
     ToolRunRequest,
     ToolRunResult,
     api_endpoint,
@@ -81,13 +97,24 @@ from aite.tools.perf_common import (
     resolve_mode_parallel,
     write_timeseries,
 )
-from aite.tools.subproc import glob_report_files, run_tool_subprocess, which_or_fail
+from aite.tools.subproc import (
+    glob_report_files,
+    kill_tree,
+    which_or_fail,
+)
 from aite.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 DEFAULT_BUCKET_SECONDS = 5.0   # 时序聚合桶间隔（秒），perf.bucket_seconds 可覆盖
 SLEEP_INTERVAL_BETWEEN_LEVELS = 5.0   # evalscope 多档 sweep 档间默认间隔（秒）
+SUPERVISE_POLL_INTERVAL_S = 0.5      # 子进程监督循环轮询间隔（秒）
+GRACEFUL_DRAIN_BUDGET_S = 600.0      # 立即停止排空在途的等待预算，超时升级杀树
+STOP_FILE_NAME = "stop_request.json"   # 协停请求文件（监督循环写 / wrapper 轮询读）
+
+# 停止结局（_supervise 返回 how）：exit=自然退出；timeout=整场预算耗尽；
+# force=强制杀树（stop force / force_stop_minutes 到时 / 排空预算超时升级）
+_HOW_EXIT, _HOW_TIMEOUT, _HOW_FORCE = "exit", "timeout", "force"
 
 # evalscope SLA 可断言指标（sla_run.get_metric_values 键）；
 # 单位：latency 秒、ttft/tpot 毫秒、rps/tps 原生单位
@@ -405,13 +432,17 @@ def _assemble_args(cfg: dict, *, url: str, model: str, api_key: str,
     return args + probe_args
 
 
-def _group_summaries(output_dir: Path) -> dict[int, list[tuple[dict, dict, Path]]]:
+def _group_summaries(output_dir: Path) -> tuple[
+        dict[str, list[tuple[dict, dict, Path, int]]], list[str]]:
     """glob 全部档位产出并按并发分组（兼容普通/摸高两种目录布局）。
 
     看门狗截断可能杀在写盘中途：损坏/截断的产出跳过（告警），收集其余轮次。
+    强制停止杀树后 summary json 只在完整跑完的档位存在——有 ``benchmark_data.db``
+    无 summary 的档位按库兜底合成（逐请求记录流式落库，已完成请求都在），
+    返回值第二项为兜底合成的档位标签（截断标记用）。
     """
     summaries = sorted(output_dir.glob("**/benchmark_summary.json"))
-    if not summaries:
+    if not summaries and not list(output_dir.glob("**/benchmark_data.db")):
         raise RuntimeError(f"未找到压测产出（{output_dir}/**/benchmark_summary.json），"
                            "查看 logs/perf.log")
     grouped: dict[str, list[tuple[dict, dict, Path, int]]] = {}
@@ -438,7 +469,104 @@ def _group_summaries(output_dir: Path) -> dict[int, list[tuple[dict, dict, Path]
         else:
             label = f"perf:c{concurrency}"
         grouped.setdefault(label, []).append((data, pct_rows, summary_path, concurrency))
-    return grouped
+    partial_labels: list[str] = []
+    seen_dirs = {p.parent for p in summaries}
+    for db_path in sorted(output_dir.glob("**/benchmark_data.db")):
+        if db_path.parent in seen_dirs:
+            continue
+        synthesized = _db_level_summary(db_path)
+        if synthesized is None:
+            continue
+        label, concurrency = _dir_level_label(db_path.parent)
+        logger.warning("档位 %s 无 benchmark_summary.json（强制停止截断），"
+                       "按 benchmark_data.db 兜底合成（在途未返回请求不计入）", label)
+        grouped.setdefault(label, []).append((synthesized, {}, db_path, concurrency))
+        if label not in partial_labels:
+            partial_labels.append(label)
+    if not grouped:
+        raise RuntimeError(f"压测产出为空（无已完成请求的档位，{output_dir}），"
+                           "查看 logs/perf.log")
+    return grouped, partial_labels
+
+
+def _dir_level_label(level_dir: Path) -> tuple[str, int]:
+    """从档位目录名（parallel_N_number_M / sla_parallel_N_run_i / rate_R_number_M）
+    推断档位标签与并发（summary json 缺失时的兜底）。"""
+    name = level_dir.name
+    m = re.search(r"(?:sla_)?parallel_(\d+)", name)
+    if m:
+        users = int(m.group(1))
+        return f"perf:c{users}", users
+    m = re.search(r"rate_([\d.]+)", name)
+    if m:
+        rate = float(m.group(1))
+        return f"perf:q{rate:g}", -1
+    return "perf:c0", 0
+
+
+def _db_level_summary(db_path: Path) -> dict | None:
+    """逐请求库 → evalscope benchmark_summary 同键位合成（强制停止兜底）。
+
+    未返回的请求不会写入库（完成一条写一条），天然不计入统计。列缺失
+    （上游版本差异）→ None 宁缺毋错；0 行（该档无任何请求完成）→ None。
+    """
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT latency, first_chunk_latency, time_per_output_token,"
+            " inter_token_latencies, prompt_tokens, completion_tokens, success,"
+            " start_time, completed_time FROM result").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    total = len(rows)
+    ok = [r for r in rows if r[6]]
+    n_ok = len(ok)
+    lat_vals = [float(r[0]) for r in ok if r[0] is not None]
+    ttft_vals = [float(r[1]) for r in ok if r[1] is not None]
+    tpot_vals = [float(r[2]) for r in ok if r[2] is not None]
+    itl_vals: list[float] = []
+    for r in ok:
+        if r[3]:
+            with contextlib.suppress(ValueError):
+                itl_vals.extend(float(iv) for iv in json.loads(r[3]))
+    prompt_sum = sum(int(r[4] or 0) for r in ok)
+    completion_sum = sum(int(r[5] or 0) for r in ok)
+    starts = [float(r[7]) for r in ok if r[7] is not None]
+    ends = [float(r[8]) for r in rows if r[8] is not None]
+    span = (max(ends) - min(starts)) if starts and ends else 0.0
+
+    def avg(vals: list[float], scale: float = 1.0) -> float | None:
+        return (sum(vals) / len(vals)) * scale if vals else None
+
+    _label, concurrency = _dir_level_label(db_path.parent)
+    summary: dict = {
+        "_partial": True,
+        "Total Requests": total,
+        "Failed Requests": total - n_ok,
+        "Avg Latency (s)": avg(lat_vals),
+        "TTFT (ms)": avg(ttft_vals, 1000.0),
+        "TPOT (ms)": _gated(avg(tpot_vals, 1000.0)),
+        "ITL (ms)": _gated(avg(itl_vals, 1000.0)),
+        "Avg Input Tokens": (prompt_sum / n_ok) if n_ok else None,
+        "Avg Output Tokens": (completion_sum / n_ok) if n_ok else None,
+    }
+    if span > 0:
+        summary["Req Throughput (req/s)"] = n_ok / span
+        summary["Output Throughput (tok/s)"] = completion_sum / span
+    if concurrency >= 0:
+        summary["Concurrency"] = concurrency
+    else:
+        m = re.search(r"rate_([\d.]+)", db_path.parent.name)
+        summary["Request Rate (req/s)"] = float(m.group(1)) if m else 0.0
+    return summary
 
 
 def _resolve_bucket(cfg: dict) -> float:
@@ -499,6 +627,19 @@ def _level_metrics(items: list[tuple[dict, dict, Path, int]]) -> tuple[dict, int
     return metrics, total
 
 
+def _resolve_force_stop_seconds(cfg: dict) -> float | None:
+    """强制停止时长（perf.force_stop_minutes，分钟）→ 秒；None = 不设。
+
+    到时监督循环直接杀树：在途请求即弃、未返回请求不计入统计（db 只落
+    已完成请求），任务按截断收集收口。"""
+    value = cfg.get("force_stop_minutes")
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        raise ValueError("perf.force_stop_minutes 须为 >0 的数字（分钟）")
+    return float(value) * 60.0
+
+
 @register_tool("evalscope-perf")
 class PerfAdapter(ToolAdapter):
     name = "evalscope-perf"
@@ -545,6 +686,7 @@ class PerfAdapter(ToolAdapter):
             "env": {"PYTHONIOENCODING": "utf-8"},
             "timeout": timeout,
             "duration_watchdog": int(plan.watchdog) if plan.watchdog is not None else None,
+            "force_stop_seconds": _resolve_force_stop_seconds(cfg),
             "output_dir": str(req.work_dir / "perf_raw"),
             "dataset": dataset,   # run 阶段导出 prompt 文件用
             "synthetic": synthetic,   # run 阶段生成 prompt 文件用
@@ -563,32 +705,157 @@ class PerfAdapter(ToolAdapter):
             path.write_text("\n".join(prompts) + "\n", encoding="utf-8")
             logger.info("perf 合成负载生成 %d 条 prompt（%d 字符）",
                         len(prompts), cfg["synthetic"]["prompt_length"])
-        await run_sync_in_thread(self._exec, cfg)
-        return self.collect(req)
+        outcome = await run_sync_in_thread(self._exec, cfg, req.control)
+        stop_info = self._stop_info(outcome, cfg)
+        return self.collect(req, stop_info=stop_info)
 
-    def _exec(self, cfg: dict) -> None:
-        """subprocess 执行 evalscope perf；日志落盘，超时/非 0 抛错。
+    @staticmethod
+    def _stop_info(outcome: dict, cfg: dict) -> dict | None:
+        """停止结局 → _stop 截断标记（None = 自然跑完/普通看门狗超时，无标记）。"""
+        how = outcome.get("how")
+        if how != _HOW_FORCE and not outcome.get("stop_requested"):
+            return None
+        info: dict = {
+            "how": how,
+            "stop_requested": bool(outcome.get("stop_requested")),
+            "graceful": how == _HOW_EXIT and bool(outcome.get("stop_requested")),
+        }
+        if outcome.get("force_reason"):
+            info["reason"] = outcome["force_reason"]
+        if cfg.get("force_stop_seconds") is not None:
+            info["force_stop_minutes"] = cfg["force_stop_seconds"] / 60.0
+        return info
 
-        probe + duration 的看门狗截断是例外：总时长预算耗尽 → 警告后正常返回，
-        已完成轮次的产出文件在盘上，collect 正常收集（无轮次完成则 collect 报错）。
-        """
+    @staticmethod
+    def _launch_command(binary: str, stop_file: Path) -> tuple[list[str], bool]:
+        """evalscope 启动命令；能定位同 venv 解释器时走协停 wrapper（立即停止
+        依赖它），否则直接跑 evalscope（仅强制停止可用，告警显式降级）。"""
+        wrapper = Path(__file__).with_name("perf_wrapper.py")
+        py = Path(binary).with_name("python.exe" if sys.platform == "win32"
+                                    else "python")
+        if py.is_file():
+            return [str(py), str(wrapper), str(stop_file)], True
+        logger.warning("未找到 evalscope 同目录解释器（%s），协停 wrapper 不可用——"
+                       "仅强制停止可用，立即停止将退化为排空预算后杀树", py)
+        return [binary], False
+
+    def _exec(self, cfg: dict, control: ToolRunControl | None = None) -> dict:
+        """Popen + 监督循环执行 evalscope perf（经协停 wrapper）；日志流式落盘。
+
+        返回 {how, stop_requested, force_reason?}：exit=自然退出（含 wrapper
+        软退出）；timeout=整场预算耗尽（看门狗/产物兜底语义不变）；force=
+        强制杀树（在途即弃，已完成请求经 db 兜底收集）。"""
         binary = which_or_fail("evalscope",
                                "未找到 evalscope CLI——压测经其子进程执行，"
                                "请 pip install evalscope")
-        log_path = Path(cfg["output_dir"]).parent / "logs" / "perf.log"
-        rc, out, err = run_tool_subprocess(
-            [binary, *cfg["args"]], log_path=log_path, timeout=cfg["timeout"])
-        if rc is None:
+        output_dir = Path(cfg["output_dir"])
+        log_path = output_dir.parent / "logs" / "perf.log"
+        stop_file = output_dir.parent / "perf_control" / STOP_FILE_NAME
+        stop_file.parent.mkdir(parents=True, exist_ok=True)
+        stop_file.unlink(missing_ok=True)   # 重跑复用 work_dir 时清掉上轮残留
+        launch, wrapped = self._launch_command(binary, stop_file)
+        env = dict(os.environ) | {"PYTHONIOENCODING": "utf-8"} | cfg.get("env", {})
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        outcome: dict = {"how": _HOW_EXIT, "stop_requested": False}
+        with open(log_path, "w", encoding="utf-8", errors="replace") as log_fh:
+            proc = subprocess.Popen([*launch, *cfg["args"]], stdout=log_fh,
+                                    stderr=subprocess.STDOUT, env=env)
+            how = self._supervise(proc, cfg, control, stop_file, log_path,
+                                  wrapped, outcome)
+            outcome["how"] = how
+        self._settle_outcome(outcome, cfg, log_path, proc)
+        return outcome
+
+    def _supervise(self, proc: subprocess.Popen, cfg: dict,
+                   control: ToolRunControl | None, stop_file: Path,
+                   log_path: Path, wrapped: bool, outcome: dict) -> str:
+        """监督循环：0.5s 轮询退出码 + 停止事件 + 双截止（强制时长/整场预算）。
+
+        立即停止：cancel_event 置位 → 写协停请求文件（wrapper 触发策略软退
+        出：停止派发、排空在途）；排空超 GRACEFUL_DRAIN_BUDGET_S → 升级杀树。
+        强制停止：force_event 置位 / force_stop_seconds 到时 → 立即杀树。"""
+        start = time.monotonic()
+        force_at = (start + cfg["force_stop_seconds"]
+                    if cfg.get("force_stop_seconds") is not None else None)
+        overall_at = start + cfg["timeout"]
+        drain_at: float | None = None
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                return _HOW_EXIT
+            now = time.monotonic()
+            if control is not None and control.force_event is not None \
+                    and control.force_event.is_set():
+                return self._kill(proc, log_path, outcome, _HOW_FORCE,
+                                  "强制停止（在途请求已取消，未返回请求不计入统计）")
+            if force_at is not None and now >= force_at:
+                return self._kill(proc, log_path, outcome, _HOW_FORCE,
+                                  f"强制停止时长到（{cfg['force_stop_seconds'] / 60.0:g} 分钟），"
+                                  "在途请求已取消，未返回请求不计入统计")
+            if control is not None and control.cancel_event is not None \
+                    and control.cancel_event.is_set():
+                outcome["stop_requested"] = True
+                if not stop_file.exists():
+                    self._write_stop_file(stop_file, log_path, wrapped)
+                    drain_at = now + GRACEFUL_DRAIN_BUDGET_S
+                elif drain_at is not None and now >= drain_at:
+                    return self._kill(proc, log_path, outcome, _HOW_FORCE,
+                                      f"排空在途超 {GRACEFUL_DRAIN_BUDGET_S:g}s 未返回"
+                                      "（服务端挂死），升级强制停止")
+            if now >= overall_at:
+                kill_tree(proc)
+                self._log_marker(log_path, f"SUBPROCESS TIMEOUT after {cfg['timeout']}s")
+                return _HOW_TIMEOUT
+            time.sleep(SUPERVISE_POLL_INTERVAL_S)
+
+    @staticmethod
+    def _write_stop_file(stop_file: Path, log_path: Path, wrapped: bool) -> None:
+        """协停请求落盘 + 日志标记（wrapper 轮询读取后触发策略软退出）。"""
+        try:
+            stop_file.write_text(
+                json.dumps({"mode": "graceful", "ts": time.time()}),
+                encoding="utf-8")
+        except OSError as exc:
+            logger.error("协停请求文件写入失败：%s（排空预算后仍会杀树兜底）", exc)
+        if not wrapped:
+            logger.warning("协停 wrapper 未启用（无同目录解释器），立即停止无效果，"
+                           "将在排空预算后强制杀树")
+        PerfAdapter._log_marker(log_path, "GRACEFUL_STOP_REQUESTED "
+                                          "(stop dispatching, drain in-flight)")
+
+    @staticmethod
+    def _log_marker(log_path: Path, text: str) -> None:
+        """perf.log 追加停止标记行（流式子进程输出之外的过程留痕）。"""
+        try:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n[aite-perf] {time.strftime('%H:%M:%S')} {text}\n")
+        except OSError:
+            pass
+
+    def _kill(self, proc: subprocess.Popen, log_path: Path, outcome: dict,
+              how: str, reason: str) -> str:
+        """杀进程树 + 日志标记（Windows proc.kill 只杀直接子进程，孙进程残留）。"""
+        kill_tree(proc)
+        outcome["force_reason"] = reason
+        logger.warning("perf 子进程强制终止：%s", reason)
+        self._log_marker(log_path, f"FORCE_STOP_KILLED — {reason}")
+        return how
+
+    def _settle_outcome(self, outcome: dict, cfg: dict, log_path: Path,
+                        proc: subprocess.Popen) -> None:
+        """结局裁定（日志已流式落盘）：force=截断收集不报错；timeout 维持原
+        看门狗/产物兜底语义；exit 非零 = 真失败抛错（错误提示从日志提取）。"""
+        how = outcome["how"]
+        if how == _HOW_FORCE:
+            return
+        out = self._read_log_tail(log_path)
+        if how == _HOW_TIMEOUT:
             if cfg.get("duration_watchdog"):
                 logger.warning("perf 总时长预算 %ss 耗尽，截断 probe 搜索"
                                "（已完成轮次保留）", cfg["duration_watchdog"])
-                with open(log_path, "a", encoding="utf-8") as fh:
-                    fh.write(f"DURATION_BUDGET_EXHAUSTED after "
-                             f"{cfg['duration_watchdog']}s\n{out}{err}")
+                self._log_marker(log_path, f"DURATION_BUDGET_EXHAUSTED after "
+                                           f"{cfg['duration_watchdog']}s")
                 return
-            # 看门狗超时但测量产物已完整落盘（典型：机器睡眠/唤醒导致进程
-            # 未及退出）——显式告警后按完成处理，数据可见而非整轮报错
-            # （污染数据会经 error_rate 阈值显式 FAIL，不静默）
             summaries = list(Path(cfg["output_dir"])
                              .glob("**/benchmark_summary.json"))
             if summaries:
@@ -598,10 +865,17 @@ class PerfAdapter(ToolAdapter):
                                summaries[0].parent)
                 return
             raise RuntimeError(f"压测超时（{cfg['timeout']}s），日志: {log_path}")
-        if rc != 0:
-            raise RuntimeError(f"evalscope perf 执行失败（exit={rc}），"
+        if proc.returncode != 0:
+            raise RuntimeError(f"evalscope perf 执行失败（exit={proc.returncode}），"
                                f"{self._api_error_hint(out)}"
                                f"日志: {log_path}\n{out[-2000:]}")
+
+    @staticmethod
+    def _read_log_tail(log_path: Path, limit: int = 20000) -> str:
+        try:
+            return log_path.read_text(encoding="utf-8", errors="replace")[-limit:]
+        except OSError:
+            return ""
 
     @staticmethod
     def _api_error_hint(out: str) -> str:
@@ -615,16 +889,18 @@ class PerfAdapter(ToolAdapter):
                      msg.strip())
         return f"服务端拒绝（HTTP {code}）——{msg[:200]}。"
 
-    def collect(self, req: ToolRunRequest) -> ToolRunResult:
+    def collect(self, req: ToolRunRequest,
+                stop_info: dict | None = None) -> ToolRunResult:
         """解析各档 benchmark_summary/percentile → 指标行（dataset=perf:c<并发>）。
 
         统一 glob ``**/benchmark_summary.json``：普通模式 ``parallel_X_number_Y/``
         与摸高模式 ``sla_tuning/sla_parallel_N_run_i/`` 两种布局都覆盖；
-        同并发多 run（probe 的 runs>1）按均值聚合、count 求和。
-        """
+        同并发多 run（probe 的 runs>1）按均值聚合、count 求和。强制停止截断的
+        档位（有 db 无 summary）按库兜底合成，stop_info 经 _stop 标记随结果
+        与 timeseries 落盘（前端展示截断口径）。"""
         cfg = self.build_config(req)   # 纯函数，重复调用拿 output_dir
         out = ToolRunResult()
-        grouped = _group_summaries(Path(cfg["output_dir"]))
+        grouped, partial_labels = _group_summaries(Path(cfg["output_dir"]))
         bucket = _resolve_bucket(cfg)
         timeseries: dict = {"engine": self.name, "run_name": req.run_name,
                             "bucket_seconds": bucket,
@@ -672,6 +948,12 @@ class PerfAdapter(ToolAdapter):
         if total_failed:
             # evalscope 错误文本在 pickle 响应里，只给计数（文本级错误分布见 locust）
             timeseries["errors"] = [{"key": "failed", "count": total_failed}]
+        if stop_info or partial_labels:
+            timeseries["stop"] = {**(stop_info or {}),
+                                  "truncated_levels": partial_labels}
+            # 细节随 run details 持久化（persist_tool_result 落 result.perf），
+            # 前端详情页据 _stop 展示截断口径（在途未返回请求不计入统计）
+            out.perf["_stop"] = timeseries["stop"]
         from aite.tools import serialize_summaries  # 懒导入：包 __init__ 注册适配器，顶层导入成环
         timeseries["summaries"] = serialize_summaries(out.rows)
         write_timeseries(out, Path(cfg["output_dir"]).parent, timeseries)

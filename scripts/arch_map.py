@@ -395,7 +395,8 @@ def extract_tables() -> list[dict]:
 
 
 ENTRYPOINT_SUFFIXES = (".cli.main", ".web.app", ".functional.harness",
-                       ".tools.perf_dataset", ".service.agent_client")
+                       ".tools.perf_dataset", ".service.agent_client",
+                       ".tools.perf_wrapper")   # evalscope perf 协停 wrapper（子进程脚本拉起）
 
 
 def necessity_audit(mods: dict, edges: set, reg: set) -> dict:

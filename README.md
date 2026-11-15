@@ -315,6 +315,16 @@ instruction/prompt/query/user 取首个命中），适配器导出为逐行 prom
 （时长驱动，防默认 8 条被"先到为准"掐死）；显式配 `number` 则与时长先到为准。
 evalscope 底层 `--duration` 为软退出：到点后不派新请求、在途请求跑完。
 
+**停止**（任务域两段式；`aite task stop --mode` / `POST /{domain}/tasks/{id}/stop`）：
+
+- **立即停止**（`mode: graceful`，缺省）：停止派发新请求，等待在途请求全部
+  返回后正常收尾——统计含排空返回的请求。实现走协停 wrapper（Windows 无
+  信号通道，借 evalscope 策略层 duration 软退出机制在停止请求到达时触发）；
+  在途挂死超排空预算（600s）自动升级为强制停止。
+- **强制停止**（`mode: force` 或创建时配 `perf.force_stop_minutes` 到时）：
+  直接杀进程树，在途请求即弃；已完成请求经逐请求落库（benchmark_data.db）
+  兜底合成指标，**未返回的请求不计入统计**，结果带 `_stop` 截断标记。
+
 ```yaml
 # examples/perf/perf_evalscope.yaml（节选）
 perf:

@@ -191,15 +191,42 @@ def _register_action_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
         _print_verdict(task)
 
     @app.command("stop")
-    def stop(task_id: str = typer.Argument(...)) -> None:
-        """停止运行中任务（协作式；超时强转 cancelled）。"""
+    def stop(
+        task_id: str = typer.Argument(...),
+        mode: str = typer.Option(
+            "graceful", "--mode",
+            help="graceful=立即停止（排空在途）；force=强制停止（在途即弃，"
+                 "未返回请求不计入统计）"),
+    ) -> None:
+        """停止运行中任务（立即落 stopping 返回；终态由执行进程停止桥收口）。"""
         try:
-            task = _run_with_repo(lambda repo: kit.stop(repo, task_id))
+            task = _run_with_repo(lambda repo: _stop_and_wait(kit, repo,
+                                                              task_id, mode))
         except (TaskNotFoundError, TaskStateError) as exc:
             _fail(exc)
             return
+        if task is None:
+            _fail(TaskNotFoundError(task_id))
+            return
+        if task["status"] == "stopping":
+            console.print(f"[yellow]stopping[/yellow] {task['id']} "
+                          f"mode={mode}（执行进程排空中，终态稍后经任务列表可见）")
+            return
         console.print(f"[yellow]stopped[/yellow] {task['id']} "
                       f"status={task['status']}")
+
+
+async def _stop_and_wait(kit: DomainTaskKit, repo, task_id: str,
+                         mode: str) -> dict | None:
+    """stop + 有限等待：本进程发起的执行等桥收尾落终态；跨进程执行（服务端
+    跑、CLI 停）等不到，轮询 30s 后如实返回当前态（graceful 排空可持续更久）。"""
+    task = await kit.stop(repo, task_id, mode=mode)
+    for _ in range(30):
+        if task is None or task.get("status") not in ("running", "stopping"):
+            return task
+        await asyncio.sleep(1.0)
+        task = await kit.get(repo, task_id)
+    return task
 
 
 def _register_spawn_commands(app: typer.Typer, kit: DomainTaskKit) -> None:

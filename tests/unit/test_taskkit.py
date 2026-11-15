@@ -28,26 +28,28 @@ from aite.web.events import EventBus
 
 
 class FakeExecutor(TaskExecutor):
-    """可控执行器：result/error 决定成败，wait_cancel 阻塞至停止，slow_cancel 模拟 kill 卡住。"""
+    """可控执行器：wait_cancel 阻塞至立即停止（graceful），wait_force 阻塞至
+    强制停止，hang 模拟不响应停止的执行体（桥升级强杀路径）。"""
 
     def __init__(self, result: dict | None = None, error: str | None = None,
-                 wait_cancel: bool = False, slow_cancel: bool = False) -> None:
+                 wait_cancel: bool = False, wait_force: bool = False,
+                 hang: bool = False) -> None:
         self.result = result
         self.error = error
         self.wait_cancel = wait_cancel
-        self.slow_cancel = slow_cancel
+        self.wait_force = wait_force
+        self.hang = hang
 
     async def execute(self, ctx) -> dict:
         if self.wait_cancel:
             await ctx.cancel_event.wait()
+        if self.wait_force:
+            await ctx.force_event.wait()
+        if self.hang:
+            await asyncio.sleep(30)
         if self.error:
             raise RuntimeError(self.error)
         return self.result or {"ok": True}
-
-    async def cancel(self, ctx) -> None:
-        if self.slow_cancel:
-            await asyncio.sleep(5)
-        ctx.cancel_event.set()
 
 
 def make_kit(executor: FakeExecutor, bus: EventBus | None = None) -> DomainTaskKit:
@@ -84,6 +86,7 @@ async def test_delete_guards(repo):
     with pytest.raises(TaskStateError):
         await kit.delete(repo, task["id"])          # 非终态不可删
     await kit.stop(repo, task["id"])
+    await kit.wait(repo, task["id"])                # 停止异步收口 → 终态后可删
     await kit.delete(repo, task["id"])              # 终态可删
     assert await kit.get(repo, task["id"]) is None
 
@@ -150,20 +153,69 @@ async def test_executor_receives_repo_and_can_emit_raw(repo):
 
 # --------------------------------------------------------------------- stop
 async def test_stop_running_task(repo):
+    """立即停止：stop 立即返回 stopping（不再阻塞等待），执行器排空返回后
+    由 _drive 以 cancelled 收口（历史轮带 result keys）。"""
     bus = EventBus()
-    kit = make_kit(FakeExecutor(wait_cancel=True), bus)
+    kit = make_kit(FakeExecutor(wait_cancel=True,
+                                result={"run_id": "r1", "total_cases": 3}), bus)
     task = await kit.create(repo, {"a": 1})
     await kit.run(repo, task["id"])
     stopped = await kit.stop(repo, task["id"])
-    assert stopped["status"] == TASK_CANCELLED and stopped["finished_at"]
-    assert stopped["error"] is None                 # 正常停止不写 error
+    assert stopped["status"] == TASK_STOPPING
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED and done["finished_at"]
+    assert done["error"] is None                    # 正常停止不写 error
+    last = done["history"][-1]
+    assert last["stop_mode"] == "graceful"
+    assert last["run_id"] == "r1" and last["total_cases"] == 3   # 产物可追溯
     frames = await drain(bus, kit.channel(task["id"]))
     assert [f["type"] for f in frames] == ["started", "progress", "cancelled", "end"]
+    assert frames[1]["mode"] == "graceful"
+
+
+async def test_stop_force_sets_force_event(repo):
+    """强制停止：force_event 置位、历史轮记 stop_mode=force（子进程型执行器
+    据此杀树；未返回请求不计入统计由适配器保证，kit 只管状态机）。"""
+    bus = EventBus()
+    kit = make_kit(FakeExecutor(wait_force=True), bus)
+    task = await kit.create(repo, {"a": 1})
+    await kit.run(repo, task["id"])
+    stopped = await kit.stop(repo, task["id"], mode="force")
+    assert stopped["status"] == TASK_STOPPING
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED
+    assert done["history"][-1]["stop_mode"] == "force"
+    frames = await drain(bus, kit.channel(task["id"]))
+    assert [f["type"] for f in frames] == ["started", "progress", "cancelled", "end"]
+    assert frames[1]["mode"] == "force"
+
+
+async def test_stop_invalid_mode_rejected(repo):
+    kit = make_kit(FakeExecutor())
+    task = await kit.create(repo, {"a": 1})
+    await kit.run(repo, task["id"])
+    with pytest.raises(TaskStateError, match="mode"):
+        await kit.stop(repo, task["id"], mode="nuke")
+    await kit.stop(repo, task["id"])                # 收尾
+
+
+async def test_stop_stopping_escalates_to_force(repo):
+    """stopping 中幂等升级：graceful 后再 force → force_event 补置位 +
+    历史轮 stop_mode 改写（执行器尚在排空时的反悔路径）。"""
+    kit = make_kit(FakeExecutor(wait_cancel=True, wait_force=True))
+    task = await kit.create(repo, {"a": 1})
+    await kit.run(repo, task["id"])
+    await kit.stop(repo, task["id"])                # graceful
+    escalated = await kit.stop(repo, task["id"], mode="force")
+    assert escalated["status"] == TASK_STOPPING
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED
+    assert done["history"][-1]["stop_mode"] == "force"
 
 
 async def test_stop_via_db_flag_cross_process(repo):
-    """跨进程停止桥：另一进程只把状态写成 stopping，执行进程轮询发现后
-    触发协作 cancel 并落 cancelled 终态（CLI 独立进程停止的真实路径）。"""
+    """跨进程停止桥：另一进程只把状态写成 stopping（无 stop_mode 记录 →
+    按 graceful 处理），执行进程轮询发现后置事件并等执行器排空收口。"""
     bus = EventBus()
     kit = make_kit(FakeExecutor(wait_cancel=True), bus)
     kit.stop_poll_interval = 0.05
@@ -188,14 +240,19 @@ async def test_stop_guards_and_idempotency(repo):
         await kit.stop(repo, task["id"])            # 终态不可停
 
 
-async def test_stop_timeout_forces_cancel(repo):
-    kit = make_kit(FakeExecutor(wait_cancel=True, slow_cancel=True))
-    kit.stop_timeout = 0.05                         # 压短兜底窗口
+async def test_stop_bridge_escalates_to_force_when_hung(repo, monkeypatch):
+    """执行体不响应停止：桥等 stop_timeout 后升级 force_event，再宽限仍卡死
+    则 cancel 句柄兜底落 cancelled（stop 必达）。"""
+    monkeypatch.setattr("aite.core.taskkit.STOP_FORCE_GRACE_S", 0.05)
+    kit = make_kit(FakeExecutor(hang=True))
+    kit.stop_timeout = 0.05                         # 压短桥等待窗口
+    kit.stop_poll_interval = 0.05
     task = await kit.create(repo, {"a": 1})
     await kit.run(repo, task["id"])
     stopped = await kit.stop(repo, task["id"])
-    assert stopped["status"] == TASK_CANCELLED
-    assert "stop timed out" in (stopped["error"] or "")
+    assert stopped["status"] == TASK_STOPPING
+    done = await kit.wait(repo, task["id"])
+    assert done["status"] == TASK_CANCELLED
 
 
 # --------------------------------------------------------------------- retry

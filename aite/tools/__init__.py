@@ -25,6 +25,9 @@ from aite.tools.base import (
     ToolMetricRow as ToolMetricRow,
 )
 from aite.tools.base import (
+    ToolRunControl as ToolRunControl,
+)
+from aite.tools.base import (
     ToolRunRequest as ToolRunRequest,
 )
 from aite.tools.base import (
@@ -275,17 +278,20 @@ def _write_run_state(work_dir: Path, status: str, raw: dict) -> None:
         json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-async def execute_tool(raw: dict, work_dir: Path | None = None
+async def execute_tool(raw: dict, work_dir: Path | None = None,
+                       control: ToolRunControl | None = None
                        ) -> tuple[ToolRunResult, dict, ToolRunRequest]:
     """纯执行：构造请求 → 适配器执行 → 结果（不落库，agent 回传场景用）。
 
     work_dir 缺省走 parse_tool_suite 的 reports/tool/<engine>/<run>/<stamp>。
+    control：域任务停止通道（立即/强制停止事件），CLI 直跑为 None。
     """
     engine_name = raw.get("engine")
     adapter = get_tool(engine_name)
     req, cfg_snapshot = parse_tool_suite(raw)
     if work_dir is not None:
         req.work_dir = Path(work_dir)
+    req.control = control
     result = await adapter.run(req)
     return result, cfg_snapshot, req
 
@@ -399,16 +405,35 @@ async def persist_tool_result(raw: dict, repo: Any, result: ToolRunResult,
     return report
 
 
+async def _persist_run_failure(repo: Any, run_id: str, report: RunReport,
+                               exc: Exception, raw: dict, req: ToolRunRequest) -> None:
+    """run 级失败统一落库（run 行 error 态 + run_state.json failed 凭证）。"""
+    logger.exception("tool run failed")
+    report.status = "error"
+    report.details["error"] = f"{type(exc).__name__}: {exc}"
+    await repo.update_run(run_id, status="error", error=str(exc)[:2000],
+                          finished_at=utcnow(),
+                          details={"work_dir": str(req.work_dir)})
+    try:
+        _write_run_state(req.work_dir, "failed", raw)
+    except OSError as write_exc:
+        logger.warning("run_state.json 写盘失败（%s）：该目录将不可"
+                       "断点续推（无完成态凭证）", write_exc)
+
+
 async def run_tool_suite(raw: dict, repo: Any,
                          event_cb: Callable[[dict], None] | None = None,
                          run_cb: Any = None,
+                         control: ToolRunControl | None = None,
                          ) -> RunReport:
     """本地执行工具型 suite：先建 run 行（running 可见）→ 执行 → 入库。
 
     event_cb：运行期进度事件出口（Web SSE / CLI 打印共用）；适配器经
     req.progress_cb 回传（如 evalscope 日志解析出的 done/total），total
     已知即回写 run 行 total_cases。run_cb：run 行建好即回调（域任务用它把
-    run_id 记进执行历史轮，失败/取消轮也能对上留痕）。"""
+    run_id 记进执行历史轮，失败/取消轮也能对上留痕）。control：域任务
+    停止通道（立即停止 cancel_event / 强制停止 force_event），适配器监督
+    循环轮询响应；CLI 直跑为 None。"""
     engine_name = raw.get("engine")
     req, cfg_snapshot = parse_tool_suite(raw)
     report = RunReport(
@@ -451,6 +476,7 @@ async def run_tool_suite(raw: dict, repo: Any,
         task.add_done_callback(bg_updates.discard)
 
     req.progress_cb = progress_cb
+    req.control = control
     _write_run_state(req.work_dir, "running", raw)
     try:
         adapter = get_tool(engine_name)
@@ -469,15 +495,5 @@ async def run_tool_suite(raw: dict, repo: Any,
                            "重续推该目录（预测/判分全缓存，无害）", req.work_dir, exc)
         return report
     except Exception as exc:  # noqa: BLE001 - run-level failure must be persisted
-        logger.exception("tool run failed")
-        report.status = "error"
-        report.details["error"] = f"{type(exc).__name__}: {exc}"
-        await repo.update_run(run_id, status="error", error=str(exc)[:2000],
-                              finished_at=utcnow(),
-                              details={"work_dir": str(req.work_dir)})
-        try:
-            _write_run_state(req.work_dir, "failed", raw)
-        except OSError as exc:
-            logger.warning("run_state.json 写盘失败（%s）：%s；该目录将不可"
-                           "断点续推（无完成态凭证）", req.work_dir, exc)
+        await _persist_run_failure(repo, run_id, report, exc, raw, req)
         return report

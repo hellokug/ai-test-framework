@@ -16,9 +16,24 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from aite.utils.secrets import resolve_secret
+
+
+@dataclass
+class ToolRunControl:
+    """任务域 → 适配器的停止通道（asyncio.Event；适配器在工作线程内只读
+    is_set() 轮询，CPython GIL 下布尔读安全）。
+
+    - ``cancel_event``：立即停止——适配器停止派发新请求、排空在途后正常收集
+      （evalscope-perf 经协停 wrapper 触发策略软退出，产物完整落盘）
+    - ``force_event``：强制停止——适配器监督循环直接杀进程树，在途请求即弃，
+      已完成请求经逐请求落库兜底收集，未返回请求不计入统计
+    """
+
+    cancel_event: Any | None = None
+    force_event: Any | None = None
 
 
 @dataclass
@@ -39,6 +54,7 @@ class ToolRunRequest:
     resume: bool = False           # evalscope 引擎：断点续推（use_cache 就地复用预测/判分）；
                                    # auto/force 档位下为 True，档位语义见 tools/__init__.normalize_resume_mode
     progress_cb: Callable[[dict], None] | None = None  # 运行期进度事件回调（SSE/CLI 可见性）
+    control: ToolRunControl | None = None  # 域任务停止通道（CLI 直跑为 None，无停止语义）
 
 
 @dataclass

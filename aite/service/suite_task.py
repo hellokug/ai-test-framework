@@ -2,8 +2,9 @@
 
 spec 即 suite raw（与 CLI `aite run`、POST /runs 的 YAML/dict 同构），统一经
 execute_suite 引擎管道执行（tool 域 subprocess 三连 / 自研域 engine），结果落
-公共 run 存储，任务表 result 只存概要引用。停止语义：执行协程随 cancel 终止；
-子进程型引擎的进程组强杀由各域 executor 扩展 cancel（见设计稿 §9 待办）。
+公共 run 存储，任务表 result 只存概要引用。停止语义（两段式）：立即停止 =
+cancel_event 协作（工具域子进程经监督循环排空收尾）；强制停止 = force_event
+（监督循环直接杀进程树，在途请求即弃）。
 """
 
 from __future__ import annotations
@@ -54,12 +55,12 @@ class SuiteTaskExecutor(TaskExecutor):
     async def execute(self, ctx: TaskRunContext) -> dict:
         # resume=False：任务域重跑必须真执行（断点续推复用会让重跑瞬完成不跑样本，
         # owner 2026-11-12 反馈「重跑没跑成功」）；续推语义保留给 CLI `aite run --resume`
+        from aite.tools.base import ToolRunControl  # 懒导入：service 不在顶层依赖 tools
+
+        control = ToolRunControl(cancel_event=ctx.cancel_event,
+                                 force_event=ctx.force_event)
         report = await execute_suite(ctx.spec, ctx.repo,
                                      event_cb=ctx.emit_raw, resume=False,
-                                     run_cb=ctx.run_cb)
+                                     run_cb=ctx.run_cb, control=control)
         await archive_maybe(ctx.repo, ctx.spec, report)
         return suite_summary(report)
-
-    async def cancel(self, ctx: TaskRunContext) -> None:
-        # 自研引擎在 await 点协作退出；工具域子进程的进程组终止待各域补强
-        ctx.cancel_event.set()

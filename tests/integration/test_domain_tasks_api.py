@@ -59,8 +59,13 @@ class TestDomainTasksApi:
 
         # pending 非终态：删除 409
         assert client.delete(f"/api/v1/perf/tasks/{task['id']}").status_code == 409
-        # pending 不允许 stop（仅 running）
+        # pending 不允许 stop（仅 running）；stop body（mode）合法透传到 kit
+        # （非法 mode / 非法状态都映射 409，而非 422 解析失败）
         assert client.post(f"/api/v1/perf/tasks/{task['id']}/stop").status_code == 409
+        assert client.post(f"/api/v1/perf/tasks/{task['id']}/stop",
+                           json={"mode": "force"}).status_code == 409
+        assert client.post(f"/api/v1/perf/tasks/{task['id']}/stop",
+                           json={"mode": "bogus"}).status_code == 409
         # 非终态无 result
         result = client.get(f"/api/v1/perf/tasks/{task['id']}/result")
         assert result.status_code == 409

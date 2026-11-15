@@ -8,6 +8,20 @@ running → succeeded / failed；running/stopping 残留由 startup mark_stale �
 
 状态转移一律走 repo 的 expect_status 条件更新：终态写入方以「先到者得」裁决
 （原则 8 唯一出口归属），后到者重读 DB 以 DB 为准，不覆盖。
+
+**停止语义（两段式，2026-11-15 性能域立即/强制停止改造）**：
+
+- ``stop(mode="graceful")`` 立即停止：落 stopping（含 stop_mode 入执行历史轮）
+  并置位 ctx.cancel_event 后**立即返回**——等待不占用 HTTP 请求。执行器收到
+  cancel_event 自行协作收尾（perf：停止派发新请求、排空在途后正常收集），
+  ``_drive`` 发现执行返回时已处于 stopping → 以 cancelled 收口（历史轮带
+  result keys，run_id 可追溯部分产物）。
+- ``stop(mode="force")`` 强制停止：置位 ctx.force_event——子进程型引擎直接
+  杀进程树，在途请求即弃；已完成请求经逐请求落库（perf benchmark_data.db）
+  兜底收集，未返回请求不计入统计。
+- ``_watch_stop`` 跨进程桥：轮询发现 DB stopping 后按历史轮 stop_mode 补置
+  事件，并等待执行协程自行收口；超 stop_timeout 未完 → 升级 force_event，
+  再宽限 STOP_FORCE_GRACE_S 仍卡死才 cancel 句柄兜底，保证 stop 必达。
 """
 
 from __future__ import annotations
@@ -31,8 +45,10 @@ from aite.utils.logging import get_logger
 
 logger = get_logger("taskkit")
 
-STOP_TIMEOUT_S = 60.0              # stop 协作等待上限，超时强转 cancelled
+STOP_TIMEOUT_S = 60.0              # 桥等执行器自行收口的上限，超时升级 force
+STOP_FORCE_GRACE_S = 30.0          # 升级 force 后再宽限的秒数，仍卡死才 cancel 句柄
 STOP_POLL_INTERVAL_S = 2.0         # 跨进程停止桥的 DB 轮询间隔
+STOP_MODES = ("graceful", "force")  # graceful=立即停止（排空在途）；force=强制停止
 
 
 class TaskNotFoundError(LookupError):
@@ -53,7 +69,7 @@ class EventSink(Protocol):
 
 class TaskRunContext:
     """executor 运行上下文：repo 供执行期落库/复用公共存储，emit 推 SSE 进度帧，
-    cancel_event 供协作式停止。"""
+    cancel_event 供立即停止（协作排空），force_event 供强制停止（在途即弃）。"""
 
     def __init__(self, kit: DomainTaskKit, task_id: str, spec: dict,
                  repo: Any, history: list[dict] | None = None) -> None:
@@ -64,6 +80,7 @@ class TaskRunContext:
         self.run_id: str | None = None  # 引擎建 run 行后经 run_cb 回填（失败/取消轮也要有）
         self.run_cb: Any = None         # executor 透传给执行引擎：建 run 行即回调
         self.cancel_event = asyncio.Event()
+        self.force_event = asyncio.Event()   # 强制停止：子进程型引擎直接杀树，在途即弃
         self._kit = kit
 
     def emit(self, event: dict) -> None:
@@ -81,11 +98,13 @@ class TaskExecutor(ABC):
     @abstractmethod
     async def execute(self, ctx: TaskRunContext) -> dict:
         """执行任务并返回 result payload；长任务经 ctx.emit 上报进度，
-        轮询 ctx.cancel_event 响应停止。"""
+        轮询 ctx.cancel_event / ctx.force_event 响应立即/强制停止。"""
 
     async def cancel(self, ctx: TaskRunContext) -> None:
-        """协作式停止钩子：缺省仅置位 cancel_event；子进程型工具须在此
-        kill 进程组（产物照常落盘，文件契约不受影响）。"""
+        """停止请求钩子（stop/桥置事件后调用，须快速返回）：缺省仅置位
+        cancel_event；需要额外停止侧清理的执行器在此扩展。子进程型引擎的
+        进程组强杀走 ctx.force_event 协作协议（适配器监督循环自行杀树），
+        不再在钩子里阻塞等待。"""
         ctx.cancel_event.set()
 
 
@@ -214,41 +233,75 @@ class DomainTaskKit:
         self._publish(task_id, {"type": "started", "task_id": task_id})
         return started
 
-    async def stop(self, repo: Any, task_id: str) -> dict:
+    async def stop(self, repo: Any, task_id: str, *,
+                   mode: str = "graceful") -> dict:
+        """发起停止：graceful=立即停止（停止派发新请求，排空在途后收口），
+        force=强制停止（在途请求直接取消/杀树，未返回请求不计入统计）。
+
+        只落 stopping（stop_mode 记入本轮执行历史，供跨进程桥识别）并置位
+        对应事件后**立即返回**——不阻塞等待执行收尾，等待由 _watch_stop 桥
+        承担（终态经 SSE cancelled 帧通知）。幂等：stopping 中再次 stop 允许
+        graceful → force 升级。"""
+        if mode not in STOP_MODES:
+            raise TaskStateError(f"stop mode 须为 {' / '.join(STOP_MODES)}，收到 {mode}")
         current = await self._require(repo, task_id)
         if current["status"] == TASK_STOPPING:
-            return current                                      # 幂等
+            await self._escalate(repo, task_id, current, mode)
+            return await self._require(repo, task_id)
         if current["status"] != TASK_RUNNING:
             raise TaskStateError(f"stop 仅限 running 任务，当前 {current['status']}")
         stopping = await repo.update_domain_task(
-            self.table, task_id, expect_status=TASK_RUNNING, status=TASK_STOPPING)
+            self.table, task_id, expect_status=TASK_RUNNING, status=TASK_STOPPING,
+            history=self._mark_stop_mode(current.get("history"), mode))
         if stopping is None:            # 竞态：已自然终态或已被置 stopping，以 DB 为准
             return await self._require(repo, task_id)
-        self._publish(task_id, {"type": "progress", "note": "stopping"})
+        self._publish(task_id, {"type": "progress", "note": "stopping", "mode": mode})
         ctx = self._contexts.get(task_id)
-        timed_out = False
         if ctx is not None:
-            try:
-                await asyncio.wait_for(self.executor.cancel(ctx), timeout=self.stop_timeout)
-            except (TimeoutError, asyncio.TimeoutError):
-                timed_out = True
-                logger.warning("stop 超时强转 cancelled: %s/%s", self.domain, task_id)
-        handle = self._handles.get(task_id)
-        if handle is not None:
-            if not handle.done():
-                handle.cancel()
-            # _drive 兜底吞了业务异常；此处仅吸收取消与极端情况下的漏网异常
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await handle
-        await self._finish_cancelled(
-            repo, task_id, ctx=ctx,
-            error="stop timed out; cancelled forcibly" if timed_out else None)
-        return await self._require(repo, task_id)
+            self._set_stop_event(ctx, mode)
+            if mode == "graceful":
+                try:
+                    await asyncio.wait_for(self.executor.cancel(ctx), timeout=5.0)
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning("stop 钩子超时（忽略，事件已置位）: %s/%s",
+                                   self.domain, task_id)
+        return stopping
+
+    @staticmethod
+    def _mark_stop_mode(history: list[dict] | None, mode: str) -> list[dict] | None:
+        """本轮执行历史标记停止模式（跨进程桥据此识别 graceful/force）。"""
+        rounds = [dict(r) for r in (history or [])]
+        if rounds:
+            rounds[-1]["stop_mode"] = mode
+        return rounds
+
+    @staticmethod
+    def _last_stop_mode(current: dict) -> str:
+        hist = current.get("history") or []
+        return (hist[-1].get("stop_mode") if hist else None) or "graceful"
+
+    @staticmethod
+    def _set_stop_event(ctx: TaskRunContext, mode: str) -> None:
+        (ctx.force_event if mode == "force" else ctx.cancel_event).set()
+
+    async def _escalate(self, repo: Any, task_id: str, current: dict,
+                        mode: str) -> None:
+        """stopping 中升级 stop 模式（graceful → force）：置事件 + 补历史标记。"""
+        if mode != "force":
+            return
+        ctx = self._contexts.get(task_id)
+        if ctx is not None:
+            ctx.force_event.set()
+        with contextlib.suppress(Exception):
+            await repo.update_domain_task(
+                self.table, task_id, expect_status=TASK_STOPPING,
+                history=self._mark_stop_mode(current.get("history"), mode))
 
     async def _watch_stop(self, repo: Any, ctx: TaskRunContext) -> None:
         """跨进程停止桥：CLI/Web 各自独立进程，stop 请求落在 DB 的 stopping
-        状态上；执行进程轮询发现后触发协作式 cancel 并落 cancelled 终态。
-        子进程型引擎的进程组强杀由各域 executor.cancel 补强（C1-C4）。"""
+        状态上；执行进程轮询发现后按 stop_mode 置事件，并等待执行协程自行
+        收口（_drive 在 stopping 下以 cancelled 收口，产物已收集）；超时升级
+        force_event，再宽限仍卡死才 cancel 句柄兜底——stop 必达。"""
         task_id = ctx.task_id
         try:
             while True:
@@ -259,35 +312,57 @@ class DomainTaskKit:
                     return                      # 已易主/终态：出口归属在写入方
                 if current["status"] != TASK_STOPPING:
                     continue
-                ctx.cancel_event.set()
-                try:
-                    await asyncio.wait_for(self.executor.cancel(ctx),
-                                           timeout=self.stop_timeout)
-                except (TimeoutError, asyncio.TimeoutError):
-                    logger.warning("跨进程 stop 的 cancel 超时: %s/%s",
-                                   self.domain, task_id)
-                handle = self._handles.get(task_id)
-                if handle is not None and not handle.done():
-                    handle.cancel()
-                await self._finish_cancelled(repo, task_id, ctx=ctx)
+                self._set_stop_event(ctx, self._last_stop_mode(current))
+                await self._await_executor(repo, ctx)
                 return
         except asyncio.CancelledError:
             raise
         finally:
             self._watchers.pop(task_id, None)
 
+    async def _await_executor(self, repo: Any, ctx: TaskRunContext) -> None:
+        """等待执行协程自行收口（优雅排空/强制杀树后的截断收集）；stop_timeout
+        未完 → 升级 force_event 再宽限 STOP_FORCE_GRACE_S，仍卡死 cancel 句柄。
+        最后仍处 stopping（执行协程死于取消等未落终态的场景）→ 兜底落 cancelled。"""
+        task_id = ctx.task_id
+        handle = self._handles.get(task_id)
+        if handle is not None and not handle.done():
+            try:
+                # shield：wait_for 超时只弃等待，不取消执行协程本体
+                await asyncio.wait_for(asyncio.shield(handle),
+                                       timeout=self.stop_timeout)
+            except asyncio.CancelledError:
+                raise
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning("停止等待超时，升级强制停止: %s/%s",
+                               self.domain, task_id)
+                ctx.force_event.set()
+                with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(handle),
+                                           timeout=STOP_FORCE_GRACE_S)
+            if not handle.done():
+                handle.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await handle
+        current = await repo.get_domain_task(self.table, task_id)
+        if (current or {}).get("status") == TASK_STOPPING:
+            await self._finish_cancelled(repo, task_id, ctx=ctx)
+
     async def _finish_cancelled(self, repo: Any, task_id: str,
                                 ctx: TaskRunContext | None = None, *,
-                                error: str | None = None) -> None:
+                                error: str | None = None,
+                                result: dict | None = None) -> None:
         """stopping → cancelled 终态落库 + cancelled 帧 + 关频道（唯一出口）。
-        expect 守卫下多调用方（本进程 stop / 跨进程轮询桥）竞态安全；
-        执行进程内 ctx 必有（桥从 _contexts 取），收轮时用它补本轮 run_id。"""
+        expect 守卫下多调用方（_drive 停止竞态收口 / 桥兜底）竞态安全；
+        执行进程内 ctx 必有（桥从 _contexts 取），收轮时用它补本轮 run_id。
+        result：执行器已收完的产物概要（优雅排空全量 / 强制截断部分）——
+        历史轮带回 run_id/total_cases 等 keys，取消轮也能追溯部分产物。"""
         fields: dict[str, Any] = {"status": TASK_CANCELLED, "finished_at": utcnow()}
         if error:
             fields["error"] = error
         current = await repo.get_domain_task(self.table, task_id)
         closed = self._close_round((current or {}).get("history"),
-                                   TASK_CANCELLED, error=error,
+                                   TASK_CANCELLED, result=result, error=error,
                                    run_id=ctx.run_id if ctx else None)
         if closed:
             fields["history"] = closed
@@ -343,13 +418,20 @@ class DomainTaskKit:
     async def _drive(self, repo: Any, ctx: TaskRunContext) -> None:
         """执行协程外壳：终态写入 + 终态帧 + 句柄清理，唯一出口收口。
 
-        频道关闭由终态写入方负责（succeeded/failed 此处关，cancelled 由 stop()
-        关）——保证终态帧先于 end 帧，SSE 消费者不会漏收终态。进程关闭场景的
-        取消（无 stop）不落状态也不关频道，交 startup mark_stale 收敛。
+        频道关闭由终态写入方负责（succeeded/failed 此处关，cancelled 由
+        _finish_cancelled 关）——保证终态帧先于 end 帧，SSE 消费者不会漏收
+        终态。执行返回时发现已处于 stopping（停止竞态获胜）：产物已由执行器
+        收完（优雅排空全量 / 强制杀树截断），以 cancelled 收口且历史轮带
+        result keys，而不是写 succeeded 覆盖停止语义。进程关闭场景的取消
+        （无 stop）不落状态也不关频道，交 startup mark_stale 收敛。
         """
         task_id = ctx.task_id
         try:
             result = await self.executor.execute(ctx)
+            current = await self._require(repo, task_id)
+            if current["status"] == TASK_STOPPING:
+                await self._finish_cancelled(repo, task_id, ctx=ctx, result=result)
+                return
             updated = await repo.update_domain_task(
                 self.table, task_id, expect_status=TASK_RUNNING,
                 status=TASK_SUCCEEDED, result=result, finished_at=utcnow(),
@@ -359,7 +441,8 @@ class DomainTaskKit:
                 self._publish(task_id, {"type": "succeeded", "result": result})
                 self.bus.close(self.channel(task_id))
         except asyncio.CancelledError:
-            # stop() 落 cancelled 并关频道；进程关闭场景交给 startup mark_stale 收敛
+            # stop 升级路径（桥超时强杀）由 _finish_cancelled 落 cancelled 并关
+            # 频道；进程关闭场景交给 startup mark_stale 收敛
             raise
         except Exception as exc:
             await repo.update_domain_task(
