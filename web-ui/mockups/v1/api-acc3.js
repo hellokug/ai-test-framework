@@ -59,6 +59,7 @@ let ACC_TASK_IDS = [];
 let ACC_SCRIPT_DOCS = {};      // id → 脚本详情（含 spec；清单瘦身不带，懒加载缓存）
 let ACC_SCENARIOS = [];        // 场景清单（/accuracy/scenarios：筛选/分组/保存落点）
 let ACC_MODEL_SOURCES = [];    // [{key, label, profile|target}]
+let ACC_RUBRICS = [];          // rubric 资产（/accuracy/rubrics：评测抽屉选用 + 校准抽屉数据源）
 let accDetailTimer = null;
 
 /* ------------------------------------------------------------ 任务列表 */
@@ -78,8 +79,11 @@ function rebuildAccRuns(items) {
     return [
       t.name || "(未命名)",
       `${t.id.slice(0, 8)} · ${ver}`,
-      t.spec?.target?.profile || t.spec?.target?.model || "-",
-      t.status,                       // 原始任务层状态（badge 直显；chips 已对齐口径）
+      t.spec?.target?.profile || t.spec?.target?.model
+        || (t.spec?.task_type === "judge_calibration"
+          ? (t.spec.judge?.profile || t.spec.judge?.model || "判官校准") : "-"),
+      (t.status === "succeeded" && t.result?.status === "error")
+        ? "failed" : t.status,        // 历史兼容：run 挂但任务 succeeded 的旧行按 failed 展示
       null,                           // 分数：异步兜底（/runs/{id} overall 行）
       t.result ? `${t.result.total_cases ?? "—"}${t.result.error_cases ? ` / ${t.result.error_cases} err` : ""}` : "—",
       aapiShortTime(t.started_at || t.created_at),
@@ -169,10 +173,15 @@ async function showAccTask(taskId) {
     return;
   }
   if (seq !== showAccTask.seq) return;
+  if (t.spec?.task_type === "judge_calibration") {
+    return accRenderCalDetail(t, taskId, seq);   // 校准任务无 run 行，渲染校准卡
+  }
   let result = null;
   try { result = await AAPI.get(`/accuracy/tasks/${taskId}/result`); }
   catch (e) { /* 409 非终态 */ }
-  const runId = t.result?.run_id || result?.result?.run_id || null;
+  // 取消/失败轮 result 为 null：run 引用兜底执行历史轮（同 api-perf 口径）
+  const runId = t.result?.run_id || result?.result?.run_id
+    || (t.history || []).filter(h => h.run_id).at(-1)?.run_id || null;
   let run = null;
   if (runId) {
     try { run = await AAPI.get(`/runs/${runId}`); }   // DB 唯一权威
@@ -188,6 +197,10 @@ async function showAccTask(taskId) {
   const failures = run?.details?.failures || [];
   const reports = run?.details?.reports || {};
   const running = t.status === "running" || t.status === "stopping" || t.status === "pending";
+  // 错误文案两源：任务层 t.error（执行器抛错）+ run 行 error（历史任务 run 挂了但任务 succeeded）
+  const runErr = (t.error || (run?.status === "error" ? run.error : "")) || "";
+  // 历史兼容展示口径（与列表行一致）：run error 的旧行按 failed 展示，新任务后端已直落 failed
+  const dispStatus = (t.status === "succeeded" && runErr) ? "failed" : t.status;
   const dur = (t.started_at && t.finished_at)
     ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";   // fmtDur 用 live2.js 共享实现
 
@@ -215,9 +228,9 @@ async function showAccTask(taskId) {
       <div class="stat"><div class="label"><i style="background:var(--warn)"></i>耗时</div>
         <div class="value" style="font-size:22px">${dur}</div></div>
     </section>
-    ${t.error ? `<section class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--bad) 40%,transparent)">
+    ${runErr ? `<section class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--bad) 40%,transparent)">
       <div class="card-head"><div><h3 style="color:var(--bad)">执行错误</h3></div></div>
-      <pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${t.error}</pre></section>` : ""}
+      <pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${escHtml(runErr)}</pre></section>` : ""}
     <section class="card" style="margin-bottom:14px">
       <div class="card-head"><div><h3>指标汇总</h3>
         <div class="sub">metric × 数据集/分组 · overall 行 = 全 dataset 按 N 加权 · 数据源 run 指标摘要（DB 权威）</div></div></div>
@@ -623,6 +636,12 @@ async function wireAccModels() {
     judgeSel.innerHTML = '<option value="">不配置（默认 · 仅规则判分）</option>' +
       ACC_MODEL_SOURCES.filter(s => s.profile).map(s => `<option value="${s.profile}">${s.label}</option>`).join("");
   }
+  const calJudgeSel = document.getElementById("accCalJudgeSel");
+  if (calJudgeSel) {
+    calJudgeSel.innerHTML = '<option value="">— 选择判官 —</option>'
+      + '<option value="__custom__">自定义端点…</option>'
+      + ACC_MODEL_SOURCES.filter(s => s.profile).map(s => `<option value="${s.profile}">${s.label}</option>`).join("");
+  }
   // 自定义端点的鉴权密钥：选已归档（掩码）/ 仅环境变量手填
   document.querySelectorAll("#accModelCustom [data-keysel], #accScriptModelCustom [data-keysel]")
     .forEach(sel => wireKeySelect(sel, secrets.items));
@@ -940,6 +959,210 @@ function bindAccDelegation() {
 }
 
 /* ------------------------------------------------------------------ boot */
+/* ------------------------------------------- rubric 资产 + 判官校准（§沉淀复用） */
+
+async function wireAccRubrics() {
+  try {
+    const d = await AAPI.get("/accuracy/rubrics");
+    ACC_RUBRICS = d.items || [];
+  } catch (e) { ACC_RUBRICS = []; }
+  const opt = r => `<option value="${r.id}">${escHtml(r.name)} · ${r.fingerprint}</option>`;
+  const cal = document.getElementById("accCalRubricSel");
+  if (cal) cal.innerHTML = '<option value="">— 选择评分标准 —</option>' + ACC_RUBRICS.map(opt).join("");
+  const sel = document.getElementById("accJudgeRubricSel");
+  if (sel) {
+    sel.innerHTML = '<option value="">手写（用上方文本域）</option>' + ACC_RUBRICS.map(opt).join("");
+    if (!sel.dataset.bound) {
+      sel.dataset.bound = "1";
+      sel.addEventListener("change", () => {
+        const r = ACC_RUBRICS.find(x => x.id === sel.value);
+        if (r) document.getElementById("accJudgeRubric").value = r.content;
+      });
+    }
+  }
+  const save = document.getElementById("accRubricSave");
+  if (save && !save.dataset.bound) {
+    save.dataset.bound = "1";
+    save.addEventListener("click", async () => {
+      const content = document.getElementById("accJudgeRubric").value.trim();
+      if (!content) { aapiToast("文本域为空：先写评分标准再沉淀", true); return; }
+      const name = prompt("评分标准名称（唯一，如「严格二分制-客服域」）：");
+      if (!name || !name.trim()) return;
+      try {
+        const item = await AAPI.post("/accuracy/rubrics", { name: name.trim(), content });
+        await wireAccRubrics();
+        const sel2 = document.getElementById("accJudgeRubricSel");
+        if (sel2) sel2.value = item.id;
+        aapiToast(`已沉淀「${item.name}」（指纹 ${item.fingerprint}），校准抽屉可直接选用`);
+      } catch (err) { aapiToast(`沉淀失败：${err.message}`, true); }
+    });
+  }
+}
+
+function accCalCollect() {
+  const $ = id => document.getElementById(id);
+  const ds = $("accCalDataset").value;
+  if (!ds) throw new Error("请选择校准数据集（accuracy 类型，行含 human_score 人工标注列）");
+  const judgeSel = $("accCalJudgeSel").value;
+  let judge;
+  if (judgeSel === "__custom__") {
+    const url = $("accCalJudgeUrl").value.trim();
+    const model = $("accCalJudgeModel").value.trim();
+    if (!url || !model) throw new Error("自定义判官需填 访问 url 与 模型名");
+    judge = { base_url: url, model };
+  } else {
+    if (!judgeSel) throw new Error("请选择判官（预制或自定义端点）");
+    judge = { profile: judgeSel };
+  }
+  const rub = ACC_RUBRICS.find(x => x.id === $("accCalRubricSel").value);
+  if (!rub) throw new Error("请选择评分标准（rubric 资产）——校准对象 = 判官 + 这版标准");
+  const spec = { module: "accuracy", engine: "judge_calibration",
+    task_type: "judge_calibration", dataset: ds, judge,
+    rubric_id: rub.id, rubric_text: rub.content };
+  const limit = $("accCalLimit").value.trim();
+  if (limit) {
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1) throw new Error("抽样条数须为正整数");
+    spec.limit = n;
+  }
+  const name = $("accCalName").value.trim() || `判官校准·${rub.name}·${ds}`;
+  return { spec, name };
+}
+
+async function wireAccCalibration() {
+  const dsSel = document.getElementById("accCalDataset");
+  if (dsSel && !dsSel.dataset.loaded) {
+    try {
+      const d = await AAPI.get("/datasets?type=accuracy");
+      dsSel.innerHTML = '<option value="">— 选择校准数据集 —</option>'
+        + (d.items || []).map(it =>
+          `<option value="${escHtml(it.name)}">${escHtml(it.name)}${it.notes ? ` · ${escHtml(String(it.notes)).slice(0, 40)}` : ""}</option>`).join("");
+      dsSel.dataset.loaded = "1";
+    } catch (e) { dsSel.innerHTML = '<option value="">数据集清单加载失败（后端未启动？）</option>'; }
+  }
+  const jSel = document.getElementById("accCalJudgeSel");
+  if (jSel && !jSel.dataset.bound) {
+    jSel.dataset.bound = "1";
+    jSel.addEventListener("change", () => {
+      document.getElementById("accCalJudgeCustom").hidden = jSel.value !== "__custom__";
+    });
+  }
+  const view = document.getElementById("accCalRubricSel");
+  if (view && !view.dataset.bound) {
+    view.dataset.bound = "1";
+    view.addEventListener("change", () => {
+      const r = ACC_RUBRICS.find(x => x.id === view.value);
+      document.getElementById("accCalRubricView").value = r ? r.content : "";
+    });
+  }
+  const btn = document.getElementById("accCalRunBtn");
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", async () => {
+      try {
+        const { spec, name } = accCalCollect();
+        const task = await AAPI.post("/accuracy/tasks", { name, spec });
+        await AAPI.post(`/accuracy/tasks/${task.id}/run`);
+        document.getElementById("accCalDrawer").hidden = true;
+        aapiToast(`校准任务已发起：${task.id.slice(0, 8)}（运行中，详情页看校准卡）`);
+        await wireAccTasks();
+        showPage("runs");
+      } catch (err) { aapiToast(`发起失败：${err.message}`, true); }
+    });
+  }
+}
+
+function accCalStat(label, value, sub, color) {
+  return `<div class="stat"><div class="label"><i style="background:${color || "var(--ac)"}"></i>${label}</div>
+    <div class="value" style="font-size:22px">${value}</div>${sub || ""}</div>`;
+}
+
+/* 校准任务详情（无 run 行）：κ 一致率统计 + 混淆矩阵 + 不一致行 + 配置快照 */
+async function accRenderCalDetail(t, taskId, seq) {
+  const detail = document.querySelector('main.page-host [data-page="detail"]');
+  let result = null;
+  try { result = await AAPI.get(`/accuracy/tasks/${taskId}/result`); }
+  catch (e) { /* 409 非终态 */ }
+  if (seq !== undefined && seq !== showAccTask.seq) return;
+  const rep = result?.result?.calibration_report || null;
+  const spec = t.spec || {};
+  const m = rep?.metrics || null;
+  const running = t.status === "pending" || t.status === "running" || t.status === "stopping";
+  const judge = escHtml(spec.judge?.profile || spec.judge?.model || "—");
+  const fp = rep ? rep.rubric_sha256_12 : "—";
+  const dur = (t.started_at && t.finished_at)
+    ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";
+  const grid = !m ? "" : (() => {
+    const vBad = Number(m.kappa) < 0.6;
+    return `<section class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+      ${accCalStat("Cohen's κ", String(m.kappa),
+        `<span class="delta ${vBad ? "down" : "up"}">${vBad ? "▼ " : "▲ "}${escHtml(m.kappa_verdict)}</span>`,
+        vBad ? "var(--bad)" : "var(--good)")}
+      ${accCalStat("一致率", (Number(m.agreement) * 100).toFixed(1) + "%",
+        `<span class="dim" style="font-size:11px">95%CI ${m.agreement_ci95[0]} ~ ${m.agreement_ci95[1]}</span>`)}
+      ${accCalStat("漏放率（人工0判1）", (Number(m.miss_rate_漏放) * 100).toFixed(1) + "%",
+        `<span class="dim" style="font-size:11px">漏放 → 精度报告虚高</span>`,
+        Number(m.miss_rate_漏放) > 0.05 ? "var(--bad)" : "var(--warn)")}
+      ${accCalStat("误杀率（人工1判0）", (Number(m.kill_rate_误杀) * 100).toFixed(1) + "%",
+        `<span class="dim" style="font-size:11px">误杀 → 精度报告偏低</span>`,
+        Number(m.kill_rate_误杀) > 0.1 ? "var(--bad)" : "var(--warn)")}
+    </section>`;
+  })();
+  const cm = rep ? rep.confusion_matrix["行=人工分,列=判官分"] : {};
+  const levels = Object.keys(cm);
+  const cmRows = levels.map(h => `<tr><td class="mono">${escHtml(h)}</td>` +
+    levels.map(j => `<td class="num mono">${cm[h][j] ?? 0}</td>`).join("") + "</tr>").join("");
+  const disRows = rep ? rep.disagree_rows : [];
+  detail.innerHTML = `
+    <header class="topbar">
+      <div><h1>${escHtml(t.name || "(未命名)")} ${badge(t.status)}</h1>
+      <div class="crumb">判官校准 · 数据集 ${escHtml(String(spec.dataset || "—"))} · 判官 ${judge}
+      · rubric 指纹 ${escHtml(String(fp))} · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"} · 耗时 ${dur}</div></div>
+      <div class="actions">
+        ${t.status === "running" ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
+        <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
+        <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
+    </header>
+    ${t.error ? `<section class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--bad) 40%,transparent)">
+      <div class="card-head"><div><h3 style="color:var(--bad)">执行错误</h3></div></div>
+      <pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${escHtml(t.error)}</pre></section>` : ""}
+    ${m ? grid : `<section class="card"><div class="ds-empty">${running
+      ? "校准中…（逐行调判官，本页每 5 秒自动刷新）" : "暂无校准结果"}</div></section>`}
+    ${m ? `<div style="display:flex;flex-direction:column;gap:14px">
+      ${rep.partial ? `<section class="card" style="padding:10px 16px;background:color-mix(in srgb,var(--warn) 10%,transparent)">
+        <span style="font-size:12.5px">⚠ 部分报告（被停止）：有效 ${m.n_valid}/${m.n} 行，仅作排查参考</span></section>` : ""}
+      <section class="card"><div class="card-head"><div><h3>混淆矩阵（校准明细）</h3>
+        <div class="sub">行 = 人工分 · 列 = 判官分；对角线 = 判对；样本 n=${m.n} · 有效 ${m.n_valid} · 解析失败 ${m.parse_failures} · 判官 ${escHtml(rep.judge || "—")}</div></div></div>
+        <table class="sumtable"><thead><tr><th>人工 ↓ / 判官 →</th>
+          ${levels.map(j => `<th class="num">${escHtml(j)}</th>`).join("")}</tr></thead>
+          <tbody>${cmRows || '<tr><td colspan="9" class="ds-empty">无有效行</td></tr>'}</tbody></table>
+        <span class="hint" style="margin-top:8px">κ ≥0.6 才建议出正式精度报告；漏放/误杀方向见上方统计——调 rubric 措辞或换判官后重新校准</span>
+      </section>
+      <section class="card"><div class="card-head"><div><h3>不一致行 <span class="dim">(全部 ${disRows.length} 条)</span></h3>
+        <div class="sub">判官与人工标注不一致的样本，是 rubric 措辞改进的直接输入</div></div></div>
+        <table class="sumtable"><thead><tr><th>#</th><th>题目</th><th>人工分</th><th>判官分</th><th>方向</th></tr></thead>
+        <tbody>${disRows.map(d => `<tr><td class="mono">${d.i}</td><td>${escHtml(d.question)}</td>
+          <td class="num mono">${d.human}</td><td class="num mono">${d.judge}</td>
+          <td>${d.human === 0 ? '<span class="badge failed"><i></i>漏放</span>' : '<span class="badge"><i></i>误杀</span>'}</td></tr>`).join("")
+          || '<tr><td colspan="5" class="ds-empty">全部一致 ✓</td></tr>'}</tbody></table>
+      </section>
+      <section class="card"><div class="card-head"><div><h3>任务配置快照</h3>
+        <div class="sub">校准结论只对这份配置（判官 + rubric 指纹）有效</div></div></div>
+        <div class="detail-stack">
+          <div class="kv"><span>校准集</span><div class="mono" style="font-size:12px">${escHtml(String(rep.dataset || spec.dataset || "—"))}</div></div>
+          <div class="kv"><span>判官</span><div class="mono" style="font-size:12px">${escHtml(rep.judge || "—")}</div></div>
+          <div class="kv"><span>rubric</span><div class="mono" style="font-size:12px">id ${escHtml(String(spec.rubric_id || "内联"))} · 指纹 ${escHtml(String(fp))}${spec.limit ? ` · 抽样 ${escHtml(String(spec.limit))} 行` : " · 全量"}</div></div>
+        </div>
+      </section>
+    </div>` : ""}
+  `;
+  if (running && t.status === "running") {
+    accDetailTimer = setTimeout(() => {
+      if (seq === showAccTask.seq) showAccTask(taskId);
+    }, 5000);
+  }
+}
+
 async function aapiBoot() {
   let live = false;
   try {
@@ -958,7 +1181,8 @@ async function aapiBoot() {
   const steps = [
     ["任务列表", wireAccTasks], ["脚本库/评估场景", wireAccScripts],
     ["数据集目录", wireAccBenchmarks], ["模型下拉", wireAccModels],
-    ["版本创建", wireAccVersions],
+    ["版本创建", wireAccVersions], ["rubric 资产", wireAccRubrics],
+    ["判官校准抽屉", wireAccCalibration],
   ];
   for (const [label, fn] of steps) {
     try {

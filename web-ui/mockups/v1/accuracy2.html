@@ -27,6 +27,7 @@
       <div><h1>任务列表</h1><div class="crumb">最近 7 天新增 12 次运行</div></div>
       <div class="actions">
         <button class="btn" data-open-drawer="newRunModal">＋ 创建评测任务</button>
+        <button class="btn" data-open-drawer="accCalDrawer" title="判官对带人工标注的校准集逐行打分，与人工分对比出可信度（Cohen's κ）">⚖ 判官校准</button>
       </div>
     </header>
     <section class="stats">
@@ -358,6 +359,12 @@
         <span class="p-label">评分标准（rubric）<span class="qmark">?<span class="tip">自定义判官评分提示词，透传为 evalscope 判官契约 prompt_template；占位符 {question}/{pred}/{gold}（问题/模型作答/标准答案）。仅对走通用 LLM 判官契约的基准生效，内置专用判分的基准沿用官方 prompt；留空 = 官方默认</span></span></span>
         <textarea class="in" id="accJudgeRubric" rows="3" style="max-width:440px" placeholder="示例：按准确性/要点覆盖/表达清晰三个维度 1-10 打分，最后输出分数与理由（{question} {pred} {gold}）"></textarea></div>
       <div class="p-row">
+        <span class="p-label">沉淀 / 选用标准<span class="qmark">?<span class="tip">rubric 资产库（/accuracy/rubrics）：选用 = 资产内容灌入上方文本域（任务仍整文落快照，历史可复现）；沉淀 = 把文本域当前内容存为命名资产跨任务复用——改一字指纹即变，旧任务校准结论据此判定失效</span></span></span>
+        <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+          <select class="in" id="accJudgeRubricSel" style="flex:1"><option value="">手写（用上方文本域）</option></select>
+          <button class="btn sm" type="button" id="accRubricSave">沉淀为资产</button>
+        </div></div>
+      <div class="p-row">
         <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
         <div style="display:flex;gap:8px;align-items:center;max-width:440px">
           <div class="ver-combo"><input class="in" id="accVerIn" placeholder="如 v1.3.0（可输入或下拉选）"></div>
@@ -491,6 +498,38 @@
     <div class="drawer-foot"><span class="hint" id="accSaveHint" hidden style="margin-right:auto">✓ 已保存为脚本「版本精度基线 · 全量」（运行参数不沉淀），到「脚本库」查看</span>
       <button class="btn" id="accSaveScript">保存为脚本</button><button class="btn" data-close>取消</button><button class="btn primary">创建任务</button></div>
   </div>
+
+<div class="drawer drawer-lg" id="accCalDrawer" hidden>
+  <div class="drawer-head"><div><h3>判官校准</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">判官对带人工标注的校准集逐行打分，与人工分对比出可信度（Cohen's κ）——判官换模型/改参数/改标准后需重新校准；只调判官、不跑被测模型</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-body">
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">1</span><b>任务与校准集</b><small>精度类型数据集 · 行须含 human_score 人工标注列</small></div>
+      <div class="p-row"><span class="p-label">任务名称</span>
+        <input class="in" id="accCalName" placeholder="如 判官校准·严格二分·20261115（留空自动生成）" style="max-width:380px"></div>
+      <div class="p-row"><span class="p-label">校准数据集<span class="qmark">?<span class="tip">数据集页上传的 accuracy 类型数据集；行含 question / model_output（被评输出，预置不重跑）/ reference_answer / human_score（人工判分，与判官同语义）。别名兼容 input/pred/gold/label；建议 30~300 行、对错各半并留几行边界题</span></span></span>
+        <select class="in" id="accCalDataset" style="max-width:380px"><option value="">— 选择校准数据集 —</option></select></div>
+      <div class="p-row"><span class="p-label">抽样条数<span class="qmark">?<span class="tip">只跑前 N 行（冒烟/试跑）；留空 = 全量</span></span></span>
+        <input class="in" id="accCalLimit" style="max-width:200px" placeholder="留空 = 全量"></div>
+    </div>
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>判官与评分标准</b><small>校准的对象 = 这套判官 + 这版标准（指纹入报告）</small></div>
+      <div class="p-row"><span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">与评测任务同源预制（data/common.yaml）；自定义端点密钥走 api_key_env 环境变量，平台禁明文</span></span></span>
+        <select class="in" id="accCalJudgeSel" style="max-width:300px"><option value="">— 选择判官 —</option></select></div>
+      <div id="accCalJudgeCustom" hidden>
+        <div class="p-row"><span class="p-label">判官访问 url</span>
+          <input class="in" id="accCalJudgeUrl" placeholder="如 http://localhost:11434/v1" style="max-width:380px"></div>
+        <div class="p-row" style="margin-bottom:0"><span class="p-label">判官模型名</span>
+          <input class="in" id="accCalJudgeModel" placeholder="如 qwen2.5:3b" style="max-width:300px"></div>
+      </div>
+      <div class="p-row"><span class="p-label">评分标准（rubric 资产）<span class="qmark">?<span class="tip">从「rubric 资产库」选择；内容整文落任务快照，指纹入校准报告——改标准即需重新校准。资产在评测抽屉「沉淀 / 选用标准」处维护</span></span></span>
+        <select class="in" id="accCalRubricSel" style="max-width:380px"><option value="">— 选择评分标准 —</option></select></div>
+      <div class="p-row" style="margin-bottom:0"><span class="p-label">标准预览</span>
+        <textarea class="in" id="accCalRubricView" rows="4" style="max-width:440px" readonly placeholder="选中评分标准后这里显示全文"></textarea></div>
+    </div>
+  </div>
+  <div class="drawer-foot"><span class="hint" style="margin-right:auto">结论 = 判官分 vs 人工分的一致性：Cohen's κ ≥0.6 才建议出正式精度报告</span>
+    <button class="btn" data-close>取消</button><button class="btn primary" id="accCalRunBtn">创建并执行</button></div>
+</div>
 
 <div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
@@ -1044,6 +1083,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=13"></script>
+<script src="api-acc3.js?v=15"></script>
 </body>
 </html>
