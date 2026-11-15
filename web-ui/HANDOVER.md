@@ -1290,3 +1290,17 @@
   后端配套（catalog capabilities 列 + 三摄取端点透传 + 基准 tags 映射）见同日
   backend 提交。门禁 mockup_symbols --check / render_check 全过；纯静态稿改动，
   刷新页面即生效，后端要吃到 capabilities 字段需重启 aite serve。
+
+- 2026-11-15｜精度创建抽屉被测版本下拉主题化：原生 `<input list>` + datalist 的
+  下拉面板由浏览器渲染（白底系统样式），与深色主题不搭。换自定义建议面板
+  （accuracy2.html 两处 input 包 `.ver-combo` 容器；api-acc3.js `wireVerCombo`
+  复用数据集筛选同款 `.ds-menu` 视觉，组件 CSS 由 `ensureVerComboCss` 注入
+  style#verComboCss，自包含不碰共享 assets、无 `?v=` 连锁 bump）：聚焦/点击/
+  输入时按 ACC_VERSIONS 过滤建议（版本+描述），↑↓/Enter/Esc 键盘导航，mousedown
+  选中（先于 blur + preventDefault 保焦点）；注册表为空出引导文案，自由输入保留
+  （历史任务可引用已下线版本号）；「＋ 新版本」创建成功回填发起处输入（同功能域
+  「创建即选中」语义），accRegisterVersion 收按钮引用定位同行输入。wireAccVersions
+  只拉数据不再渲染选项（面板开放时现读）。验证：临时沙箱 7 组断言（已删）+
+  IAB live 实测（截图/点选/过滤全过）。已知环境怪癖：IAB webview 无系统焦点时
+  原生 focus() 不派发事件，故加 click 监听重展开（对齐原生 datalist 的点击重开
+  行为）。api-acc3 v=11；mockup_symbols --check 过；纯静态稿改动，刷新页面即生效。

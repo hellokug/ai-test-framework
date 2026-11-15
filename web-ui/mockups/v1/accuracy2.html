@@ -296,8 +296,7 @@
         <div class="p-row">
           <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一脚本逐版本执行 = 「版本质量对比」的数据来源（同配置跨版本才可比，劣化检测依赖此口径）</span></span></span>
           <div style="display:flex;gap:8px;align-items:center;max-width:440px">
-            <input class="in" id="accVerIn2" list="accVerDl" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
-            <datalist id="accVerDl"></datalist>
+            <div class="ver-combo"><input class="in" id="accVerIn2" placeholder="如 v1.3.0（可输入或下拉选）"></div>
             <button class="btn sm" type="button" id="accVerNewBtn2" title="创建到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
           </div></div>
         <div class="p-row">
@@ -361,8 +360,7 @@
       <div class="p-row">
         <span class="p-label">被测版本<span class="qmark">?<span class="tip">版本列表来自「公共 · 版本管理」；同一模型不同版本各跑一次，即可在「版本质量对比」中横向比较并检测劣化</span></span></span>
         <div style="display:flex;gap:8px;align-items:center;max-width:440px">
-          <input class="in" id="accVerIn" list="accVerDl2" style="flex:1" placeholder="如 v1.3.0（可自由输入）">
-          <datalist id="accVerDl2"></datalist>
+          <div class="ver-combo"><input class="in" id="accVerIn" placeholder="如 v1.3.0（可输入或下拉选）"></div>
           <button class="btn sm" type="button" id="accVerNewBtn" title="创建到全局版本管理（公共 · 版本管理）">＋ 新版本</button>
         </div></div>
     </div>
@@ -1045,6 +1043,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=10"></script>
+<script src="api-acc3.js?v=11"></script>
 </body>
 </html>

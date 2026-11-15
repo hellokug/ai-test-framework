@@ -641,27 +641,95 @@ let ACC_VERSIONS = [];   // [{version, description}]（公共 · 版本管理创
 
 async function wireAccVersions() {
   const data = await AAPI.get("/versions");
-  ACC_VERSIONS = data.items;
-  renderAccVerDatalist();
+  ACC_VERSIONS = data.items;   // 建议面板每次开放时现读 ACC_VERSIONS，刷新后无需重渲染
 }
 
-function renderAccVerDatalist() {
-  const opts = ACC_VERSIONS.map(v =>
-    `<option value="${v.version}">${v.description || ""}</option>`).join("");
-  for (const id of ["accVerDl", "accVerDl2"]) {
-    const dl = document.getElementById(id);
-    if (dl) dl.innerHTML = opts;
-  }
+/* 被测版本建议下拉：原生 datalist 的下拉面板由浏览器渲染（白底系统样式），与深色
+   主题不搭，改为复用数据集筛选同款 ds-menu 视觉的自定义面板。输入仍自由填写
+   （历史任务允许引用已下线版本号），聚焦/输入时按登记版本过滤，支持 ↑↓/Enter/Esc */
+function ensureVerComboCss() {
+  if (document.getElementById("verComboCss")) return;
+  const st = document.createElement("style");
+  st.id = "verComboCss";
+  st.textContent = [
+    ".ver-combo{position:relative;flex:1;display:flex;min-width:0}",
+    ".ver-combo .in{width:100%}",
+    ".ver-combo .ds-menu{max-height:220px;overflow:auto}",
+    ".ver-combo .ds-mitem.on{background:var(--hov);color:var(--tx)}",
+  ].join("\n");
+  document.head.appendChild(st);
+}
+
+function wireVerCombo(input) {
+  if (input.dataset.verBound) return;
+  input.dataset.verBound = "1";
+  ensureVerComboCss();
+  const menu = document.createElement("div");
+  menu.className = "ds-menu";
+  menu.hidden = true;
+  input.parentElement.appendChild(menu);        // 静态稿里 input 包在 .ver-combo 容器内
+  let active = -1;                              // 键盘高亮项下标（-1 = 未选）
+
+  const matched = () => {
+    const q = input.value.trim().toLowerCase();
+    return ACC_VERSIONS.filter(v => !q
+      || v.version.toLowerCase().includes(q)
+      || (v.description || "").toLowerCase().includes(q));
+  };
+  const render = () => {
+    const list = matched();
+    const rows = list.length ? list.map((v, i) =>
+      `<div class="ds-mitem${i === active ? " on" : ""}" data-v="${v.version}">` +
+      `<span>${v.version}</span><small>${v.description || ""}</small></div>`).join("")
+      : `<div class="ds-mitem" style="pointer-events:none;color:var(--tx3)">${
+          ACC_VERSIONS.length ? "无匹配 —— 当前输入可直接使用"
+                              : "暂无登记版本 —— 点「＋ 新版本」就地创建，或直接输入"}</div>`;
+    menu.innerHTML = `<div class="ds-mhead"><span>被测版本</span>` +
+      `<span>公共 · 版本管理 · ${ACC_VERSIONS.length} 个</span></div>` + rows;
+  };
+  const open = () => { active = -1; render(); menu.hidden = false; };
+  const close = () => { menu.hidden = true; };
+
+  input.addEventListener("focus", open);
+  input.addEventListener("click", open);   // 点击已聚焦输入框也重新展开（对齐原生 datalist）
+  input.addEventListener("input", open);
+  input.addEventListener("blur", () => setTimeout(close, 120));
+  menu.addEventListener("mousedown", e => {     // mousedown 先于 blur，preventDefault 保焦点
+    const item = e.target.closest(".ds-mitem[data-v]");
+    if (!item) return;
+    e.preventDefault();
+    input.value = item.dataset.v;
+    close();
+  });
+  input.addEventListener("keydown", e => {
+    if (menu.hidden) return;
+    if (e.key === "Escape") { close(); return; }
+    const list = matched();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      active = e.key === "ArrowDown" ? Math.min(active + 1, list.length - 1)
+                                     : Math.max(active - 1, 0);
+      render();
+    } else if (e.key === "Enter" && active >= 0 && list[active]) {
+      e.preventDefault();
+      input.value = list[active].version;
+      close();
+    }
+  });
 }
 
 /* 版本创建与模型无关：只登记版本号，发起任务时与目标模型自由组合 */
-async function accRegisterVersion() {
+async function accRegisterVersion(btn) {
   const version = prompt("输入版本号（如 v1.3.0）：");
   if (!version || !version.trim()) return;
+  const v = version.trim();
   try {
-    await AAPI.post("/versions", { version: version.trim() });
-    aapiToast(`版本已创建：${version.trim()}（「公共 · 版本管理」页可管理）`);
+    await AAPI.post("/versions", { version: v });
+    aapiToast(`版本已创建：${v}（「公共 · 版本管理」页可管理）`);
     await wireAccVersions();
+    // 创建成功回填发起处输入（同功能任务下拉「创建即选中」语义）
+    const input = btn?.closest(".p-row")?.querySelector(".ver-combo input");
+    if (input) input.value = v;
   } catch (err) { aapiToast(`创建失败：${err.message}`, true); }
 }
 
@@ -910,9 +978,14 @@ async function aapiBoot() {
   }
   // 「＋ 新版本」按钮：就地创建到全局版本管理（公共 · 版本管理页可统一管理）
   document.getElementById("accVerNewBtn")
-    ?.addEventListener("click", () => accRegisterVersion());
+    ?.addEventListener("click", e => accRegisterVersion(e.currentTarget));
   document.getElementById("accVerNewBtn2")
-    ?.addEventListener("click", () => accRegisterVersion());
+    ?.addEventListener("click", e => accRegisterVersion(e.currentTarget));
+  // 版本建议下拉与 /versions 拉取解耦绑定：接口失败时面板显示引导文案，恢复后自动有选项
+  for (const id of ["accVerIn", "accVerIn2"]) {
+    const input = document.getElementById(id);
+    if (input) wireVerCombo(input);
+  }
   bindAccSubmits();
   startAccPolling();
   // 刷新后停在详情页：仅当 hash 以 #detail 开头才恢复任务视图
