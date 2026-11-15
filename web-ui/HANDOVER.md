@@ -1304,3 +1304,28 @@
   IAB live 实测（截图/点选/过滤全过）。已知环境怪癖：IAB webview 无系统焦点时
   原生 focus() 不派发事件，故加 click 监听重展开（对齐原生 datalist 的点击重开
   行为）。api-acc3 v=11；mockup_symbols --check 过；纯静态稿改动，刷新页面即生效。
+
+> **2026-11-15 会话——前端架构整改三批（转义收敛 / helper 均化 / 守护扩展）+ 性能详情防闪烁**：
+>
+> **转义收敛（安全债）**：新增 `assets/live2.js`（escHtml，转全 5 字符含属性位引号），accuracy2/
+> common2/functional2 在 v1.js 之后、内联脚本之前加载；api32/api-acc3/内联渲染 20+ 处用户可控
+> 文本（任务/场景/脚本/工具/模型/密钥名、错误信息、base_url）裸插补转义含 data-* 属性位；
+> teEsc/dsEsc/nsEsc/showLiveTask 局部 esc 收敛为委托（api-acc3 此前全文无转义）。render_check
+> 内容断言加实体解码（引号转实体后可见文本不变）。
+> **helper 均化**：live2.js 增 liveToast/shortTime/fmtDur 共享实现（toast 参数漂移 4200ms/420px
+> vs 4600ms/440px 统一为后者），fapiToast/fapiShortTime/aapiToast/aapiShortTime 改薄委托，
+> showAccTask 内嵌 fmtDur 改共享，aapiNum 删未用 digits 死参数。
+> **守护扩展**：mockup_symbols --check 新增 ①任意缩进 `window.X =` 运行期改写计入查询口径
+> （kind=window.set，不参与覆盖硬检查——内联 mock ← live 接管是仓库惯例）②同体函数检查
+> （()[]{} 深度感知配平 + 深度 0 分号止步防吞并相邻声明、≥60 字符放行薄委托、const 数据对象
+> 按头部无 => 排除）；收敛检查器揪出的真拷贝 dsOnlineMockBadge/dsOnlineBadgeCell 进 live2.js。
+> 回归 tests/unit/test_mockup_symbols.py 6 例。
+> **性能详情防闪烁**（api-perf v5，perf 两文件属「停止能力」会话认领域、随其落库）：运行态 5s
+> 自轮询改 poll 模式（不清骨架 + 数据签名无变化整轮跳过 + 失败静默重试）、终态跳变 poll 化、
+> 图表 animation:false、PERF_TS 清空再赋值。
+> 版本：live2 v2 / api32 v27（common2+functional2）/ api-acc3 v12 / api-perf v5。验证：
+> mockup_symbols --check 过、render_check 过、node --check 过、6 单测过；IAB 三页冒烟
+> （accuracy2/common2/functional2 live 模式启动：escHtml 链路、徽章别名、runs 12 行真实数据
+> 转义渲染全过；accuracy2 空态占位正常）。已知未竟：v1.js wireKeySelect（secrets 名裸插）与
+> perf 域 papi 系列收敛待「停止能力」会话释放后做；api-acc3 accSampleBlock（逐样本块）转义
+> 未盘点；RUNS/ACC_* 等跨文件状态收权未动（建议单独立项）。纯静态稿改动，刷新页面即生效。
