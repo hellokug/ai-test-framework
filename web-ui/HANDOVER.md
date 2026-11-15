@@ -1409,3 +1409,26 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
 > 56a2d2fc）端到端验证：列表行失败 badge、详情失败 badge、报错卡完整 traceback（含
 > `No module named 'resource'` 根因）三项断言全过。注意：api-acc3 v15 同时含判官校准会话
 > （88ce02a）改动，两批改动同文件不同函数；本批 dispStatus badge 修复为独立收尾提交。
+
+## 2026-11-15（判官校准端到端 + rubric 资产沉淀）
+
+- 精度页头部「⚖ 判官校准」入口 + 校准抽屉（accCalDrawer：校准集下拉=accuracy 目录、判官=预制
+  下拉+自定义端点面板、rubric 资产下拉+全文预览、抽样条数，「创建并执行」）；评测抽屉 rubric 行
+  加「沉淀 / 选用标准」下拉与「沉淀为资产」按钮（选用=资产内容灌入文本域，任务仍整文落快照）。
+- 后端（6c61273）：rubric 资产仓 data/rubrics.json（/accuracy/rubrics CRUD+内容指纹 sha256[:12]，
+  文件仓对齐 dataset_settings.json 模式不动 storage 层）；精度域 task_type=judge_calibration 执行器
+  （accuracy_tasks 按 spec 分发，逐行判官 vs 人工标注：κ/一致率+Wilson CI/混淆矩阵/漏放误杀率/
+  多档 Spearman·MAE；行间 graceful 停止出部分报告；判官解析复用 profiles.apply_common+api_endpoint
+  与 evalscope 同源；rubric 指纹执行侧现算，改一字旧报告即失效）；scripts/judge_calibration.py
+  收敛为薄 CLI（单一实现来源）。前端（88ce02a）：showAccTask 按 task_type 分流 accRenderCalDetail
+  校准卡（四统计卡+κ判语、混淆矩阵、不一致行漏放/误杀方向标签、配置快照，running 5s 自刷新）；
+  列表校准行模型列回退判官名。api-acc3 v=15（同时含 run-error 批同文件改动，不同函数）。
+- E2E（IAB 沙箱 8310/8776 + ollama qwen2.5:3b 真跑）：UI 抽屉发起 8 行校准 → succeeded → 详情
+  校准卡 κ=1/一致率 100%/不一致 0（demo 前 8 行全人工 1 分，矩阵行 1:8 逻辑正确）/指纹
+  72fb08c5990d 与 CLI 版一致，DOM 断言+截图全过。坑两个：①集成桩判官必须 serve_forever 起线程
+  （只绑端口不起线程=判官调用挂 120s 超时假死）；②数据集 capabilities 枚举（23:12 落地的 7 学科
+  维度）不含 judge-calibration 用途标记——校准集暂按普通 accuracy 集上传，抽屉列全量 accuracy 集
+  不依赖标记，用途标记待与数据集域协调词表后再补。
+- 测试 30 例全过（rubric CRUD/执行器 MockTransport/集成 HTTP 端到端含桩判官线程）；门禁
+  ruff / lint-imports / audit_func_len / mockup_symbols --check 全过。沙箱收尾注意：down 只杀
+  登记里的 PID，启动即退的残留会让真后端漏杀，手动 taskkill 后再 down。
