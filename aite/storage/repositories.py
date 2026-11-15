@@ -412,6 +412,26 @@ class SqlAlchemyRepository(Repository):
                 "notes": r.notes,
             } for r in rows]
 
+    async def update_model_config(self, model_id: str, data: dict[str, Any]) -> str:
+        """编辑注册模型：PUT 语义全量覆盖可编辑字段（None=清空，区别于 save 的 None 跳过）；改名查重。"""
+        async with self.db.sessions() as session:
+            row = await session.get(ModelConfigRow, model_id)
+            if row is None:
+                raise KeyError(model_id)
+            new_name = data.get("name") or row.name
+            if new_name != row.name:
+                dup = (await session.execute(
+                    select(ModelConfigRow).where(ModelConfigRow.name == new_name)
+                )).scalar_one_or_none()
+                if dup is not None:
+                    raise FileExistsError(f"模型名 {new_name} 已注册")
+                row.name = new_name
+            for field in ("type", "base_url", "model", "api_key_env", "notes"):
+                setattr(row, field, data.get(field))
+            row.params = _json_safe(data.get("params") or {})
+            await session.commit()
+            return str(row.id)
+
     async def delete_model_config(self, model_id: str) -> bool:
         async with self.db.sessions() as session:
             row = await session.get(ModelConfigRow, model_id)

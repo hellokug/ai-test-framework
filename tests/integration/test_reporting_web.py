@@ -113,6 +113,7 @@ metrics: [{exact_match: {threshold: 0.5}}]
         from aite import config
         monkeypatch.setattr(config, "SECRET_STORE_FILE", tmp_path / "secrets.json")
         monkeypatch.setattr(config, "SECRET_KEY_FILE", tmp_path / "secret.key")
+        monkeypatch.setattr(config, "DEFAULT_COMMON_FILE", tmp_path / "common.yaml")   # 预制同步隔离
         mid = client.post("/api/v1/models", json={
             "name": "gpt4o-mini", "model": "gpt-4o-mini"}).json()["id"]
         assert any(m["id"] == mid for m in client.get("/api/v1/models").json()["items"])
@@ -126,6 +127,25 @@ metrics: [{exact_match: {threshold: 0.5}}]
             "name": "archived-key-model", "model": "m",
             "api_key_env": "TEST_UNARCHIVED_KEY"}).json()
         assert mid3["key_archived"] is True
+        # 编辑：改名 + 换 base_url/model + 清空密钥（PUT 全量覆盖语义，None=清空）
+        put = client.put(f"/api/v1/models/{mid}", json={
+            "name": "gpt4o-renamed", "type": "openai_compatible",
+            "base_url": "http://x/v1", "model": "gpt-4o", "api_key_env": None, "params": {}})
+        assert put.json() == {"id": mid, "common_profile": "gpt4o-renamed",
+                              "key_archived": True}
+        row = next(m for m in client.get("/api/v1/models").json()["items"]
+                   if m["id"] == mid)
+        assert row["name"] == "gpt4o-renamed" and row["base_url"] == "http://x/v1"
+        assert row["model"] == "gpt-4o" and row["api_key_env"] is None
+        # 改名同步 common.yaml 预制：旧名预制移除、新名 upsert
+        common_names = {m["name"] for m in
+                        client.get("/api/v1/common/models").json()["items"]}
+        assert "gpt4o-renamed" in common_names and "gpt4o-mini" not in common_names
+        # 改名撞已有注册名 409；不存在的 id 404
+        assert client.put(f"/api/v1/models/{mid2['id']}", json={
+            "name": "gpt4o-renamed", "model": "m"}).status_code == 409
+        assert client.put("/api/v1/models/nonexistent", json={
+            "name": "x", "model": "m"}).status_code == 404
         assert client.delete(f"/api/v1/models/{mid}").json()["deleted"] is True
         for extra in (mid2["id"], mid3["id"]):
             client.delete(f"/api/v1/models/{extra}")

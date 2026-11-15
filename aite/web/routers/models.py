@@ -43,6 +43,27 @@ async def save_model(body: ModelIn, state: Any = Depends(get_state)):
     return {"id": model_id, "common_profile": body.name, "key_archived": key_archived}
 
 
+@router.put("/models/{model_id}")
+async def update_model(model_id: str, body: ModelIn, state: Any = Depends(get_state)):
+    old_name = next((m["name"] for m in await state.repo.list_model_configs()
+                     if m["id"] == model_id), None)
+    if old_name is None:
+        raise HTTPException(404, "model not found")
+    try:
+        await state.repo.update_model_config(model_id, body.model_dump())
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    # 改名同步 common.yaml 预制：旧名预制移除、新名 upsert（未改名仅覆盖条目）
+    if old_name != body.name:
+        remove_model_profile(old_name)
+    upsert_model_profile(body.name, {
+        "model": body.model, "base_url": body.base_url,
+        "api_key_env": body.api_key_env, "params": body.params or None,
+    })
+    key_archived = not body.api_key_env or resolve_secret(body.api_key_env) is not None
+    return {"id": model_id, "common_profile": body.name, "key_archived": key_archived}
+
+
 @router.delete("/models/{model_id}")
 async def delete_model(model_id: str, state: Any = Depends(get_state)):
     name = next((m["name"] for m in await state.repo.list_model_configs()

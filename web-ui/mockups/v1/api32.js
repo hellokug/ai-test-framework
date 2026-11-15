@@ -1743,7 +1743,8 @@ async function wireCommonModelsPage() {
       <td><span class="tag">注册</span></td>
       <td class="mono dim" style="font-size:12px">${escHtml(m.base_url || "—")}</td>
       <td class="mono">${escHtml(m.model || "—")}</td><td>${keyCell(m.api_key_env)}</td>
-      <td style="text-align:right"><button class="btn sm danger" data-del-model="${m.id}">删除</button></td></tr>`);
+      <td style="text-align:right"><button class="btn sm" data-edit-model="${m.id}">编辑</button>
+      <button class="btn sm danger" data-del-model="${m.id}">删除</button></td></tr>`);
   const tbl = document.getElementById("modelsTbl");
   tbl.innerHTML = `
     <thead><tr><th>名称</th><th>来源</th><th>base_url</th><th>model</th>
@@ -1753,6 +1754,8 @@ async function wireCommonModelsPage() {
   if (!tbl.dataset.liveBound) {
     tbl.dataset.liveBound = "1";
     tbl.addEventListener("click", async e => {
+      const edit = e.target.closest("[data-edit-model]");
+      if (edit) { openModelDrawer(MODEL_ROWS.find(m => m.id === edit.dataset.editModel)); return; }
       const del = e.target.closest("[data-del-model]");
       if (!del || !confirm("删除该模型注册?")) return;
       try { await FAPI.del(`/models/${del.dataset.delModel}`); }
@@ -1814,6 +1817,13 @@ async function wireCommonModelsPage() {
     keySel.dispatchEvent(new Event("change"));   // 选项重建后重同步归档面板/回退框显隐
   }
 
+  // ＋ 注册模型按钮：进入新建态（清编辑标记与回填残留，避免上一次编辑的值被误存进新模型）
+  const createBtn = document.querySelector('.actions [data-open-drawer="modelDrawer"]');
+  if (createBtn && !createBtn.dataset.liveBound) {
+    createBtn.dataset.liveBound = "1";
+    createBtn.addEventListener("click", () => openModelDrawer(null));
+  }
+
   const drawer = document.getElementById("modelDrawer");
   if (drawer && !drawer.dataset.liveBound) {
     drawer.dataset.liveBound = "1";
@@ -1822,9 +1832,11 @@ async function wireCommonModelsPage() {
       const fields = [...drawer.querySelectorAll(".drawer-body > .field > input.in")];
       const type = drawer.querySelector(".drawer-body select.in").value;   // 首个 select = 类型
       const name = fields[0].value.trim();
+      const editId = drawer.dataset.editId || "";
+      if (!name) { fapiToast("名称（gateway 别名）必填", true); return; }
       let keyEnv = "";
       const keySel = document.getElementById("mKeySel");
-      if (keySel.value === "__archive__") {   // 现场归档：先密文落盘再注册
+      if (keySel.value === "__archive__") {   // 现场归档：先密文落盘再保存
         const an = document.getElementById("mKeyArcName").value.trim();
         const av = document.getElementById("mKeyArcVal").value;
         if (!an || !av) { fapiToast("现场归档需填写密钥名与密钥值", true); return; }
@@ -1835,17 +1847,47 @@ async function wireCommonModelsPage() {
         keyEnv = keyEnvValue(keySel);
       }
       try {
-        const out = await FAPI.post("/models", { name, type,
-          base_url: fields[1].value.trim(), model: fields[2].value.trim(),
-          api_key_env: keyEnv || undefined, params: {} });
+        let out;
+        if (editId) {   // 编辑：PUT 全量覆盖（空串/未选密钥=null 清空字段，支持改名与改密钥）
+          out = await FAPI.req("PUT", `/models/${editId}`, { name, type,
+            base_url: fields[1].value.trim() || null, model: fields[2].value.trim() || null,
+            api_key_env: keyEnv || null, params: {} });
+        } else {        // 新建：POST（同名即覆盖更新，沿用既有语义）
+          out = await FAPI.post("/models", { name, type,
+            base_url: fields[1].value.trim(), model: fields[2].value.trim(),
+            api_key_env: keyEnv || undefined, params: {} });
+        }
         drawer.hidden = true;
-        fapiToast(`模型 ${name} 已注册`
+        fapiToast(`模型 ${name} 已${editId ? "更新" : "注册"}`
           + (keyEnv && out.key_archived === false
             ? `（⚠ 密钥 ${keyEnv} 未归档且环境变量未设置，运行时将无鉴权——先到密钥库录入）` : ""));
         await wireCommonModelsPage();
-      } catch (err) { fapiToast(`注册失败：${err.message}`, true); }
+      } catch (err) { fapiToast(`${editId ? "更新" : "注册"}失败：${err.message}`, true); }
     });
   }
+}
+
+/* 模型抽屉开态：传 m = 编辑（回填 + editId 标记），null = 新建（清残留）。
+   密钥下拉回填优先选密钥库同名项，否则走「仅环境变量」手填框（keyEnvValue 从那里取值）；
+   程序置值后手动派发 change 重同步归档面板/回退框显隐（监听只在 wire 时绑定一次）。 */
+function openModelDrawer(m) {
+  const drawer = document.getElementById("modelDrawer");
+  const fields = [...drawer.querySelectorAll(".drawer-body > .field > input.in")];
+  drawer.querySelector(".drawer-body select.in").value = m?.type || "openai_compatible";
+  fields[0].value = m?.name || "";
+  fields[1].value = m?.base_url || "";
+  fields[2].value = m?.model || "";
+  const keySel = document.getElementById("mKeySel");
+  const envInput = keySel.parentElement.querySelector("input[data-keyenv]");
+  const envName = m?.api_key_env || "";
+  const hasOpt = v => [...keySel.options].some(o => o.value === v);
+  keySel.value = (envName && hasOpt(envName)) ? envName
+    : (hasOpt("__env__") ? "__env__" : keySel.value);
+  if (envInput) envInput.value = (envName && keySel.value === "__env__") ? envName : "";
+  drawer.querySelector(".drawer-head h3").textContent = m ? "编辑模型" : "注册模型";
+  if (m) drawer.dataset.editId = m.id; else delete drawer.dataset.editId;
+  keySel.dispatchEvent(new Event("change"));
+  drawer.hidden = false;
 }
 
 /* ---------------- 公共 · 版本管理页（common2.html，全局版本创建 §10.6） ---------------- */

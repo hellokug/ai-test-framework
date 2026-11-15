@@ -1376,3 +1376,26 @@ owner 指正「开源/自建 = 数据集是否私有，在线/本地 = 存储位
 （common2/functional2 同步 bump）。门禁：ruff / 数据集域 pytest 64 例 / lint-imports /
 mockup_symbols --check / render_check 全过；纯静态稿刷新即生效，后端要吃到 ownership
 需重启 aite serve。
+
+## 2026-11-15（模型注册编辑能力：PUT /models/{id} + 编辑抽屉回填，api32 v29）
+
+模型管理页注册行此前只有「删除」，补齐编辑链路：
+①后端 `PUT /models/{id}`：repo 新增 `update_model_config`，PUT 语义全量覆盖可编辑字段
+（None=清空，区别于 POST save 的 None 跳过——清空 api_key_env/base_url/notes 不再残留旧值）；
+改名查重（FileExistsError→409）、id 不存在 404；改名同步 common.yaml 预制（remove 旧名 +
+upsert 新名，未改名仅覆盖条目）；interfaces 协议补 `update_model_config`。
+②前端 api32 wireCommonModelsPage：注册行加「编辑」按钮；`openModelDrawer(m)` 回填
+名称/类型/base_url/model/密钥下拉（密钥库同名项优先选中，否则走「仅环境变量」手填框，
+程序置值后 dispatch change 重同步归档面板显隐）；保存按 drawer.dataset.editId 分流
+PUT（空串/未选密钥→null 清空）/POST（同名覆盖既有语义不变）；抽屉标题动态化
+（编辑模型/注册模型）；「＋ 注册模型」按钮绑 openModelDrawer(null) 重置新建态——防上一次
+编辑的 editId 与回填残留被误存成 PUT；名称必填守卫。api32 v=28→29（common2/functional2）。
+③test_models_crud 扩 PUT 用例（改名/清空密钥/预制同步断言/409/404），并补
+DEFAULT_COMMON_FILE monkeypatch——原用例 POST/DELETE 同步的是真实 data/common.yaml
+（靠 create+delete 配对净零撑住），现隔离到 tmp。门禁：ruff（改动文件）/
+test_reporting_web+test_common_endpoint 28 例 / lint-imports / arch_map /
+mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙箱占用，自起 8311+8777
+对，后端临时 cwd 防 common.yaml 污染）端到端验证：编辑回填 → 改 base_url 保存 →
+行刷新 + 「已更新」toast（带密钥未归档警示）+ GET 落库核对；＋注册按钮重置新建态；
+截图视觉确认。
+后端代码改动需重启 aite serve；静态稿刷新即生效。

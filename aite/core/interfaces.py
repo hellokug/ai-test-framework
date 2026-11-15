@@ -220,6 +220,9 @@ class Repository(ABC):
     async def list_model_configs(self) -> list[dict]: ...
 
     @abstractmethod
+    async def update_model_config(self, model_id: str, data: dict[str, Any]) -> str: ...
+
+    @abstractmethod
     async def delete_model_config(self, model_id: str) -> bool: ...
 
     # -- domain tasks（四域独立任务表，契约见 docs/domain-backends.md §4/§6）----
