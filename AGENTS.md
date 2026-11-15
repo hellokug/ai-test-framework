@@ -234,3 +234,10 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
   静态区拿空——详情类断言一律 `main.page-host [data-page="detail"]` 作用域（2026-11-12 为此
   空转约 3 轮）。抽屉底栏按钮 locator click 卡 actionability 时直接
   `evaluate(() => el.click())`（绑定的监听器照常触发，2026-11-12 实测 #teRunBtn）。
+- **iab_sandbox 是单槽共享资源**（2026-11-15）：`.tmp/iab-sandbox.json` 只有一个槽位，两个并行
+  会话同时 up/down 会互杀对方实例（本会话验证中被别的会话 down 掉再 up，端口归属反复易主空转约
+  4 分钟）。多会话并行验证期改私有端口手工起：后端 `python -m aite.cli.main serve --port 8311
+  --db "sqlite+aiosqlite:///<临时库>"`（env 带 AITE_DATASETS_DIR/HF_HOME 隔离）+ 反代
+  `AITE_API=http://127.0.0.1:8311 python web-ui/mockups/serve.py 8777`，收尾按 PID 停干净删临时
+  库；起后台任务一律绝对路径。另注意后台 Bash 收尾会带走 Popen 子进程树，iab_sandbox up 别放
+  run_in_background（前台跑，子进程存活）。
