@@ -41,7 +41,7 @@
         <input class="in" data-kw style="flex:1;min-width:110px" placeholder="按任务名…">
       </div>
         <table id="taskTbl" class="sumtable"></table>
-      <div class="hint dim" style="font-size:11.5px;margin-top:10px">停止 = POST /{id}/stop（stopping → cancelled；子进程进程组强杀待补）</div>
+      <div class="hint dim" style="font-size:11.5px;margin-top:10px">停止双档：立即停止 = 停止派发新请求、在途请求返回后收口（计入统计）；强制停止 = 在途请求直接取消（未返回请求不计入统计）· 创建时可配「强制停止时长」自动到时强停</div>
     </section>
   </section>
 
@@ -221,7 +221,11 @@
         </div>
         <div class="form-sec"><div class="sec-head"><span class="sec-num">3</span><b>压力参数</b><small>并发 / QPS / 时长</small></div>
         <div class="form-grid" id="perfParams"></div>
-        <span class="hint">参数清单随引擎与压测模式联动，仅展示当前组合支持的项</span>
+        <div class="form-grid" style="margin-top:8px">
+          <div class="field"><label>强制停止时长（分钟 · 可选）<span class="qmark">?<span class="tip">创建后到达该时长仍未跑完 → 直接强制结束：在途请求即弃、未返回请求不计入统计（结果标「强制停止截断」）。仅 evalscope-perf 引擎生效；留空 = 不设自动上限，运行中可手动「立即停止」（等在途返回）或「强制停止」</span></span></label>
+            <input class="in" id="perfForceStopIn" placeholder="如 15（任务最长跑 15 分钟）"></div>
+        </div>
+        <span class="hint">参数清单随引擎与压测模式联动，仅展示当前组合支持的项 · 运行中停止双档：立即停止（排空在途）/ 强制停止（在途即弃）</span>
         </div>
         <div class="form-sec"><div class="sec-head"><span class="sec-num">4</span><b>模型参数</b><small>来源可选 · 生成控制通用</small></div>
         <div class="field"><label>目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时手填端点，免登记直接跑</span></span></label>
@@ -361,7 +365,7 @@ document.getElementById("sumTbl").innerHTML = `
 
 /* ---------- 八图 mock 数据（180s · 10s 桶 ×19 点 · ramp 4→8→16） ---------- */
 const T = Array.from({ length: 19 }, (_, i) => i * 10);
-const USERS = T.map((_, i) => [4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16][i]);
+const USERS = [4, 4, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16];
 const wave = (base, amp, noise) => T.map((_, i) => +(base + amp * Math.sin(i / 2.5) + (Math.random() - 0.5) * noise).toFixed(1));
 const mkAvgP95 = (base, amp, noise, k) => { const avg = wave(base, amp, noise); return { avg, p95: avg.map(v => +(v * k).toFixed(1)) }; };
 const TTFT = mkAvgP95(120, 30, 14, 1.9), LAT = mkAvgP95(1600, 500, 160, 1.7),
@@ -532,6 +536,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=4"></script>
+<script src="api-perf.js?v=6"></script>
 </body>
 </html>

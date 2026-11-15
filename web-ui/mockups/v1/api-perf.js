@@ -137,7 +137,8 @@ function papiRerenderTasks() {
     <td>${badge(eff)}</td>
     <td class="num dim">${papiRowDuration(t)}</td>
     <td>${t.status === "running" || t.status === "stopping"
-      ? `<button class="btn sm danger" onclick="event.stopPropagation();stopPerfTask('${t.id}')">停止</button>`
+      ? `<button class="btn sm danger" onclick="event.stopPropagation();stopPerfTask('${t.id}','graceful')">停止</button>
+         <button class="btn sm danger" onclick="event.stopPropagation();stopPerfTask('${t.id}','force')">强停</button>`
       : t.status === "pending"
         ? `<button class="btn sm primary" onclick="event.stopPropagation();runPerfTask('${t.id}')">运行</button>`
         : `<button class="btn sm" onclick="event.stopPropagation();retryPerfTask('${t.id}')">重试</button>`}</td></tr>`;
@@ -172,11 +173,15 @@ async function runPerfTask(taskId) {
   } catch (err) { papiToast(`运行失败：${err.message}`, true); }
 }
 
-async function stopPerfTask(taskId) {
-  if (!confirm("停止该压测任务？（running → stopping → cancelled，幂等）")) return;
+async function stopPerfTask(taskId, mode = "graceful") {
+  const what = mode === "force"
+    ? "强制停止该压测任务？（在途请求直接取消，未返回的请求不计入统计）"
+    : "立即停止该压测任务？（停止派发新请求，等待在途请求全部返回后收口）";
+  if (!confirm(what)) return;
   try {
-    await PAPI.post(`/perf/tasks/${taskId}/stop`);
-    papiToast("停止指令已下发");
+    await PAPI.post(`/perf/tasks/${taskId}/stop`, { mode });
+    papiToast(mode === "force" ? "强制停止指令已下发"
+      : "停止指令已下发（停止派发，排空在途中，终态经轮询刷新）");
     await wirePerfTasks();
     if (PERF_LAST_TASK === taskId) showPerfTask(taskId);
   } catch (err) { papiToast(`停止失败：${err.message}`, true); }
@@ -196,6 +201,13 @@ function papiClearDetailTimer() {
   if (PERF_DETAIL_TIMER) { clearTimeout(PERF_DETAIL_TIMER); PERF_DETAIL_TIMER = null; }
 }
 
+/* 详情页运行态自轮询（5s）：以 poll 模式续期，保住已渲染的详情骨架 */
+function papiRearmDetail(seq, taskId) {
+  PERF_DETAIL_TIMER = setTimeout(() => {
+    if (seq === showPerfTask.seq) showPerfTask(taskId, { poll: true });
+  }, 5000);
+}
+
 function papiSummariesTable(summaries, emptyTip) {
   return `<table class="sumtable">
     <thead><tr><th>档级</th><th>指标</th><th>值</th><th>阈值</th><th>N</th><th>结果</th></tr></thead>
@@ -211,14 +223,15 @@ function papiSummariesTable(summaries, emptyTip) {
   </table>`;
 }
 
-async function showPerfTask(taskId) {
+async function showPerfTask(taskId, opts = {}) {
+  const poll = !!opts.poll;   // 轮询续期：不清骨架，等数据到位再决定是否重绘
   const seq = showPerfTask.seq = (showPerfTask.seq || 0) + 1;
   papiClearDetailTimer();
   PERF_LAST_TASK = taskId;
   const detail = document.querySelector('main.page-host [data-page="detail"]');
   sessionStorage.setItem("aite-perf-last-task", taskId);
   showPage("detail");
-  detail.innerHTML = `<header class="topbar">
+  if (!poll) detail.innerHTML = `<header class="topbar">
       <div><h1>加载中…</h1><div class="crumb">task ${taskId}</div></div>
       <div class="actions"><button class="btn" onclick="showPage('tasks')">← 任务列表</button></div>
     </header>
@@ -234,6 +247,7 @@ async function showPerfTask(taskId) {
       showPage("tasks");
       return;
     }
+    if (poll) { papiRearmDetail(seq, taskId); return; }   // 瞬时失败：保留内容，下一轮再试
     detail.innerHTML = `<header class="topbar"><div><h1>${taskId}
       <span class="badge failed"><i></i>加载失败</span></h1></div>
       <div class="actions"><button class="btn" onclick="showPage('tasks')">← 任务列表</button></div></header>
@@ -244,23 +258,33 @@ async function showPerfTask(taskId) {
   let result = null;
   try { result = await PAPI.get(`/perf/tasks/${taskId}/result`); }
   catch (e) { /* 409 非终态 */ }
-  const runId = t.result?.run_id || result?.result?.run_id || null;
-  let run = null, ts = null;
-  if (runId) {
-    try { run = await PAPI.get(`/runs/${runId}`); } catch (e) { /* run 行可能尚未可见 */ }
-    try { ts = await PAPI.get(`/runs/${runId}/timeseries`); } catch (e) { /* 非压测/未落盘 */ }
-  }
   if (seq !== showPerfTask.seq) return;
   const spec = t.spec || {};
   const p = spec.perf || {};
   const eff = papiEffStatus(t);
   const running = t.status === "running" || t.status === "stopping" || t.status === "pending";
   const runError = (t.error || (eff === "failed" ? run?.error : "")) || "";
+  // 取消轮的 run 引用从执行历史取（任务 result 为 null，但本轮产物已收口）
+  const runId = t.result?.run_id || result?.result?.run_id
+    || (t.history || []).filter(h => h.run_id).at(-1)?.run_id || null;
+  let run = null, ts = null;
+  if (runId) {
+    try { run = await PAPI.get(`/runs/${runId}`); } catch (e) { /* run 行可能尚未可见 */ }
+    try { ts = await PAPI.get(`/runs/${runId}/timeseries`); } catch (e) { /* 非压测/未落盘 */ }
+  }
+  if (seq !== showPerfTask.seq) return;
   const summaries = run?.summaries || (ts?.summaries || []);
   const overall = summaries.find(s => !s.dataset) || null;
   const byMetric = k => summaries.find(s => !s.dataset && s.metric === k);
   const reports = run?.details?.reports || result?.result?.reports || {};
+  // 停止截断标记（强制停止/立即停止收口，未返回请求不计入统计的口径提示）
+  const stopInfo = run?.details?.perf?._stop || ts?.stop || null;
 
+  /* 轮询刷新：数据签名没变就整轮跳过重绘（骨架与图表原地不动，「已运行」时长由全局轮询维护 #perfElapsed） */
+  const sig = JSON.stringify([t.status, eff, runId, run?.status ?? null, runError, reports, summaries,
+    ts ? ts.combined?.length ?? -1 : -1, stopInfo]);
+  if (poll && sig === showPerfTask.lastSig) { papiRearmDetail(seq, taskId); return; }
+  showPerfTask.lastSig = sig;
   detail.innerHTML = `
     <header class="topbar">
       <div><h1>${papiEsc(t.name || "(未命名)")} ${badge(eff)}</h1>
@@ -269,7 +293,8 @@ async function showPerfTask(taskId) {
       · ${runId ? `run #${runId.slice(0, 8)}${run?.status && run.status !== "succeeded" ? ` · run ${run.status}` : ""} · ` : ""}${t.started_at ? papiShortTime(t.started_at) : "未开始"}</div></div>
       <div class="actions">
         ${runId ? `<button class="btn" onclick="showPerfDashboard('${runId}')">压测大屏 ↗</button>` : ""}
-        ${running ? `<button class="btn danger" onclick="stopPerfTask('${taskId}')">停止</button>` : ""}
+        ${running ? `<button class="btn danger" onclick="stopPerfTask('${taskId}','graceful')">立即停止</button>
+        <button class="btn danger" onclick="stopPerfTask('${taskId}','force')">强制停止</button>` : ""}
         <button class="btn" onclick="showPerfTask('${taskId}')">刷新</button>
         <button class="btn" onclick="showPage('tasks')">← 任务列表</button></div>
     </header>
@@ -277,6 +302,13 @@ async function showPerfTask(taskId) {
       <div class="card-head"><div><h3 style="color:var(--bad)">执行错误</h3>
         <div class="sub">run 级失败（任务层 succeeded 仅表示子进程跑完）</div></div></div>
       <pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${papiEsc(runError)}</pre></section>` : ""}
+    ${stopInfo ? `<section class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--warn) 45%,transparent)">
+      <div class="card-head"><div><h3 style="color:var(--warn)">${stopInfo.graceful ? "立即停止已收口" : "强制停止截断"}</h3>
+        <div class="sub">${stopInfo.graceful
+          ? "已停止派发新请求，在途请求全部返回后正常收口（计入统计）"
+          : "在途请求已取消——未返回的请求不计入以下统计（已完成请求正常计入）"}</div></div>
+        ${stopInfo.force_stop_minutes != null ? `<span class="tag mono">创建配置 ${stopInfo.force_stop_minutes} 分钟自动强停</span>` : ""}</div>
+      ${stopInfo.reason ? `<pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${papiEsc(stopInfo.reason)}</pre>` : ""}</section>` : ""}
     <section class="card" style="margin-bottom:14px">
       <div class="card-head"><div><h3>${running ? "执行状态" : "结果概览"}</h3>
         <div class="sub">${running
@@ -325,12 +357,8 @@ async function showPerfTask(taskId) {
         </div>
       </section>
     </div>`;
-  if (ts) { Object.assign(PERF_TS, ts); autoCharts(); }
-  if (running && t.status === "running") {
-    PERF_DETAIL_TIMER = setTimeout(() => {
-      if (seq === showPerfTask.seq) showPerfTask(taskId);
-    }, 5000);
-  }
+  if (ts) { Object.keys(PERF_TS).forEach(k => delete PERF_TS[k]); Object.assign(PERF_TS, ts); autoCharts(); }
+  if (running && t.status === "running") papiRearmDetail(seq, taskId);
 }
 
 /* ----------------------------------------------------------- 压测大屏（live） */
@@ -341,6 +369,7 @@ function papiLineOption(theme, key, color) {
   const series = [{ name: "avg", type: "line", symbol: "none", lineStyle: { width: 2, color }, data: pts.map(p => p[key]) }];
   if (hasP95) series.push({ name: "p95", type: "line", symbol: "none", lineStyle: { width: 1.4, type: "dashed", color }, data: pts.map(p => p[`${key}_p95`]) });
   return {
+    animation: false,   // 轮询原地刷新时重绘瞬时完成，不闪动画
     grid: { left: 6, right: 12, top: 20, bottom: 4, containLabel: true },
     legend: { top: 0, right: 6, textStyle: { color: c.axis, fontSize: 11 } },
     tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
@@ -360,6 +389,7 @@ window.papiCtok = t => papiLineOption(t, "tok_s", t.charts.radar[1]);
 window.papiCusers = t => {
   const c = t.charts, pts = PERF_TS.combined || [];
   return {
+    animation: false,
     grid: { left: 6, right: 12, top: 12, bottom: 4, containLabel: true },
     tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
     xAxis: { type: "category", data: pts.map(p => Math.round(p.t)), ...baseAxis(c), splitLine: { show: false }, axisLabel: { color: c.axis, formatter: v => v + "s" } },
@@ -370,6 +400,7 @@ window.papiCusers = t => {
 window.papiCerr = t => {
   const c = t.charts, errs = PERF_TS.errors || [];
   return {
+    animation: false,
     grid: { left: 6, right: 48, top: 16, bottom: 4, containLabel: true },
     tooltip: { backgroundColor: c.tipBg, borderColor: c.tipBorder, textStyle: { color: c.tipTx, fontSize: 12 } },
     xAxis: { type: "value", ...baseAxis(c), splitLine: { lineStyle: { color: c.split } }, axisLabel: { color: c.axis } },
@@ -825,6 +856,14 @@ function papiCollectSpec() {
     const jitter = papiNumIn(papiFieldVal(/^jitter|^到达抖动/), "jitter", { int: false, min: 0 });
     if (jitter !== undefined) perf.jitter = jitter;
   }
+  // 强制停止时长（分钟，可选）：到时监督循环杀树，未返回请求不计入统计
+  const fsRaw = $("perfForceStopIn")?.value.trim();
+  if (fsRaw) {
+    const fs = Number(fsRaw);
+    if (Number.isNaN(fs) || fs <= 0)
+      throw new Error(`强制停止时长不合法：${fsRaw}（须为 >0 的分钟数）`);
+    perf.force_stop_minutes = fs;
+  }
   const spec = { module: "perf", engine, perf };
   const target = papiTargetOf($("perfModelSel").value, "perfModelCustom");
   spec.target = target;
@@ -878,7 +917,7 @@ function startPerfPolling() {
           if (elapsed) elapsed.textContent = papiRowDuration(t);
           return;   // 详情页自轮询已覆盖运行态，列表刷新跳过
         }
-        showPerfTask(PERF_LAST_TASK);   // 终态：自动出结果
+        showPerfTask(PERF_LAST_TASK, { poll: true });   // 终态：自动出结果（不清骨架，避免闪「加载中」）
         return;
       }
       if (!tasksSec || tasksSec.hidden) return;
