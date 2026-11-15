@@ -174,7 +174,7 @@ async function showAccTask(taskId) {
       <span class="badge failed"><i></i>加载失败</span></h1>
       <div class="crumb">任务详情加载失败</div></div>
       <div class="actions"><button class="btn" onclick="backToRuns()">← 任务列表</button></div></header>
-      <section class="card"><div class="ds-empty">加载失败：${err.message}（后端未启动或网络异常？）</div></section>`;
+      <section class="card"><div class="ds-empty">加载失败：${escHtml(err.message)}（后端未启动或网络异常？）</div></section>`;
     return;
   }
   if (seq !== showAccTask.seq) return;
@@ -204,10 +204,10 @@ async function showAccTask(taskId) {
 
   detail.innerHTML = `
     <header class="topbar">
-      <div><h1>${t.name || "(未命名)"} ${badge(t.status)}</h1>
-      <div class="crumb">task ${t.id} · 引擎 ${spec.engine || run?.details?.tool || "自研"}
-      · 数据集 ${datasets} · ${spec.version ? `版本 ${spec.version} · ` : ""}模型
-      ${spec.target?.profile || spec.target?.model || "-"}
+      <div><h1>${escHtml(t.name || "(未命名)")} ${badge(t.status)}</h1>
+      <div class="crumb">task ${t.id} · 引擎 ${escHtml(spec.engine || run?.details?.tool || "自研")}
+      · 数据集 ${escHtml(datasets)} · ${spec.version ? `版本 ${escHtml(spec.version)} · ` : ""}模型
+      ${escHtml(spec.target?.profile || spec.target?.model || "-")}
       · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"}</div></div>
       <div class="actions">
         ${running ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
@@ -442,8 +442,8 @@ async function wireAccScripts() {
     const prev = sel.value;
     sel.innerHTML = scens.items.map(c => {
       const items = data.items.filter(d => d.scenario === c.id);
-      return items.length ? `<optgroup label="${c.display_name}">${items.map(d =>
-        `<option value="${d.id}">${d.name}（${d.id}）</option>`).join("")}</optgroup>` : "";
+      return items.length ? `<optgroup label="${escHtml(c.display_name)}">${items.map(d =>
+        `<option value="${escHtml(d.id)}">${escHtml(d.name)}（${escHtml(d.id)}）</option>`).join("")}</optgroup>` : "";
     }).join("") || '<option value="">暂无脚本（先到「评估场景」页建场景，再沉淀脚本）</option>';
     if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     renderAccSnap();

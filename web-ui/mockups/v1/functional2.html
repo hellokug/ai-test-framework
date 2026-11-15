@@ -469,6 +469,7 @@
 <div class="ribbon">V1 静态稿 · 功能测试 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=17"></script>
+<script src="assets/live2.js?v=1"></script>
 <script>
 const RUNS = [
   ["ft-full-qwen3b", "#7a21c9e4 · v1.2.0 · 全量 9 场景", "qwen2.5:3b", "failed", 91.7, "84 / 3 fail", "09-23 20:12", "zhimeng"],
@@ -517,9 +518,9 @@ function renderRuns(status, owner, kw) {
       `<button class="btn sm">报告 ↗</button>`,
     ].filter(Boolean).join("");
     return `<tr class="clickable" onclick="openRunDetail(${i})">
-    <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
-    <td class="dim">${r[2]}</td><td class="dim">${r[7]}</td><td>${taskBadge(r[3])}</td><td>${evalCell(r[4])}</td>
-    <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
+    <td class="rname"><b>${escHtml(r[0])}</b><div class="rid">${escHtml(r[1])}</div></td>
+    <td class="dim">${escHtml(r[2])}</td><td class="dim">${escHtml(r[7])}</td><td>${taskBadge(r[3])}</td><td>${evalCell(r[4])}</td>
+    <td class="num">${escHtml(r[5])}</td><td class="dim">${escHtml(r[6])}</td>
     <td style="text-align:right;white-space:nowrap">${acts}</td></tr>`;
   }).join("")
     : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
@@ -904,8 +905,7 @@ function nsMergeRequest(row) {
 }
 /* 行卡 = head（折叠摘要，恒可见）+ body（编辑区）；data-collapsed 切换。
    添加/复制新行时旧行自动折叠成摘要（id/用例 id/类型/等级/描述 + 完成度），点行头再展开 */
-const nsEsc = s => String(s ?? "").replace(/[&<>"']/g,
-  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const nsEsc = escHtml;   // 转义统一走 live2.js（含属性位引号）
 function nsUpdateSummary(card) {
   const g = s => card.querySelector(s)?.value.trim() ?? "";
   const asserts = card.querySelector(".ns-asserts");
@@ -1446,6 +1446,6 @@ document.getElementById("scnDimOk").addEventListener("click", scnDimConfirm);
 document.getElementById("scnDimName").addEventListener("keydown", e => { if (e.key === "Enter") scnDimConfirm(); });
 renderScnDims();
 </script>
-<script src="api32.js?v=25"></script>
+<script src="api32.js?v=26"></script>
 </body>
 </html>

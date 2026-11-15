@@ -495,6 +495,7 @@
 <div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=17"></script>
+<script src="assets/live2.js?v=1"></script>
 <script>
 /* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选）
    数据源 = GET /api/v1/tools/benchmarks（name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id）
@@ -734,12 +735,12 @@ function accScensStatic() {   // 脚本计数从演示脚本清单派生
 function renderAccScenGrid(scens) {   // scens: [{id, display_name, dimension?, description?, scripts, cases?}]
   const grid = document.getElementById("accSceneGrid");
   grid.innerHTML = scens.map(c => `
-  <div class="scene-card"><b>${c.display_name}</b>
-    <div class="rid mono" style="margin:2px 0 6px">${c.id}</div><p>${c.description || "（无说明）"}</p>
-    <div class="meta"><span class="tag">${c.dimension || "未分类"}</span><span class="tag">${c.scripts ?? 0} 个脚本</span>${c.cases != null ? `<span class="tag">${c.cases} 例</span>` : ""}</div>
+  <div class="scene-card"><b>${escHtml(c.display_name)}</b>
+    <div class="rid mono" style="margin:2px 0 6px">${escHtml(c.id)}</div><p>${escHtml(c.description || "（无说明）")}</p>
+    <div class="meta"><span class="tag">${escHtml(c.dimension || "未分类")}</span><span class="tag">${c.scripts ?? 0} 个脚本</span>${c.cases != null ? `<span class="tag">${c.cases} 例</span>` : ""}</div>
     <div class="meta" style="margin-top:10px;display:flex;gap:6px">
-      <button class="btn sm primary" data-acc-view="${c.id}">查看脚本 →</button>
-      <button class="btn sm danger" data-acc-scen-del="${c.id}">删除</button></div></div>`).join("")
+      <button class="btn sm primary" data-acc-view="${escHtml(c.id)}">查看脚本 →</button>
+      <button class="btn sm danger" data-acc-scen-del="${escHtml(c.id)}">删除</button></div></div>`).join("")
     || '<div class="ds-empty">暂无评估场景 —— 点右上「＋ 新建评估场景」创建（脚本须归属场景）</div>';
 }
 document.getElementById("accSceneGrid").addEventListener("click", async e => {
@@ -1043,6 +1044,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=11"></script>
+<script src="api-acc3.js?v=12"></script>
 </body>
 </html>

@@ -160,17 +160,17 @@ function fapiSceneCard(s) {
   const cover = Object.entries(s.coverage || {})
     .map(([k, v]) => `${k} ${v}`).join(" · ") || "—";
   const form = s.forms === "script" ? "复杂脚本 test_*.py" : "低代码数据行";
-  return `<div class="scene-card"><b>${s.display_name}</b>
-    <div class="rid mono" style="margin:2px 0 6px">${s.id}</div><p>${s.description || "（无说明）"}</p>
-    <div class="meta"><span class="tag">${s.dimension || "未分类"}</span>
-    <span class="tag">${s.cases} 例</span><span class="tag">${cover}</span>
-    ${fapiDist(s.levels) ? `<span class="tag">${fapiDist(s.levels)}</span>` : ""}
+  return `<div class="scene-card"><b>${escHtml(s.display_name)}</b>
+    <div class="rid mono" style="margin:2px 0 6px">${escHtml(s.id)}</div><p>${escHtml(s.description || "（无说明）")}</p>
+    <div class="meta"><span class="tag">${escHtml(s.dimension || "未分类")}</span>
+    <span class="tag">${s.cases} 例</span><span class="tag">${escHtml(cover)}</span>
+    ${fapiDist(s.levels) ? `<span class="tag">${escHtml(fapiDist(s.levels))}</span>` : ""}
     <span class="tag" style="color:var(--ac)">${form}</span>
     </div>
     <div class="meta" style="margin-top:10px;display:flex;gap:6px">
-      <button class="btn sm primary" data-mgr="${s.id}">管理脚本</button>
-      <button class="btn sm" data-new="${s.id}">＋ 脚本</button>
-      <button class="btn sm" data-del="${s.id}">删除</button>
+      <button class="btn sm primary" data-mgr="${escHtml(s.id)}">管理脚本</button>
+      <button class="btn sm" data-new="${escHtml(s.id)}">＋ 脚本</button>
+      <button class="btn sm" data-del="${escHtml(s.id)}">删除</button>
       <button class="btn sm" data-open-drawer="newRunModal">过滤跑 →</button></div></div>`;
 }
 
@@ -237,7 +237,7 @@ async function wireScenarios() {
   // 新建脚本 / 导入抽屉的场景下拉 → 全部托管场景（场景全部用户自管）
   const userItems = data.items;
   const opts = '<option value="">请选择评估场景…</option>' +
-    userItems.map(i => `<option value="${i.id}">${i.id} · ${i.display_name}</option>`).join("");
+    userItems.map(i => `<option value="${escHtml(i.id)}">${escHtml(i.id)} · ${escHtml(i.display_name)}</option>`).join("");
   const nsSel = document.getElementById("nsScen");
   if (nsSel) nsSel.innerHTML = opts;
   const impSel = document.querySelector("#importScriptDrawer .form-sec select.in");
@@ -253,9 +253,9 @@ async function openScriptMgr(scenarioId) {
     <thead><tr><th>脚本</th><th>类型</th><th>行数</th><th>来源</th><th>外部用例</th>
     <th style="text-align:right">操作</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(s => `<tr>
-      <td class="rname"><b>${s.name}</b><div class="rid">${s.id}</div></td>
-      <td><span class="tag">${fapiDist(s.row_types) || s.case_type}</span></td><td class="num">${s.row_count}</td>
-      <td class="dim">${s.source}</td><td class="mono dim">${s.external_ref || "—"}</td>
+      <td class="rname"><b>${escHtml(s.name)}</b><div class="rid">${escHtml(s.id)}</div></td>
+      <td><span class="tag">${escHtml(fapiDist(s.row_types) || s.case_type)}</span></td><td class="num">${s.row_count}</td>
+      <td class="dim">${escHtml(s.source)}</td><td class="mono dim">${escHtml(s.external_ref || "—")}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn sm" data-edit="${s.id}">编辑</button>
         <button class="btn sm" data-del="${s.id}">删除</button></td></tr>`).join("")
@@ -751,12 +751,12 @@ async function wireTools() {
       const ps = t.schema.function.parameters || {};
       const req = ps.required || [];
       const props = Object.keys(ps.properties || {}).map(k => req.includes(k) ? k + "*" : k).join(", ");
-      return `<tr><td class="rname"><b class="mono">${t.name}</b></td>
-        <td class="dim">${t.description || "—"}</td><td class="mono dim">${props || "—"}</td>
+      return `<tr><td class="rname"><b class="mono">${escHtml(t.name)}</b></td>
+        <td class="dim">${escHtml(t.description || "—")}</td><td class="mono dim">${escHtml(props || "—")}</td>
         <td>${t.used_by.length ? `${t.used_by.length} 个脚本` : '<span class="faint">未引用</span>'}</td>
         <td style="text-align:right;white-space:nowrap">
-          <button class="btn sm" data-tool-edit="${t.name}">编辑</button>
-          <button class="btn sm" data-tool-del="${t.name}">删除</button></td></tr>`;
+          <button class="btn sm" data-tool-edit="${escHtml(t.name)}">编辑</button>
+          <button class="btn sm" data-tool-del="${escHtml(t.name)}">删除</button></td></tr>`;
     }).join("") : '<tr><td colspan="5" class="ds-empty">工具库为空 —— 「＋ 新建工具」定义第一个 tool_calls 工具</td></tr>'}</tbody>`;
 }
 function openToolDrawer(name) {
@@ -927,7 +927,7 @@ async function fapiTaskAction(action, ref, ev) {
    spec 以原 spec 为底、表单字段覆盖，未识别键原样保留（CLI 造的 spec 不丢字段）。 */
 let teState = null;   // 当前编辑上下文 {taskId, spec, scenes}
 
-function teEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function teEsc(s) { return escHtml(s); }   // 转义统一走 live2.js
 
 function teRenderScenes() {
   const box = document.getElementById("teScenes");
@@ -1146,7 +1146,7 @@ async function showLiveTask(taskId, roundSel) {
   const pct = progress && progress.total
     ? Math.round((progress.done || 0) / progress.total * 100) : null;
   const pp = v => v === null || v === undefined ? "—" : `${(v * 100).toFixed(1)}%`;
-  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const esc = escHtml;   // 转义统一走 live2.js
   window.__copyStore = window.__copyStore || new Map();
   let __cseq = 0;
   // 「展开全文」id 必须全渲染唯一：曾在 caseBlock 内每例归零，跨用例重复 id
@@ -1375,7 +1375,7 @@ async function showLiveTask(taskId, roundSel) {
     </section>`;
   detail.innerHTML = `
     <header class="topbar">
-      <div><h1>${t.name || "(未命名)"} ${taskBadge(t.status)}</h1>
+      <div><h1>${escHtml(t.name || "(未命名)")} ${taskBadge(t.status)}</h1>
       <div class="crumb">task ${t.id} · 引擎 pytest · 被测版本 ${t.spec?.version || "未标注"}
       · 模型 ${t.spec?.target?.profile || t.spec?.target?.model || "-"}${rounds.length ? ` · 第 ${sel?.n || rounds.length} / ${rounds.length} 轮` : ""}${t.retry_of ? ` · 旧链 ← ${esc(String(t.retry_of)).slice(0, 8)}` : ""}</div></div>
       <div class="actions">
@@ -1742,16 +1742,16 @@ async function wireCommonModelsPage() {
   // 预制行剔除同名条目，否则同一模型显示「预制」+「注册」两行（一次新增出现俩）
   const registered = new Set(MODEL_ROWS.map(m => m.name));
   const commonRows = commonData.items.filter(m => !registered.has(m.name)).map(m => `<tr>
-      <td class="rname"><b class="mono">${m.name}</b></td>
+      <td class="rname"><b class="mono">${escHtml(m.name)}</b></td>
       <td><span class="tag" style="color:var(--ac)">预制</span></td>
-      <td class="mono dim" style="font-size:12px">${m.base_url || "—"}</td>
-      <td class="mono">${m.model || "—"}</td><td>${keyCell(m.api_key_env)}</td>
+      <td class="mono dim" style="font-size:12px">${escHtml(m.base_url || "—")}</td>
+      <td class="mono">${escHtml(m.model || "—")}</td><td>${keyCell(m.api_key_env)}</td>
       <td style="text-align:right"><span class="tag">随 common.yaml 发布</span></td></tr>`);
   const dbRows = MODEL_ROWS.map(m => `<tr>
-      <td class="rname"><b class="mono">${m.name}</b></td>
+      <td class="rname"><b class="mono">${escHtml(m.name)}</b></td>
       <td><span class="tag">注册</span></td>
-      <td class="mono dim" style="font-size:12px">${m.base_url || "—"}</td>
-      <td class="mono">${m.model || "—"}</td><td>${keyCell(m.api_key_env)}</td>
+      <td class="mono dim" style="font-size:12px">${escHtml(m.base_url || "—")}</td>
+      <td class="mono">${escHtml(m.model || "—")}</td><td>${keyCell(m.api_key_env)}</td>
       <td style="text-align:right"><button class="btn sm danger" data-del-model="${m.id}">删除</button></td></tr>`);
   const tbl = document.getElementById("modelsTbl");
   tbl.innerHTML = `
@@ -1775,8 +1775,8 @@ async function wireCommonModelsPage() {
     secretTbl.innerHTML = `
       <thead><tr><th>环境变量名</th><th>密钥（掩码）</th><th style="text-align:right">操作</th></tr></thead>
       <tbody>${secretData.items.length ? secretData.items.map(i => `<tr>
-        <td class="mono">${i.name}</td><td class="mono dim">${i.mask}</td>
-        <td style="text-align:right"><button class="btn sm danger" data-del-secret="${i.name}">删除</button></td>
+        <td class="mono">${escHtml(i.name)}</td><td class="mono dim">${escHtml(i.mask)}</td>
+        <td style="text-align:right"><button class="btn sm danger" data-del-secret="${escHtml(i.name)}">删除</button></td>
       </tr>`).join("") : '<tr><td colspan="3" class="ds-empty">暂无录入的密钥</td></tr>'}</tbody>`;
     if (!secretTbl.dataset.liveBound) {
       secretTbl.dataset.liveBound = "1";
@@ -1954,7 +1954,7 @@ function dsAllRows() {
   return [...DS_ROWS.filter(r => r.kind !== "bench"),
     ...DS_BENCH.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))];
 }
-function dsEsc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function dsEsc(s) { return escHtml(s); }   // 转义统一走 live2.js
 /* 行内截断单元：超宽省略 + hover 看全文；表格 table-layout:fixed，一律 100% 吃列宽不撑表 */
 function dsClip(text) {
   const t = String(text ?? "");

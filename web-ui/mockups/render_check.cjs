@@ -43,6 +43,8 @@ global.FAPI = { async get(url) {
   throw new Error(`render_check 未打桩的 URL: ${url}`);
 } };
 
+// live2.js 共享内核（escHtml 等）在页面上先于 api32.js 加载，切片引用前先就位
+(0, eval)(fs.readFileSync(path.join(__dirname, "v1", "assets", "live2.js"), "utf8"));
 // eslint-disable-next-line no-eval -- 切片代码来自受版本控制的 api32.js，上下文全局已打桩
 (0, eval)(sliced);
 
@@ -55,6 +57,9 @@ global.FAPI = { async get(url) {
     byKey[c.external_key] = at < 0 ? "" : html.slice(at, html.indexOf("case-item\"", at + 1));
   }
   const sec = (block, label) => block.slice(block.indexOf(label));
+  // 内容断言跑在可见文本上：escHtml 升级后引号/尖括号以实体入库，先解码再匹配
+  const txt = s => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
   // 1 断言失败（期望 400 实际 200）：断言判定行 + 请求头/体完整 + 错误首行
   const fail = byKey["assert-400"];
@@ -63,7 +68,7 @@ global.FAPI = { async get(url) {
   assert(fail.includes("请求头") && fail.includes("Authorization: Bearer ******"),
     "请求头未展示或鉴权头未打码");
   assert(fail.includes("X-Trace: 1"), "自定义请求头 X-Trace 未展示");
-  const failReq = sec(fail, "请求体");
+  const failReq = txt(sec(fail, "请求体"));
   assert(/"model"\s*:\s*"gpt-x"/.test(failReq), "请求体缺 model");
   assert(/"temperature"\s*:\s*0.7/.test(failReq) && /"max_tokens"\s*:\s*64/.test(failReq),
     "请求体缺扩展参数");
@@ -78,16 +83,16 @@ global.FAPI = { async get(url) {
   assert(ok && ok.includes("请求头") && ok.includes("X-Trace: 1"), "成功用例请求头未展示");
   const okAssert = sec(ok, "断言判定");
   assert(okAssert.includes("包含关键词") && okAssert.includes("hi"), "成功用例断言判定缺包含关键词行");
-  assert(ok.includes("响应体") && /"content"\s*:\s*"hi/.test(ok), "成功用例响应体未展示");
+  assert(ok.includes("响应体") && /"content"\s*:\s*"hi/.test(txt(ok)), "成功用例响应体未展示");
 
   // 3 流式：body.stream=true 留痕原样
   const stream = byKey["stream-ok"];
-  assert(stream && /"stream"\s*:\s*true/.test(sec(stream, "请求体")), "流式请求体缺 stream:true");
+  assert(stream && /"stream"\s*:\s*true/.test(txt(sec(stream, "请求体"))), "流式请求体缺 stream:true");
 
   // 4 旧数据（无 _request）：messages ⊕ params 快照，控制键不进、缺 model 标注
   const legacy = byKey["legacy-case"];
   assert(legacy.includes("旧数据无请求留痕"), "旧数据未标注回退口径");
-  const legacyReq = sec(legacy, "请求体");
+  const legacyReq = txt(sec(legacy, "请求体"));
   assert(/"messages"/.test(legacyReq) && /"temperature"\s*:\s*1/.test(legacyReq),
     "旧数据快照缺 messages/params");
   assert(!/"_headers"/.test(legacyReq) && !/"_raw_body"/.test(legacyReq), "旧数据快照混入 _ 前缀控制键");
