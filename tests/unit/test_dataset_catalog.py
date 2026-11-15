@@ -108,3 +108,36 @@ def test_cli_import_functional_and_list(tmp_path, monkeypatch):
     r3 = runner.invoke(app, ["dataset", "show", "functional:cli-ft"])
     assert r3.exit_code == 0 and '"nonempty"' in r3.output.replace(" ", '"nonempty"') \
         or "nonempty" in r3.output
+
+
+def test_capability_normalize_and_tag_mapping():
+    from aite.datasets.catalog import CAPABILITIES, normalize_capabilities, tags_to_capabilities
+
+    # 归一：去空白/小写/去重保序；未知 key 显式报错
+    assert normalize_capabilities(
+        ["Math", " math ", "code", "MATH"]) == ["math", "code"]
+    assert normalize_capabilities(None) == []
+    with pytest.raises(ValueError, match="未知能力维度"):
+        normalize_capabilities(["nope"])
+    # evalscope 原生 tags → 平台画像：MCQ/Chinese 等格式/语言类 tag 不映射
+    assert tags_to_capabilities(
+        ["Math", "MCQ", "Chinese", "Reasoning"]) == ["math", "reasoning"]
+    assert tags_to_capabilities(["Coding", "Agent"]) == ["code", "agent"]
+    assert tags_to_capabilities(None) == []
+    assert {"knowledge", "math", "code", "reasoning"} <= set(CAPABILITIES)
+
+
+async def test_register_entry_capabilities_roundtrip(repo):
+    row = await register_entry(repo, dataset_type="accuracy", name="cap-ds",
+                               source="upload", path="x.jsonl",
+                               capabilities=["Math", "reasoning"])
+    assert row["capabilities"] == ["math", "reasoning"]
+    # capabilities=None（场景生成等既有调用方）不动已有画像
+    keep = await register_entry(repo, dataset_type="accuracy", name="cap-ds",
+                                source="local", path="y.jsonl")
+    assert keep["capabilities"] == ["math", "reasoning"]
+    # 空列表 = 显式清空
+    clear = await register_entry(repo, dataset_type="accuracy", name="cap-ds",
+                                 source="local", path="y.jsonl",
+                                 capabilities=[])
+    assert clear["capabilities"] == []

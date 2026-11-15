@@ -8,9 +8,53 @@ perf → tools.perf_dataset 生成入口）。
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 _DATASET_TYPES = ("functional", "accuracy", "perf")
+
+# 评测能力维度（平台统一画像：导入抽屉 chips、目录「能力」筛选、catalog 存储
+# 三处同源，key 落库、中文标签只在前端展示）。evalscope 基准行由
+# tags_to_capabilities 从原生 tags 映射（MCQ/Chinese 等格式/语言类 tag 不映射）。
+CAPABILITIES: dict[str, str] = {
+    "knowledge": "基础知识", "math": "数学", "code": "代码",
+    "reasoning": "推理", "instruction": "指令遵循", "agent": "智能体",
+    "longcontext": "长文本", "safety": "安全",
+}
+
+_TAG_CAPS: dict[str, str] = {
+    "knowledge": "knowledge", "commonsense": "knowledge", "qa": "knowledge",
+    "readingcomprehension": "knowledge", "truthfulness": "knowledge",
+    "math": "math", "coding": "code", "code": "code",
+    "reasoning": "reasoning", "instructionfollowing": "instruction",
+    "instruction": "instruction", "agent": "agent",
+    "longcontext": "longcontext", "safety": "safety",
+}
+
+
+def normalize_capabilities(value: Iterable[str] | None) -> list[str]:
+    """能力维度入册归一：去空白/小写/去重，未知 key 显式报错（原则 9）。"""
+    if not value:
+        return []
+    caps: list[str] = []
+    for raw in value:
+        key = str(raw).strip().lower()
+        if key not in CAPABILITIES:
+            raise ValueError(
+                f"未知能力维度 {raw!r}（合法：{'/'.join(CAPABILITIES)}）")
+        if key not in caps:
+            caps.append(key)
+    return caps
+
+
+def tags_to_capabilities(tags: Iterable[str] | None) -> list[str]:
+    """evalscope 原生 tags → 平台能力维度（顺序按首个命中 tag，去重保序）。"""
+    caps: list[str] = []
+    for tag in tags or []:
+        key = _TAG_CAPS.get(str(tag).strip().lower())
+        if key and key not in caps:
+            caps.append(key)
+    return caps
 
 
 def check_type(dataset_type: str) -> str:
@@ -23,14 +67,22 @@ def check_type(dataset_type: str) -> str:
 async def register_entry(repo: Any, *, dataset_type: str, name: str,
                          source: str, path: str, version: str = "",
                          stats: dict | None = None, notes: str = "",
-                         schema_version: str = "1") -> dict:
-    """按 (type, name) 幂等登记/更新一条目录（repo.upsert 保证竞态安全）。"""
+                         schema_version: str = "1",
+                         capabilities: Iterable[str] | None = None) -> dict:
+    """按 (type, name) 幂等登记/更新一条目录（repo.upsert 保证竞态安全）。
+
+    capabilities=None 表示本次登记不动能力维度（场景生成等既有调用方不传即
+    保留旧值）；传列表（含空列表）则归一后整体覆盖。
+    """
     check_type(dataset_type)
-    return await repo.upsert_dataset_catalog({
+    entry: dict[str, Any] = {
         "type": dataset_type, "name": name, "version": version,
         "source": source, "schema_version": schema_version,
         "stats": stats or {}, "path": path, "notes": notes,
-    })
+    }
+    if capabilities is not None:
+        entry["capabilities"] = normalize_capabilities(capabilities)
+    return await repo.upsert_dataset_catalog(entry)
 
 
 async def resolve_dataset_ref(repo: Any, ref: str) -> dict:

@@ -905,10 +905,11 @@ class SqlAlchemyRepository(Repository):
                 row = DatasetCatalogRow(id=new_id())
                 session.add(row)
             for key in ("type", "name", "version", "source", "schema_version",
-                        "stats", "path", "notes"):
+                        "stats", "capabilities", "path", "notes"):
                 if key in entry and entry[key] is not None:
-                    setattr(row, key, _json_safe(entry[key]) if key == "stats"
-                            else entry[key])
+                    setattr(row, key,
+                            _json_safe(entry[key])
+                            if key in ("stats", "capabilities") else entry[key])
             await session.commit()
             return await self.get_dataset_catalog(str(row.id))
 
@@ -951,6 +952,7 @@ class SqlAlchemyRepository(Repository):
             "id": str(row.id), "type": row.type, "name": row.name,
             "version": row.version, "source": row.source,
             "schema_version": row.schema_version, "stats": row.stats,
+            "capabilities": row.capabilities or [],
             "path": row.path, "notes": row.notes,
             "created_at": aware(row.created_at).isoformat(),
             "updated_at": aware(row.updated_at).isoformat(),

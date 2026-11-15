@@ -23,6 +23,8 @@ _PENDING_COLUMNS: list[tuple[str, sa.Column]] = [
     ("accuracy_task", sa.Column("history", sa.JSON(), nullable=True)),
     ("perf_task", sa.Column("history", sa.JSON(), nullable=True)),
     ("reliability_task", sa.Column("history", sa.JSON(), nullable=True)),
+    # 数据集目录能力维度（2026-11-15 目录筛选：来源细分自建/开源 + 能力画像）
+    ("dataset_catalog", sa.Column("capabilities", sa.JSON(), nullable=True)),
 ]
 
 

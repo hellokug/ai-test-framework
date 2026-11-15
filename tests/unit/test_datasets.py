@@ -151,3 +151,23 @@ class TestCompatAdapters:
         assert fragment["datasets"][0]["id"] == "ceval/ceval-exam"
         assert fragment["datasets"][0]["kwargs"]["name"] == "account"
         assert fragment["metrics"][0]["choice_accuracy"] == {}
+
+
+def test_online_benchmarks_capabilities_enriched(monkeypatch):
+    """基准全集列举时富化能力维度（evalscope tags → 平台画像，缓存一次）。"""
+    from aite.service import dataset_files
+
+    class _FakeAdapter:
+        @staticmethod
+        def list_tasks():
+            return [{"name": "gsm8k", "tags": ["Math", "MCQ"]},
+                    {"name": "weird", "tags": ["Chinese"]}]
+
+    monkeypatch.setattr("aite.tools.get_tool", lambda engine: _FakeAdapter())
+    dataset_files.reset_online_cache()
+    try:
+        out = dataset_files.online_benchmarks("evalscope")
+    finally:
+        dataset_files.reset_online_cache()
+    caps = {i["name"]: i["capabilities"] for i in out["items"]}
+    assert caps["gsm8k"] == ["math"] and caps["weird"] == []

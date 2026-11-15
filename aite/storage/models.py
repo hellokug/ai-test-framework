@@ -284,6 +284,7 @@ class DatasetCatalogRow(Base):
     source: Mapped[str] = mapped_column(sa.String(32), default="local")
     schema_version: Mapped[str] = mapped_column(sa.String(16), default="1")
     stats: Mapped[dict] = mapped_column(sa.JSON(), default=dict)
+    capabilities: Mapped[list] = mapped_column(sa.JSON(), default=list)
     path: Mapped[str] = mapped_column(sa.String(512))
     notes: Mapped[str] = mapped_column(sa.Text(), default="")
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)

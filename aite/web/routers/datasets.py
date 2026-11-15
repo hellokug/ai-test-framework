@@ -43,6 +43,7 @@ class DatasetUploadIn(BaseModel):
     content: str          # 数据集文件文本（jsonl/json/csv 均为文本格式）
     notes: str = ""
     force: bool = False
+    capabilities: list[str] | None = None  # 能力维度（accuracy/perf 适用）
 
 
 class HfImportIn(BaseModel):
@@ -55,6 +56,7 @@ class HfImportIn(BaseModel):
     seed: int = 42
     fields: Any = None    # dict 或 "input=question,expected=answer" 形式
     notes: str = ""
+    capabilities: list[str] | None = None  # 能力维度（基准库「选用」自动预填）
 
 
 class RemoteImportIn(BaseModel):
@@ -63,6 +65,7 @@ class RemoteImportIn(BaseModel):
     url: str = ""         # 缺省用设置里的 remote_url；结尾带 / 按 <地址>/<name>.jsonl 拼接
     notes: str = ""
     force: bool = False
+    capabilities: list[str] | None = None  # 能力维度（accuracy/perf 适用）
 
 
 @router.get("/datasets")
@@ -133,7 +136,7 @@ async def upload_dataset(body: DatasetUploadIn, state: Any = Depends(get_state))
         return await dataset_files.upload_dataset(
             state.repo, dataset_type=body.type, name=body.name,
             filename=body.filename, content=body.content, notes=body.notes,
-            force=body.force)
+            force=body.force, capabilities=body.capabilities)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -145,7 +148,8 @@ async def hf_import(body: HfImportIn, state: Any = Depends(get_state)):
         return await dataset_files.hf_import(
             state.repo, hf_id=body.hf_id, name=body.name,
             dataset_type=body.type, split=body.split, subset=body.subset,
-            n=body.n, seed=body.seed, fields=body.fields, notes=body.notes)
+            n=body.n, seed=body.seed, fields=body.fields, notes=body.notes,
+            capabilities=body.capabilities)
     except RuntimeError as exc:          # datasets 库未安装
         raise HTTPException(400, str(exc)) from exc
     except ValueError as exc:            # 字段映射/记录形状问题
@@ -160,7 +164,8 @@ async def remote_import(body: RemoteImportIn, state: Any = Depends(get_state)):
     try:
         return await dataset_files.remote_import(
             state.repo, dataset_type=body.type, name=body.name, url=body.url,
-            notes=body.notes, force=body.force)
+            notes=body.notes, force=body.force,
+            capabilities=body.capabilities)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except httpx.HTTPError as exc:
