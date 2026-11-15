@@ -11,5 +11,4 @@ docs/efficiency-log.md / HANDOVER，本文件只留活跃租约。同一域同�
 
 ## 在认领
 
-- 2026-11-15 23:3x｜性能爬坡模式纠偏（owner 指正三点：①时长二选一不双开 ②档位 min/max/跨度自动生成不手写数组 ③ramp/rate 支持 SLA 逐档熔断自动停止+报告最大合规并发/QPS）——**后端立即动工**（perf_common 梯度展开+SLA 校验、perf_adapter 逐档执行+sla 结论、locust 显式拒 sla、单测补齐）；**前端 perf2.html/api-perf.js 与 23:22 撞域，排队等释放后动**｜aite/tools/{perf_common.py,perf_adapter.py,locust_adapter.py}, tests/{unit/test_perf_adapter.py,integration/test_perfdata_api.py}（前端待 23:22 释放）｜预计释放 本会话收尾
 - 2026-11-15 23:59｜性能语料池选不了 ShareGPT 纠偏（owner 指正；根因：add_hf convert_records 只认扁平输入键，ShareGPT 纯对话记录整条被丢——fields=None 导入即 422「no usable records」；顺带真实导入一份 ShareGPT 语料进平台）｜aite/datasets/add_hf.py, tests/unit/test_add_hf.py｜预计释放 本会话收尾

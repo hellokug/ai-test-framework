@@ -90,8 +90,40 @@ function papiModeLabel(spec) {
   const mode = p.mode || (p.rate != null ? "QPS 开环" : "直配");
   const grad = Array.isArray(p.parallel) ? `u${p.parallel.join("→u")}`
     : p.parallel != null ? `u${p.parallel}`
+    : papiGradText(p) !== "—" ? papiGradText(p)
     : Array.isArray(p.rate) ? `q${p.rate.join("→q")}` : p.rate != null ? `q${p.rate}` : "";
   return grad ? `${mode} ${grad}` : mode;
+}
+
+/* ramp/rate 对象梯度（{from,to,step}）→「u1→16 每档+5」式展示；无则 "—" */
+function papiGradText(p) {
+  const g = g => g && typeof g === "object" && g.from != null
+    ? `${g.from}→${g.to} 每档+${g.step}` : null;
+  if (Array.isArray(p?.parallel)) return p.parallel.join("→");
+  if (p?.parallel != null) return String(p.parallel);
+  if (g(p?.ramp)) return `u${g(p.ramp)}`;
+  if (g(p?.rate)) return `q${g(p.rate)}`;
+  if (Array.isArray(p?.rate)) return p.rate.join("→");
+  if (p?.rate != null) return String(p.rate);
+  return "—";
+}
+
+/* SLA 判据 {指标:阈值} →「ttft_p95_ms≤3000 & qps≥10」（方向按指标族，
+   与后端 LOWER_IS_BETTER 同口径：ms 族与 error_rate 越低越好，其余越高越好） */
+function papiSlaPairs(metrics) {
+  return Object.entries(metrics || {}).map(([k, v]) =>
+    `${k}${/ms$|^error_rate$/.test(k) ? "≤" : "≥"}${v}`).join(" & ");
+}
+
+/* SLA 爬坡结论（perf.sla / timeseries.sla）→ 详情卡副标题文案 */
+function papiSlaVerdictText(s) {
+  const axis = s.axis === "rate" ? "QPS" : "并发";
+  if (s.verdict === "violated")
+    return `档 ${s.violated_label} 首次违反 SLA（${s.violated_metric}=${s.observed?.[s.violated_metric] ?? "?"}）即停止爬坡——最大合规${axis}取自最后通过的档`;
+  if (s.verdict === "all_passed")
+    return `全部 ${(s.values || []).length} 档均满足 SLA（已达配置上界）——最大合规${axis} = 末档`;
+  const why = { stop: "人工停止", force: "强制停止", timeout: "预算耗尽" }[s.halt_reason] || "中断";
+  return `爬坡未跑满即${why}——最大合规${axis}取自最后完成的合规档`;
 }
 
 function papiTargetLabel(spec) {
@@ -287,13 +319,20 @@ function papiFillSpec(t) {
     papiSetModeField(/^QPS/, p.rate ?? "");
     papiSetModeField(/^duration 总时长/, p.duration ?? "");
   } else if (mode === "ramp") {
-    const r = p.ramp || {};
-    const levels = [];
-    if (r.from != null && r.to != null && r.step > 0)
-      for (let v = r.from; v <= r.to && levels.length < 64; v += r.step) levels.push(v);
-    papiSetModeField(/^并发梯度/, levels.join(", "));
-    papiSetModeField(/^level_duration/, p.level_duration ?? "");
-    papiSetModeField(/^duration 总时长/, p.duration ?? "");
+    // ramp/rate 对象梯度 + sla 回填（与 papiCollectSpec ramp 分支互为镜像）：
+    // 压力维度按载体判（ramp=并发 / rate 对象=QPS），重渲换档标签后再填值
+    const carrier = p.rate && typeof p.rate === "object" ? p.rate : p.ramp || {};
+    PERF_RAMP_AXIS = p.rate && typeof p.rate === "object" ? "rate" : "parallel";
+    renderPerfParams();
+    const qps = PERF_RAMP_AXIS === "rate";
+    papiSetModeField(qps ? /^最小QPS/ : /^最小并发/, carrier.from ?? "");
+    papiSetModeField(qps ? /^最大QPS/ : /^最大并发/, carrier.to ?? "");
+    papiSetModeField(/^每档跨度/, carrier.step ?? "");
+    const sla = Object.entries(carrier.sla || {})[0] || [];
+    papiSetModeField(/^SLA 指标/, sla[0] ?? "");
+    papiSetModeField(/^SLA 阈值/, sla[1] ?? "");
+    papiSetModeField(/^每档时长/, p.level_duration ?? "");
+    if (p.duration != null) papiSetModeField(/^每档时长/, p.duration);   // 旧 spec 兜底
   } else if (mode === "probe") {
     const sla = Object.entries(p.probe?.sla || {})[0] || [];
     papiSetModeField(/^SLA 指标/, sla[0] ?? "");
@@ -434,10 +473,12 @@ async function showPerfTask(taskId, opts = {}) {
   const reports = run?.details?.reports || result?.result?.reports || {};
   // 停止截断标记（强制停止/立即停止收口，未返回请求不计入统计的口径提示）
   const stopInfo = run?.details?.perf?._stop || ts?.stop || null;
+  // SLA 爬坡结论（逐档熔断收口，报告最大合规并发/QPS）
+  const slaInfo = run?.details?.perf?.sla || ts?.sla || null;
 
   /* 轮询刷新：数据签名没变就整轮跳过重绘（骨架与图表原地不动，「已运行」时长由全局轮询维护 #perfElapsed） */
   const sig = JSON.stringify([t.status, eff, runId, run?.status ?? null, runError, reports, summaries,
-    ts ? ts.combined?.length ?? -1 : -1, stopInfo]);
+    ts ? ts.combined?.length ?? -1 : -1, stopInfo, slaInfo]);
   if (poll && sig === showPerfTask.lastSig) { papiRearmDetail(seq, taskId); return; }
   showPerfTask.lastSig = sig;
   detail.innerHTML = `
@@ -466,6 +507,19 @@ async function showPerfTask(taskId, opts = {}) {
           : "在途请求已取消——未返回的请求不计入以下统计（已完成请求正常计入）"}</div></div>
         ${stopInfo.force_stop_minutes != null ? `<span class="tag mono">创建配置 ${stopInfo.force_stop_minutes} 分钟自动强停</span>` : ""}</div>
       ${stopInfo.reason ? `<pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${papiEsc(stopInfo.reason)}</pre>` : ""}</section>` : ""}
+    ${slaInfo ? `<section class="card" style="margin-bottom:14px${slaInfo.verdict === "violated" ? ";border-color:color-mix(in srgb,var(--warn) 45%,transparent)" : ""}">
+      <div class="card-head"><div><h3${slaInfo.verdict === "violated" ? ' style="color:var(--warn)"' : ""}>SLA 爬坡结论</h3>
+        <div class="sub">${papiEsc(papiSlaVerdictText(slaInfo))}</div></div>
+        <span class="tag mono">${papiEsc(papiSlaPairs(slaInfo.metrics) || "—")}</span></div>
+      <div class="mini-stats">
+        <div class="mstat"><b>${slaInfo.max_compliant ?? "—"}${slaInfo.axis === "rate" ? " req/s" : " 并发"}</b>
+          <span>最大合规${slaInfo.axis === "rate" ? "QPS" : "并发"}${slaInfo.max_compliant_label ? `（${papiEsc(slaInfo.max_compliant_label)}）` : ""}</span></div>
+        ${slaInfo.violated_label ? `<div class="mstat bad"><b>${papiEsc(slaInfo.violated_label)}</b>
+          <span>违反档（${papiEsc(slaInfo.violated_metric || "")}=${slaInfo.observed?.[slaInfo.violated_metric] ?? "?"}）</span></div>` : ""}
+        <div class="mstat"><b>${(slaInfo.levels_run || []).length}/${(slaInfo.values || []).length || "?"}</b><span>已执行档位</span></div>
+        <div class="mstat"><b>${papiEsc((slaInfo.values || []).join("→") || "—")}</b>
+          <span>计划梯度（${slaInfo.axis === "rate" ? "QPS" : "并发"}）</span></div>
+      </div></section>` : ""}
     <section class="card" style="margin-bottom:14px">
       <div class="card-head"><div><h3>${running ? "执行状态" : "结果概览"}</h3>
         <div class="sub">${running
@@ -476,9 +530,9 @@ async function showPerfTask(taskId, opts = {}) {
         <div class="mstat"><b id="perfElapsed">${papiRowDuration(t)}</b><span>已运行</span></div>
         <div class="mstat"><b>${papiEsc(p.duration != null ? `${p.duration}s 预算`
           : p.level_duration != null ? `${p.level_duration}s/档` : "时长未设")}</b><span>时长口径</span></div>
-        <div class="mstat ac"><b>${papiEsc(Object.keys(p.probe?.sla || {}).length
-          ? Object.entries(p.probe.sla).map(([k, v]) => `${k}≤${v}`).join(" & ") : "无 SLA")}</b><span>probe 判据</span></div>
-        <div class="mstat"><b>${papiEsc(Array.isArray(p.parallel) ? p.parallel.join("→") : p.parallel ?? (p.rate ?? "—"))}</b><span>并发 / QPS 梯度</span></div>
+        <div class="mstat ac"><b>${papiEsc(papiSlaPairs(p.probe?.sla || p.ramp?.sla
+          || (p.rate && p.rate.sla) || {}) || "无 SLA")}</b><span>SLA 判据</span></div>
+        <div class="mstat"><b>${papiEsc(papiGradText(p))}</b><span>并发 / QPS 梯度</span></div>
       </div>` : `<div class="mini-stats">
         <div class="mstat"><b>${papiNum(byMetric("qps")?.value ?? overall?.count)}</b><span>${byMetric("qps") ? "QPS" : "总请求数"}</span></div>
         <div class="mstat"><b>${papiNum(byMetric("ttft_p95_ms")?.value ?? byMetric("ttft_ms")?.value)}</b><span>TTFT p95/avg（ms）</span></div>
@@ -840,9 +894,12 @@ function papiTargetOf(selectValue, paneId) {
 /* spec 组装（键位契约 = perf_common.resolve_* + perf_adapter._assemble_args）：
    负载 = perf.dataset（平台数据集）| perf.synthetic{count,prompt_length}（固定
    输入输出的临时数据集，输出长度另配 max_tokens 定长）二选一；mode
-   baseline{parallel}/ramp{from,to,step}/probe{sla,max_parallel,from,runs}/
-   soak{parallel}；rate 开环与 mode/parallel 互斥；duration|level_duration
-   二选一；locust 必配时长；引擎附加 warmup_num / spawn_rate / arrival / jitter。
+   baseline{parallel}/ramp{from,to,step,sla?}/probe{sla,max_parallel,from,runs}/
+   soak{parallel}；rate 开环与 mode/parallel 互斥（标量=单档 | {from,to,step,sla?}
+   =QPS 爬坡自动展开）；ramp.sla / rate.sla（{指标:阈值}）→ 后端逐档熔断自动
+   停止并报告最大合规并发/QPS；表单时长只开放 level_duration（ramp）与 duration
+   （baseline/soak/probe）各一入口，不双开；locust 必配时长；引擎附加
+   warmup_num / spawn_rate / arrival / jitter。
    生成/采样参数显式填写才透传：temperature/top_p/top_k/min_tokens/seed/stop/
    frequency_penalty/repetition_penalty/query_template/apply_chat_template/
    tokenizer_path。max_tokens 优先级：任务显式 > 数据集 meta.output_tokens
@@ -956,22 +1013,30 @@ function papiCollectSpec() {
     const dur = papiNumIn(papiFieldVal(/^duration 总时长/), "duration", { min: 1 });
     if (dur !== undefined) perf.duration = dur;
   } else if (mode === "ramp") {
-    const raw = papiFieldVal(/^并发梯度/);
-    const levels = (raw || "").split(/[,，\s]+/).filter(Boolean).map(Number);
-    if (!levels.length || levels.some(v => !Number.isInteger(v) || v < 1))
-      throw new Error(`并发梯度不合法：${raw}（须为 ≥1 整数逗号序列）`);
-    if (levels.length > 1) {
-      const step = levels[1] - levels[0];
-      if (levels.some((v, i) => i > 0 && v - levels[i - 1] !== step) || step < 1)
-        throw new Error("并发梯度须等差（ramp from/to/step 语义）；非等差请分多次任务或改直配");
-      perf.ramp = { from: levels[0], to: levels[levels.length - 1], step };
-    } else {
-      throw new Error("并发梯度至少两档（单档请用 baseline）");
-    }
-    const per = papiNumIn(papiFieldVal(/^level_duration/), "level_duration", { min: 1 });
+    // ramp {from,to,step[,sla]}：最小/最大/跨度三值自动展开档位（不手写数组）；
+    // 压力维度 QPS → rate 对象（开环，evalscope-perf 专属）；SLA 配置 → 后端
+    // 逐档熔断（首次违反即停 + 最大合规并发/QPS）。时长只开放每档时长
+    // （总时长 = 档数 × 每档自动推导——二选一语义不再双开输入）
+    const qps = papiFieldVal(/^压力维度/) === "rate";
+    if (qps && engine === "locust") throw new Error("QPS 开环爬坡仅 evalscope-perf 引擎支持（locust 请用并发维度）");
+    const numOpt = qps ? { int: false, min: 0, exclusive: true } : { int: true, min: 1 };
+    const unit = qps ? "QPS" : "并发";
+    const from = papiNumIn(papiFieldVal(qps ? /^最小QPS/ : /^最小并发/), `ramp.from（最小${unit}）`, numOpt);
+    const to = papiNumIn(papiFieldVal(qps ? /^最大QPS/ : /^最大并发/), `ramp.to（最大${unit}）`, numOpt);
+    const step = papiNumIn(papiFieldVal(/^每档跨度/), "ramp.step（每档跨度）", numOpt);
+    if (from === undefined || to === undefined || step === undefined)
+      throw new Error(`ramp 需要 最小${unit} / 最大${unit} / 每档跨度 三项（档位自动展开）`);
+    if (to < from) throw new Error(`ramp 最大${unit}（to）须 ≥ 最小值（from）`);
+    const grad = { from, to, step };
+    const slaMetric = papiFieldVal(/^SLA 指标/);
+    const slaThr = papiNumIn(papiFieldVal(/^SLA 阈值/), "SLA 阈值", { int: false, min: 0, exclusive: true });
+    if (slaMetric && slaThr !== undefined) grad.sla = { [slaMetric]: slaThr };
+    else if (slaMetric || slaThr !== undefined)
+      throw new Error("SLA 判据需要 指标 与 阈值 成对填写（不配请留空跑满全部档）");
+    if (qps) perf.rate = grad;
+    else perf.ramp = grad;
+    const per = papiNumIn(papiFieldVal(/^每档时长/), "level_duration", { min: 1 });
     if (per !== undefined) perf.level_duration = per;
-    const dur = papiNumIn(papiFieldVal(/^duration 总时长/), "duration", { min: 1 });
-    if (dur !== undefined) perf.duration = dur;
   } else if (mode === "probe") {
     const metric = papiFieldVal(/^SLA 指标/);
     const slaVal = papiNumIn(papiFieldVal(/^SLA 上限/), "SLA 上限", { int: false, min: 0, exclusive: true });

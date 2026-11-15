@@ -1457,3 +1457,34 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
   非表单引擎的旧 spec（如 engine=pytest 的 CLI/测试任务）打开抽屉引擎卡无命中、回退
   evalscope-perf 显示，保存会采纳表单引擎值。门禁 node --check + mockup_symbols --check 过；
   无 Python 改动。perf2 bump api-perf ?v=8。
+
+## 2026-11-15（性能爬坡模式纠偏：min/max/跨度自动展开 + SLA 逐档熔断，api-perf v9）
+
+- owner 指正三点：①ramp 阶段时长与总时长二选一语义下表单不应双开；②档位应给最小/最大/每档
+  跨度自动展开，不该让用户手写 "1,2,3,4,5,5,6,7,8" 数组；③爬坡要支持给定 SLA（如 TTFT<3s），
+  达限自动停止并报告最大合规并发/QPS。后端先行一提交（84a8428，perf 域与 23:22 编辑能力会话
+  撞域排队后前端续做）。
+- 后端：perf_common 增 expand_gradient（ramp/rate 统一 {from,to,step[,sla]} 展开、to 必含、
+  未知键拒绝防拼写漂移）+ LEVEL_SLA_METRICS 白名单 + resolve_sla/sla_verdict（方向复用
+  LOWER_IS_BETTER）；perf_adapter build_config 配 sla 时产出逐档执行计划（每档单值梯度独立
+  拼参，档产出目录与 sweep 同布局 collect 不分叉），_exec_gated 每档独立子进程 supervise +
+  档间闸门（立即停止/强制停止/整场预算即时生效不再升档）+ 每档收口即读 summary/db 判定，
+  首次违反即停；结论 sla（verdict=violated/all_passed/stopped + max_compliant 最大合规值 +
+  violated_label/metric/observed）双落 result.perf 与 timeseries.sla；不配 sla 行为完全不变
+  （单进程 sweep）。rate 支持对象梯度（等价 ramp 的 QPS 版）；ramp.sla 与 mode=probe 互斥；
+  locust 显式拒 sla。TestSlaRamp 十项 + 集成 sla spec fail-fast（test_domain_tasks_api）。
+- 前端（api-perf v9）：PERF_MODE_PARAMS.ramp 改动态构建 rampModeFields（perf2.html）——压力
+  维度 select 切并发闭环/QPS 开环（PERF_RAMP_AXIS，change 委托重渲换标签），三输入
+  最小/最大/每档跨度，时长只剩每档时长一个入口（总时长自动推导不再开放输入），SLA 指标
+  select（档级指标键为 option value）+ 阈值成对校验；#perfRampPreview 输入即算档位序列预览
+  （「将展开 4 档：1 → 6 → 11 → 16」）。papiCollectSpec ramp 分支重写（与后端 expand_gradient
+  契约对齐：并发→perf.ramp、QPS→perf.rate 对象、locust+QPS 显式报错）；papiFillSpec ramp
+  分支镜像重写（编辑回填按载体判维度）；papiModeLabel/papiGradText 支持 {from,to,step} 展示；
+  详情页增 SLA 爬坡结论卡（数据源 run.details.perf.sla || ts.sla，最大合规并发/QPS 大字 +
+  违反档观测值 + 已执行档位计数 + 计划梯度），运行中 mini-stats SLA 判据/梯度显示统一三载体
+  （probe/ramp/rate）。preset 卡文案同步。
+- IAB 验证（私有端口 8311/8777 隔离实例）：live 下 ramp 表单渲染（时长单入口 ✔）、并发维度
+  采集 spec.perf.ramp={from,to,step,sla} 且无 duration 键 ✔、档位预览 ✔、QPS 维度标签切换 +
+  perf.rate 对象含 qps≥ 下限 SLA ✔、创建任务落库 ✔、编辑入口回填（维度/三值/时长/SLA 全命中）✔。
+  已知边界：SLA 结论卡需真实 SLA run 数据才能浏览器验证（collect 双落已单测覆盖），owner 首次
+  跑 SLA 爬坡任务时目检即可。门禁 mockup_symbols --check 过；perf2 bump api-perf ?v=9。

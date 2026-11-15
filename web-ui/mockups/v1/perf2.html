@@ -409,16 +409,67 @@ document.getElementById("dsTbl").innerHTML = `
     <button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
 
 /* ---------- 压力参数：随引擎与压测模式联动渲染 ---------- */
+/* ramp 表单动态构建（owner 2026-11-15 指正）：档位不再手写逗号数组——给
+   最小/最大/跨度三值自动展开（PERF_RAMP_AXIS 切并发闭环 / QPS 开环）；
+   时长只开放每档时长（总时长 = 档数 × 每档自动推导，二选一语义不双开）；
+   SLA 可选：配置后逐档熔断、首次违反即停并报告最大合规并发/QPS。 */
+let PERF_RAMP_AXIS = "parallel";
+const PERF_RAMP_SLA_OPTIONS = [
+  ["", "无 SLA（跑满全部档）"], ["ttft_ms", "ttft_avg ≤ 上限（ms）"],
+  ["ttft_p95_ms", "ttft_p95 ≤ 上限（ms）"], ["ttft_p99_ms", "ttft_p99 ≤ 上限（ms）"],
+  ["latency_avg_ms", "latency_avg ≤ 上限（ms）"], ["latency_p95_ms", "latency_p95 ≤ 上限（ms）"],
+  ["tpot_p95_ms", "tpot_p95 ≤ 上限（ms）"], ["error_rate", "error_rate ≤ 上限"],
+  ["qps", "qps ≥ 下限（req/s）"], ["output_tps", "output_tps ≥ 下限（tok/s）"],
+];
+function rampModeFields() {
+  const qps = PERF_RAMP_AXIS === "rate";
+  const unit = qps ? "QPS" : "并发";
+  const sel = (v) => `<option value="${v[0]}"${v[0] === (qps ? "rate" : "parallel") ? " selected" : ""}>${v[1]}</option>`;
+  return [
+    { label: "压力维度", el: `<select class="in" id="perfRampAxis">`
+      + [["parallel", "并发（闭环 parallel）"], ["rate", "QPS（开环 rate）"]].map(sel).join("")
+      + `</select>`, tip: "并发=闭环梯度逐档升压；QPS=开环泊松到达逐档升压（仅 evalscope-perf，locust 不支持）" },
+    { label: `最小${unit} from`, el: `<input class="in" placeholder="${qps ? "如 1.0" : "如 1"}（爬坡起点）">` },
+    { label: `最大${unit} to`, el: `<input class="in" placeholder="${qps ? "如 8.0" : "如 16"}（爬坡终点，必含）">` },
+    { label: "每档跨度 step", el: `<input class="in" placeholder="${qps ? "如 1.0" : "如 5"}（每档增量）">` },
+    { label: "每档时长 level_duration（秒）", el: '<input class="in" placeholder="如 60">', tip: "唯一时长入口：总时长 = 档数 × 每档时长（自动推导，不再开放总时长输入）" },
+    { label: "SLA 指标（可选 · 自动停止）", el: `<select class="in" id="perfRampSlaMetric">`
+      + PERF_RAMP_SLA_OPTIONS.map(v => `<option value="${v[0]}">${v[1]}</option>`).join("")
+      + `</select>`, tip: "配置后逐档执行、每档收口判定：首次违反即停（不再升档），结果报告最大合规并发/QPS" },
+    { label: "SLA 阈值", el: '<input class="in" placeholder="如 3000（与所选指标同单位）">' },
+    { preview: true },
+  ];
+}
+function perfRampPreview() {
+  const box = document.getElementById("perfRampPreview");
+  if (!box) return;
+  const qps = PERF_RAMP_AXIS === "rate";
+  const get = re => {
+    const f = [...document.querySelectorAll("#perfParams > .field")]
+      .find(el => re.test(el.querySelector("label")?.textContent || ""));
+    return f?.querySelector("input.in")?.value.trim() || "";
+  };
+  const from = Number(get(qps ? /^最小QPS/ : /^最小并发/));
+  const to = Number(get(qps ? /^最大QPS/ : /^最大并发/));
+  const step = Number(get(/^每档跨度/));
+  if (!(from > 0) || !(to >= from) || !(step > 0)) {
+    box.textContent = "填最小 / 最大 / 每档跨度后，此处预览将展开的档位序列";
+    return;
+  }
+  const levels = [];
+  for (let i = 0; i <= 64; i++) {
+    const v = from + i * step;
+    if (v > to + 1e-9) break;
+    levels.push(qps ? Math.round(v * 100) / 100 : Math.round(v));
+  }
+  box.textContent = `将展开 ${levels.length} 档：${levels.slice(0, 12).join(" → ")}`
+    + `${levels.length > 12 ? " → …" : ""}（终点 ${to} 必含）`;
+}
 const PERF_MODE_PARAMS = {
   baseline: [
     { label: "并发数 parallel", el: '<input class="in" placeholder="如 8（固定并发）">', tip: "固定并发基准；如需逐档爬坡请改用 ramp 模式" },
     { label: "duration 总时长（秒）", el: '<input class="in" placeholder="如 180">' },
     { label: "QPS（可选 · 开环 rate）", el: '<input class="in" placeholder="留空 = 并发模式">', tip: "配置 QPS 后按开环速率施压，此时忽略并发数" },
-  ],
-  ramp: [
-    { label: "并发梯度 parallel", el: '<input class="in" value="4, 8, 16">', tip: "逗号数组逐档爬坡（from → to 每 step 一档）" },
-    { label: "level_duration 每档时长（秒）", el: '<input class="in" placeholder="如 60；与 duration 二选一">' },
-    { label: "duration 总时长（秒）", el: '<input class="in" placeholder="可选；到时提前结束">' },
   ],
   probe: [
     { label: "SLA 指标", el: '<select class="in"><option>ttft_p95</option><option>latency_avg</option><option>error_rate</option></select>' },
@@ -454,12 +505,27 @@ function renderPerfParams() {
     document.querySelector('#newTaskDrawer .radio-card[data-m="baseline"]').classList.add("on");
     mode = "baseline";
   }
-  const fields = [...(PERF_MODE_PARAMS[mode] || []), ...(PERF_ENGINE_PARAMS[engine] || [])];
-  document.getElementById("perfParams").innerHTML = fields.map(f => `
-    <div class="field"><label>${f.label}${f.tip ? `<span class="qmark">?<span class="tip">${f.tip}</span></span>` : ""}</label>${f.el}</div>`).join("");
+  const fields = [...(mode === "ramp" ? rampModeFields() : PERF_MODE_PARAMS[mode] || []),
+    ...(PERF_ENGINE_PARAMS[engine] || [])];
+  document.getElementById("perfParams").innerHTML = fields.map(f => f.preview
+    ? '<div class="hint" id="perfRampPreview" style="margin-top:-4px"></div>'
+    : `<div class="field"><label>${f.label}${f.tip ? `<span class="qmark">?<span class="tip">${f.tip}</span></span>` : ""}</label>${f.el}</div>`).join("");
+  perfRampPreview();
 }
 document.querySelectorAll('#newTaskDrawer .radio-card[data-e],#newTaskDrawer .radio-card[data-m]').forEach(c =>
   c.addEventListener("click", () => setTimeout(renderPerfParams, 0)));
+// ramp 压力维度切换（重渲换档标签）与档位预览（输入即算）——委托绑定一次
+const perfParamsBox = document.getElementById("perfParams");
+if (perfParamsBox && !perfParamsBox.dataset.rampBound) {
+  perfParamsBox.dataset.rampBound = "1";
+  perfParamsBox.addEventListener("change", e => {
+    if (e.target.id === "perfRampAxis") {
+      PERF_RAMP_AXIS = e.target.value;
+      renderPerfParams();
+    }
+  });
+  perfParamsBox.addEventListener("input", () => perfRampPreview());
+}
 renderPerfParams();
 bindModelCustom("perfModelSel", "perfModelCustom");
 bindModelCustom("perfScriptModelSel", "perfScriptModelCustom");
@@ -473,10 +539,10 @@ const PERF_SCRIPTS = [
       ["压力参数", "并发 parallel=8 · duration 180s · warmup 5"],
       ["最近执行", "09-22 19:44 · qwen2.5:3b · ttft_p95 142ms"]], last: "09-22 19:44", upd: "框架发布" },
   { id: "ramp-4-16", name: "并发爬坡 4→16", desc: "逐档爬坡找性能拐点", src: "preset",
-    sum: "evalscope-perf · ramp · 4/8/16 · 每档 60s",
-    snap: [["引擎 / 模式", "evalscope-perf · ramp（梯度爬坡）"],
+    sum: "evalscope-perf · ramp · 4→16 每档+4 · 每档 60s",
+    snap: [["引擎 / 模式", "evalscope-perf · ramp（min/max/跨度自动展开档位）"],
       ["负载", "平台数据集 rag-prefix-50"],
-      ["压力参数", "parallel 4,8,16 · level_duration 60s"],
+      ["压力参数", "并发 4→16 · 每档 +4 · level_duration 60s"],
       ["最近执行", "09-23 22:31 · DeepSeek-V3 · u16 档 ttft_p95 505ms（超阈）"]], last: "09-23 22:31", upd: "框架发布" },
   { id: "probe-sla", name: "SLA 摸高 ttft_p95 ≤ 500ms", desc: "二分探最高可行 QPS", src: "preset",
     sum: "evalscope-perf · probe · SLA ttft_p95≤500ms · QPS 上限 8",
@@ -536,6 +602,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=8"></script>
+<script src="api-perf.js?v=9"></script>
 </body>
 </html>
