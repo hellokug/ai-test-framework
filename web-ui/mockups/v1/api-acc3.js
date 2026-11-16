@@ -6,7 +6,9 @@
    = 数据集 + 条数，spec 详情懒加载）/创建抽屉（从脚本发起 + 自定义六卡 → suite
    raw 组装，保存为脚本须选场景）/数据集选择器（benchmarks 真目录）/模型下拉。
    契约 = docs/domain-backends.md §17。
-   趋势对比与人工评测页本轮保持演示数据（后端聚合缺口 V1-PLAN §8.6）。
+   版本质量对比（趋势页）live：/accuracy/tasks（列表与详情同构，含 spec/result/
+   history）终态任务取最新成功轮 run 指标摘要，按（数据集 × 模型 × 版本）聚合，
+   基线 = 该模型同数据集最早一次实测分；无真数据回退演示。人工评测保持演示数据。
    参数映射契约 = web-ui/TOOL-SUITE-PARAMS.md（表单控件 → suite raw 键位）。 */
 "use strict";
 const AAPI_INITIAL_HASH = location.hash || "";   // applyRoute 重写前捕获
@@ -1574,6 +1576,209 @@ async function accRenderCalDetail(t, taskId, seq) {
   }
 }
 
+/* ------------------------------------------------------------ 版本质量对比（趋势页 live） */
+/* 数据源 = /accuracy/tasks（列表与详情同构，含 spec/result/history）：终态成功
+   且 spec 带被测版本的任务取最新成功轮 run 指标摘要，按（数据集 × 模型 × 版本）
+   聚合。基线 = 该模型同数据集时间最早一次实测分（脚本固化配置跨版本才可比）；
+   同版本重跑取最新一次；无真数据回退静态演示。 */
+let ACC_TRENDS = null;         // 非空 = live 数据已接管趋势页
+let accTrendMode = "h";
+let accTrendDs = "";
+const accTrendModels = new Set();
+const ACC_TREND_PALETTE = ["#8b7cf6", "#22d3ee", "#f472b6", "#4ade80", "#fbbf24"];
+
+function accTrendRoundRunId(t) {
+  // 最新成功轮优先（重试/重跑每轮独立 run）；有历史无成功轮不入趋势；
+  // 旧数据无 history 回退 result 快照（run 挂了的旧行按失败排除，同列表口径）
+  const rounds = (t.history || []).filter(r => r.status === "succeeded" && r.run_id);
+  if (rounds.length) return rounds[rounds.length - 1].run_id;
+  if ((t.history || []).length) return null;
+  return t.result && t.result.status !== "error" && t.result.run_id
+    ? t.result.run_id : null;
+}
+
+async function wireAccTrends() {
+  const data = await AAPI.get("/accuracy/tasks");
+  const cand = (data.items || []).filter(t => t.status === "succeeded" &&
+    t.spec?.version && t.spec?.task_type !== "judge_calibration");
+  const byDs = {};   // ds → {metric, latest, models: {模型: {版本: {v, at}}}}
+  for (const t of cand) {
+    const runId = accTrendRoundRunId(t);
+    if (!runId) continue;
+    let run = null;
+    try { run = await AAPI.get(`/runs/${runId}`); } catch (e) { continue; }   // RISK: run 行暂不可见时该任务本轮静默缺席，下次刷新自愈
+    const model = t.spec.target?.profile || t.spec.target?.model || "-";
+    const at = t.finished_at || t.started_at || t.created_at || "";
+    const rows = (run.summaries || []).filter(s => s.dataset && s.value != null);
+    const put = (ds, metric, v) => {
+      const entry = byDs[ds] || (byDs[ds] = { metric, latest: "", models: {} });
+      if (at >= entry.latest) { entry.latest = at; entry.metric = metric; }
+      const mm = entry.models[model] || (entry.models[model] = {});
+      const cur = mm[t.spec.version];
+      if (!cur || at >= cur.at) mm[t.spec.version] = { v, at };   // RISK: 字符串时间比较，混入无时区尾缀的旧值时序可能偏差（ISO 同构时正确）
+    };
+    if (rows.length) rows.forEach(s => put(s.dataset, s.metric, s.value));
+    else {
+      // 无逐数据集摘要行回退 overall 行 / 旧版 overall_score（口径标注 (overall)）
+      const ov = (run.summaries || []).find(s => !s.dataset) || null;
+      const v = ov && ov.value != null ? ov.value
+        : (typeof run.overall_score === "number" ? run.overall_score : null);
+      if (v != null) put("(overall)", ov?.metric || "overall", v);
+    }
+  }
+  const dss = Object.keys(byDs);
+  if (!dss.length) return false;   // 无真数据 → 趋势页保持演示数据
+  ACC_TRENDS = {};
+  for (const ds of dss) {
+    const meta = byDs[ds];
+    const vAt = {};
+    for (const vers of Object.values(meta.models))
+      for (const [v, x] of Object.entries(vers))
+        if (!(v in vAt) || x.at < vAt[v]) vAt[v] = x.at;   // 版本轴按最早出现时间排
+    const axis = Object.keys(vAt).sort((a, b) => (vAt[a] < vAt[b] ? -1 : 1));
+    const models = {};
+    for (const [m, vers] of Object.entries(meta.models)) {
+      const scores = axis.map(v => vers[v] ? vers[v].v : null);   // 缺席版本断点
+      models[m] = { base: scores.find(x => x != null) ?? 0, scores };
+    }
+    ACC_TRENDS[ds] = { metric: meta.metric, axis, models };
+  }
+  accTrendTakeover();
+  return true;
+}
+
+function accTrendTakeover() {
+  const dss = Object.keys(ACC_TRENDS);
+  accTrendDs = dss[0];
+  // 静态演示监听绑死 TRENDS 假数据：cloneNode 换节点丢弃旧监听，重绑 live 数据源
+  const sel = document.getElementById("tDataset");
+  if (sel) {
+    const fresh = sel.cloneNode(false);
+    fresh.innerHTML = dss.map(d => `<option value="${escHtml(d)}">` +
+      `${escHtml(d)}（指标 ${escHtml(ACC_TRENDS[d].metric)}）</option>`).join("");   // RISK: innerHTML 注入数据集/指标名——均经 escHtml 转义
+    fresh.value = accTrendDs;
+    sel.replaceWith(fresh);
+    fresh.addEventListener("change", () => {
+      accTrendDs = fresh.value;
+      accTrendRender();
+    });
+  }
+  document.querySelectorAll("[data-tmode]").forEach(c => {
+    const fresh = c.cloneNode(true);
+    c.replaceWith(fresh);
+    fresh.addEventListener("click", () => {
+      document.querySelectorAll("[data-tmode]").forEach(x => x.classList.remove("on"));
+      fresh.classList.add("on");
+      accTrendMode = fresh.dataset.tmode;
+      accTrendRender();
+    });
+  });
+  window.chartVer = accTrendVerOption;   // autoCharts 经 window 取 builder，覆盖静态演示
+  accTrendRender();
+}
+
+function accTrendRender() {
+  const ds = ACC_TRENDS[accTrendDs];
+  const models = Object.keys(ds.models);
+  if (!models.some(m => accTrendModels.has(m))) {
+    accTrendModels.clear();
+    accTrendModels.add(models[0]);
+  }
+  if (accTrendMode === "h" && accTrendModels.size > 1) {   // 横向模式单模型
+    const keep = [...accTrendModels][0];
+    accTrendModels.clear();
+    accTrendModels.add(keep);
+  }
+  const act = models.filter(m => accTrendModels.has(m));
+  const box = document.getElementById("modelChips");
+  if (box) {
+    box.innerHTML = models.map(m => `<span class="chip ${accTrendModels.has(m) ? "on" : ""}" ` +
+      `data-m="${escHtml(m)}">${escHtml(m)}</span>`).join("");   // RISK: 模型名来自 spec，经 escHtml 转义
+    box.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+      const m = c.dataset.m;
+      if (accTrendMode === "h") { accTrendModels.clear(); accTrendModels.add(m); }
+      else if (accTrendModels.has(m) && accTrendModels.size > 1) accTrendModels.delete(m);
+      else accTrendModels.add(m);
+      accTrendRender();
+    }));
+  }
+  document.getElementById("verTitle").textContent =
+    accTrendMode === "h" ? `横向 · ${act[0]} × ${accTrendDs}` : `纵向 · ${act.length} 个模型 × ${accTrendDs}`;
+  document.getElementById("verSub").textContent =
+    `指标 ${ds.metric} · 版本 ${ds.axis.join(" → ")} · 虚线 = 基线（该模型最早一次实测分）`;
+  const rows = [];
+  for (const m of act) {
+    const mm = ds.models[m];
+    ds.axis.forEach((ver, k) => {
+      const v = mm.scores[k];
+      if (v != null) rows.push({ m, ver, v, base: mm.base, last: k === ds.axis.length - 1 });
+    });
+  }
+  document.getElementById("verdictTbl").innerHTML = `
+    <thead><tr><th>模型</th><th>版本</th><th>分数</th><th>基线</th><th>Δ</th><th>判定</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const d = (r.v - r.base) * 100, ok = d >= 0;
+      return `<tr style="${r.last ? "font-weight:650" : ""}">
+        <td class="mono" style="font-size:12px">${escHtml(r.m)}</td><td class="mono">${escHtml(r.ver)}</td>
+        <td class="num mono">${r.v.toFixed(3)}</td><td class="num mono dim">${r.base.toFixed(2)}</td>
+        <td class="num mono" style="color:${ok ? "var(--ok)" : "var(--bad)"}">${d >= 0 ? "+" : ""}${d.toFixed(1)}pp</td>
+        <td><span class="badge ${ok ? "passed" : "failed"}"><i></i>${ok ? "达标" : "劣化"}</span></td></tr>`;
+    }).join("") || '<tr><td colspan="6" class="ds-empty">该数据集暂无成功评测</td></tr>'}</tbody>`;
+  const degr = rows.filter(r => r.v < r.base);
+  document.getElementById("degrBox").innerHTML = degr.length
+    ? degr.map(r => `<div style="border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);border-radius:10px;padding:10px 14px">
+        <div class="mono" style="font-size:12.5px;color:var(--bad)">✕ ${escHtml(r.m)} · ${escHtml(r.ver)}</div>
+        <div class="dim" style="font-size:12.5px;margin-top:4px">分数 ${r.v.toFixed(3)} &lt; 基线 ${r.base.toFixed(2)}（▼ ${((r.base - r.v) * 100).toFixed(1)}pp）—— 建议阻断发布，回溯该版本变更</div></div>`).join("")
+    : `<div style="border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;padding:12px 14px;color:var(--ok);font-size:13px">✓ 当前筛选范围内无劣化 —— 全部版本 ≥ 基线</div>`;
+  autoCharts();   // 模型/模式/数据集变化时重建图表（window.chartVer 已指向 live builder）
+}
+
+function accTrendVerOption(t) {
+  const c = t.charts;
+  const ds = ACC_TRENDS[accTrendDs];
+  const models = Object.keys(ds.models).filter(m => accTrendModels.has(m));
+  const css = getComputedStyle(document.body);
+  const okC = css.getPropertyValue("--ok").trim() || "#4ade80";
+  const badC = css.getPropertyValue("--bad").trim() || "#fb7185";
+  const vals = models.flatMap(m => {
+    const mm = ds.models[m];
+    return [...mm.scores.filter(x => x != null), mm.base];
+  });
+  const lo = Number((Math.floor(Math.min(...vals) * 50) / 50 - 0.01).toFixed(2));
+  const hi = Number((Math.ceil(Math.max(...vals) * 50) / 50 + 0.02).toFixed(2));
+  const series = models.map((m, i) => {
+    const mm = ds.models[m], col = ACC_TREND_PALETTE[i % ACC_TREND_PALETTE.length];
+    return {
+      name: m, type: "line", smooth: false, symbol: "circle", symbolSize: 11,
+      data: mm.scores.map(v => v == null ? null : {
+        value: v,
+        itemStyle: { color: v < mm.base ? badC : okC, borderColor: col, borderWidth: 2 },
+        label: { show: v < mm.base, position: "bottom", distance: 8,
+          color: badC, fontSize: 11, fontWeight: 600,
+          formatter: `▼ 劣化 ${((mm.base - v) * 100).toFixed(1)}pp` },
+      }),
+      lineStyle: { width: 2.4, color: col },
+      itemStyle: { color: col },
+      markLine: { silent: true, symbol: "none",
+        lineStyle: { type: "dashed", color: col, opacity: 0.55, width: 1.4 },
+        label: { show: i === 0, position: "insideEndTop", color: c.axis, fontSize: 11,
+          formatter: `基线 ${mm.base.toFixed(2)}` },
+        data: [{ yAxis: mm.base }] },
+    };
+  });
+  return {
+    grid: { left: 8, right: 20, top: 30, bottom: 26, containLabel: true },
+    tooltip: { trigger: "axis", backgroundColor: c.tipBg, borderColor: c.tipBorder,
+      textStyle: { color: c.tipTx, fontSize: 12 },
+      valueFormatter: v => (v === null || v === undefined) ? "—" : (+v).toFixed(3) },
+    legend: { top: 0, textStyle: { color: c.axis, fontSize: 12 } },
+    xAxis: { type: "category", data: ds.axis, ...baseAxis(c), splitLine: { show: false },
+      axisLabel: { color: c.axis, fontWeight: 600 } },
+    yAxis: { type: "value", min: lo, max: hi, ...baseAxis(c), axisLabel: { color: c.axis } },
+    series,
+  };
+}
+
 async function aapiBoot() {
   let live = false;
   try {
@@ -1593,7 +1798,7 @@ async function aapiBoot() {
     ["任务列表", wireAccTasks], ["脚本库/评估场景", wireAccScripts],
     ["数据集目录", wireAccBenchmarks], ["模型下拉", wireAccModels],
     ["版本创建", wireAccVersions], ["rubric 资产", wireAccRubrics],
-    ["判官校准抽屉", wireAccCalibration],
+    ["判官校准抽屉", wireAccCalibration], ["版本质量对比", wireAccTrends],
   ];
   for (const [label, fn] of steps) {
     try {
@@ -1622,7 +1827,9 @@ async function aapiBoot() {
     const lastTask = fromHash || sessionStorage.getItem("aite-acc-last-task");
     if (lastTask) await showAccTask(lastTask);
   }
-  aapiToast("精度域已对接真实后端（任务/场景/脚本/数据集/模型真读写，脚本无预置）；趋势对比与人工评测暂为演示数据");
+  aapiToast(ACC_TRENDS
+    ? "精度域已对接真实后端（任务/场景/脚本/数据集/模型真读写）；版本质量对比 = 真实评测数据聚合，人工评测暂为演示数据"
+    : "精度域已对接真实后端（任务/场景/脚本/数据集/模型真读写，脚本无预置）；版本质量对比暂无真实评测数据（保持演示），人工评测演示数据");
 }
 
 // 启动收尾（含 MOCK 提前返回）在 <html data-api-ready> 落标记：自动化验证据此等待监听绑定完成

@@ -1551,6 +1551,10 @@ async function renderBoard(model, target, baseline) {
     { model: encodeURIComponent(model) })).items;
   const vers = [...all].sort((a, b) => (a.updated_at < b.updated_at ? -1 : 1));
   const dims = [...new Set(vers.flatMap(v => Object.keys(v.details?.dimensions || {})))];
+  // 雷达图与趋势/模型图同源（该模型全部归档）：轴 = 真实评估维度，一线一版本
+  if (dims.length) window.chartFtRadar = t => radarOption(t, dims,
+    vers.map(v => ({ name: v.version,
+      value: dims.map(d => ((v.details?.dimensions || {})[d] ?? 0) * 100) })));
   window.chartFtTrend = t => {
     const c = t.charts;
     return {

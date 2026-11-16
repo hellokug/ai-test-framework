@@ -1651,3 +1651,10 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   live2.js（别各域拷贝）：live2 v=3→4（accuracy2/functional2/common2）、
   api32 v=34→35（functional2/common2）、api-acc3 v=21→22（accuracy2）。
   性能域详情无执行历史卡（仅 run_id 引用），本轮未加；后端轮收口对其同样生效。
+- 版本质量对比接真数据：精度趋势页（api-acc3.js wireAccTrends）从 /accuracy/tasks
+  终态任务取最新成功轮 run 指标摘要，按（数据集 × 模型 × 版本）聚合——数据集
+  下拉/模型 chips/折线图（基线虚线 = 该模型最早一次实测分）/判定表/劣化检测全
+  live，静态演示监听经 cloneNode 换节点丢弃后重绑，无真数据回退演示；功能大屏
+  雷达图（api32.js renderBoard）与趋势/模型图同源真归档数据，轴 = 真实评估维度。
+  api-acc3 v=22→23（accuracy2）、api32 v=35→36（functional2/common2）。
+  人工评测页仍为演示数据（送评链路未建）。
