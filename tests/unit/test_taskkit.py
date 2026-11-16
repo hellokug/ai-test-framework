@@ -390,6 +390,22 @@ async def test_mark_stale_converges_midway_states(repo):
     assert (await kit.get(repo, stopping["id"]))["status"] == TASK_STALE
 
 
+async def test_mark_stale_closes_inflight_history_round(repo):
+    """重启中断：除任务级收敛 stale 外，在途执行历史轮也要收口（stale + finished_at）——
+    轮级起止时间只在终态收口写，漏了的话执行历史卡该轮永远「进行中」、无结束时间。"""
+    kit = make_kit(FakeExecutor())
+    task = await kit.create(repo, {"a": 1}, name="t")
+    await repo.update_domain_task(
+        PerfTaskRow, task["id"], status=TASK_RUNNING,
+        history=[{"n": 1, "trigger": "run", "spec": {"a": 1}, "status": TASK_RUNNING,
+                  "started_at": "2026-11-16T15:00:00"}])
+    await kit.mark_stale(repo)
+    last = (await kit.get(repo, task["id"]))["history"][-1]
+    assert last["status"] == TASK_STALE
+    assert last["finished_at"]                                # 重启时刻补收口
+    assert last["error"] == "server restarted before completion"
+
+
 # ------------------------------------------------------------- 条件更新（repo 层）
 async def test_update_expect_status_guards_race(repo):
     task = await repo.create_domain_task(PerfTaskRow, {"a": 1})

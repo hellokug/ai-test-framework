@@ -31,6 +31,26 @@ function fmtDur(s) {
     : s >= 60 ? `${Math.round(s / 60)} 分钟` : `${Math.round(s)} 秒`;
 }
 
+/* 执行历史轮级起止（四域任务 history 每轮留档 started_at/finished_at，UTC ISO）：
+   完整到秒的本地时间、紧凑起止段、轮耗时——functional/accuracy 执行历史卡共用 */
+function liveFullTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function roundDur(r) {
+  return r && r.started_at && r.finished_at
+    ? fmtDur((new Date(r.finished_at) - new Date(r.started_at)) / 1000) : null;
+}
+function roundSpan(a, b) {   // 同日 HH:MM→HH:MM；跨日 HH:MM→MM-DD HH:MM；未收口只显示开始
+  if (!a) return "—";
+  const s = shortTime(a), e = b ? shortTime(b) : "";
+  return !e ? s : s.slice(0, 5) === e.slice(0, 5)
+    ? `${s.slice(6)}→${e.slice(6)}` : `${s.slice(6)}→${e}`;
+}
+
 /* 在线数据集「本机已有/近似」徽章：common2 mock 渲染与 api32 live 渲染同款，实现只此一份 */
 function dsOnlineBadgeCell(b) {
   if (b.local) return `<span class="badge passed"><i></i>本机已有 · ${b.local}</span>`;

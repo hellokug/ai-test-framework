@@ -1638,3 +1638,16 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   取时刻的调用方不受影响；解析失败回退旧切片）。live2.js v=2→3（accuracy2/
   functional2/common2）、api32.js v=33→34（functional2/common2）、api-perf.js
   v=11→12（perf2）。mockup_symbols --check + render_check + node 时区断言过。
+
+## 2026-11-17
+
+- 执行历史轮级起止时间收口+展示：后端 mark_stale_domain_tasks（repositories.py）
+  重启收敛时同步收口在途历史轮（status=stale + finished_at + error），否则中断轮
+  在执行历史卡永远「进行中」、无结束时间；执行历史卡（api32.js showLiveTask /
+  api-acc3.js showAccTask）每轮 chip 改「开始→结束」紧凑段（roundSpan：同日
+  HH:MM→HH:MM、跨日 HH:MM→MM-DD HH:MM）+ tooltip 完整到秒起止与耗时，卡内新增
+  所选轮「开始 · 结束 · 耗时」行；精度页耗时统计卡与 crumb 开始时间跟随所选轮
+  （旧数据无 history 回退任务级）。共享工具 liveFullTime/roundDur/roundSpan 进
+  live2.js（别各域拷贝）：live2 v=3→4（accuracy2/functional2/common2）、
+  api32 v=34→35（functional2/common2）、api-acc3 v=21→22（accuracy2）。
+  性能域详情无执行历史卡（仅 run_id 引用），本轮未加；后端轮收口对其同样生效。

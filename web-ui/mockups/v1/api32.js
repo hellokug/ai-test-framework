@@ -1354,9 +1354,11 @@ async function showLiveTask(taskId, roundSel) {
   const rateOf = r => r.pass_rate != null ? pp(r.pass_rate) : "—";
   const roundChips = rounds.map(r => `
       <span class="chip${sel && r.n === sel.n ? " on" : ""}" style="cursor:pointer"
-        title="查看该轮结果（spec 快照随轮留档）"
+        title="第 ${r.n} 轮 · 开始 ${liveFullTime(r.started_at)}${r.finished_at
+          ? ` · 结束 ${liveFullTime(r.finished_at)}${roundDur(r) ? ` · 耗时 ${roundDur(r)}` : ""}`
+          : " · 该轮进行中，结束待收口"}（spec 快照随轮留档）"
         onclick="showLiveTask('${taskId}', ${r.n})">#${r.n}
-        ${r.trigger === "retry" ? "重试" : "运行"} ${fapiShortTime(r.started_at).slice(6)}
+        ${r.trigger === "retry" ? "重试" : "运行"} ${roundSpan(r.started_at, r.finished_at)}
         ${dot(r.status)}${stTxt(r.status)} ${rateOf(r)}</span>`).join("");
   const histSec = `
     <section class="card" style="margin-bottom:14px;padding:10px 14px">
@@ -1366,6 +1368,7 @@ async function showLiveTask(taskId, roundSel) {
         <span style="flex:1"></span>
         ${sel ? copyBtn(JSON.stringify(sel.spec || {}, null, 2), "复制该轮 spec") : ""}
       </div>
+      ${sel ? `<div class="hint" style="margin:6px 0 0">第 ${sel.n} 轮：开始 ${liveFullTime(sel.started_at)} · 结束 ${sel.finished_at ? liveFullTime(sel.finished_at) : "待收口（该轮进行中）"}${roundDur(sel) ? ` · 耗时 ${roundDur(sel)}` : ""}</div>` : ""}
       ${sel && sel.error ? `<div class="hint" style="color:var(--bad);margin:6px 0 0">该轮错误：${esc(sel.error)}</div>` : ""}
       ${t.retry_of ? `<div class="hint" style="margin:6px 0 0">旧版重试链来源：<span class="mono">${esc(String(t.retry_of))}</span>（兼容保留，新语义重跑不再产生）</div>` : ""}
     </section>`;

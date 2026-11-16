@@ -208,8 +208,9 @@ async function showAccTask(taskId, roundSel) {
   const runErr = (t.error || (run?.status === "error" ? run.error : "")) || "";
   // 历史兼容展示口径（与列表行一致）：run error 的旧行按 failed 展示，新任务后端已直落 failed
   const dispStatus = (t.status === "succeeded" && runErr) ? "failed" : t.status;
-  const dur = (t.started_at && t.finished_at)
-    ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";   // fmtDur 用 live2.js 共享实现
+  // 耗时/开始时间跟随所选轮（执行历史每轮留档 started_at/finished_at）；旧数据无 history 回退任务级
+  const dur = roundDur(accRound) ?? roundDur(t) ?? "—";   // roundDur 用 live2.js 共享实现
+  const crumbStart = accRound?.started_at || t.started_at;
 
   // —— 执行历史（同一任务每轮运行；轮次 chips 可切看，与功能域执行历史卡同构）——
   const accDot = s => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${
@@ -221,9 +222,11 @@ async function showAccTask(taskId, roundSel) {
     : g === "create" ? "创建即跑" : "运行";
   const roundChips = rounds.map(r => `
       <span class="chip${accRound && r.n === accRound.n ? " on" : ""}" style="cursor:pointer"
-        title="查看该轮结果（spec 快照随轮留档）"
+        title="第 ${r.n} 轮 · 开始 ${liveFullTime(r.started_at)}${r.finished_at
+          ? ` · 结束 ${liveFullTime(r.finished_at)}${roundDur(r) ? ` · 耗时 ${roundDur(r)}` : ""}`
+          : " · 该轮进行中，结束待收口"}（spec 快照随轮留档）"
         onclick="showAccTask('${taskId}', ${r.n})">#${r.n}
-        ${accTrigTxt(r.trigger)} ${aapiShortTime(r.started_at).slice(6)}
+        ${accTrigTxt(r.trigger)} ${roundSpan(r.started_at, r.finished_at)}
         ${accDot(r.status)}${accStTxt(r.status)}${r.pass_rate != null
           ? ` ${(r.pass_rate * 100).toFixed(1)}%` : ""}</span>`).join("");
   const histSec = `
@@ -235,6 +238,7 @@ async function showAccTask(taskId, roundSel) {
         ${accRound ? `<button class="btn sm" data-acc-spec="${escHtml(JSON.stringify(accRound.spec || {}))}"
           onclick="aapiCopyRoundSpec(this)">复制该轮 spec</button>` : ""}
       </div>
+      ${accRound ? `<div class="hint" style="margin:6px 0 0">第 ${accRound.n} 轮：开始 ${liveFullTime(accRound.started_at)} · 结束 ${accRound.finished_at ? liveFullTime(accRound.finished_at) : "待收口（该轮进行中）"}${roundDur(accRound) ? ` · 耗时 ${roundDur(accRound)}` : ""}</div>` : ""}
       ${accRound && accRound.error ? `<div class="hint" style="color:var(--bad);margin:6px 0 0">该轮错误：${escHtml(accRound.error)}</div>` : ""}
     </section>`;
 
@@ -244,7 +248,7 @@ async function showAccTask(taskId, roundSel) {
       <div class="crumb">task ${t.id} · 引擎 ${escHtml(spec.engine || run?.details?.tool || "自研")}
       · 数据集 ${escHtml(datasets)} · ${spec.version ? `版本 ${escHtml(spec.version)} · ` : ""}模型
       ${escHtml(spec.target?.profile || spec.target?.model || "-")}
-      · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"}${rounds.length ? ` · 第 ${accRound?.n || rounds.length} / ${rounds.length} 轮` : ""}</div></div>
+      · ${crumbStart ? aapiShortTime(crumbStart) : "未开始"}${rounds.length ? ` · 第 ${accRound?.n || rounds.length} / ${rounds.length} 轮` : ""}</div></div>
       <div class="actions">
         ${(t.status === "pending" || ACC_TERMINAL.includes(t.status))
           ? `<button class="btn" onclick="aapiTaskAction('run', '${taskId}')" title="${t.status === "pending" ? "发起运行" : "重跑一轮（同一任务，追加执行历史）"}">${t.status === "pending" ? "运行" : "重跑"}</button>

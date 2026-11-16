@@ -846,15 +846,31 @@ class SqlAlchemyRepository(Repository):
 
         pending 是排队任务、未在执行，重启后保留仍可 run——与 bg_task 把
         pending 一并标 error 的语义不同（域任务支持先建后跑）。
+        在途执行历史轮同步收口（stale + finished_at）：轮级时间只在终态收口
+        （taskkit._close_round）写，重启中断路径不收的话该轮永远停在
+        「进行中」、执行历史卡上没有结束时间。
         """
         async with self.db.sessions() as session:
-            result = await session.execute(
-                update(table)
-                .where(table.status.in_((TASK_RUNNING, TASK_STOPPING)))
-                .values(status=TASK_STALE, error="server restarted before completion",
-                        finished_at=utcnow()))
+            rows = (await session.execute(
+                select(table)
+                .where(table.status.in_((TASK_RUNNING, TASK_STOPPING))))).scalars().all()
+            for row in rows:
+                now = utcnow()
+                row.status = TASK_STALE
+                row.error = "server restarted before completion"
+                row.finished_at = now
+                # RISK: 批量改写任务行 + 末轮 history JSON（在途轮收口，终态轮不动），
+                # 写错会污染执行历史审计——仅 startup 单点调用，无并发写
+                if row.history:
+                    rounds = [dict(r) for r in row.history]
+                    last = rounds[-1]
+                    if last.get("status") == TASK_RUNNING:   # 在途轮才收口，终态轮不动
+                        last["status"] = TASK_STALE
+                        last["finished_at"] = now.isoformat()
+                        last.setdefault("error", "server restarted before completion")
+                    row.history = rounds
             await session.commit()
-            return result.rowcount or 0
+            return len(rows)
 
     async def due_scheduled_domain_tasks(self, table: type[Any], now: datetime,
                                          limit: int = 20) -> list[dict]:
