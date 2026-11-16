@@ -227,6 +227,10 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
 - **改完**：跑 `scripts/mockup_symbols.py --check`。共享文件（`assets/v1.css`、
   `assets/v1.js`、`api32.js`）改动后，引用它的页面统一 bump 到同一个 `?v=`；改动记入
   `web-ui/HANDOVER.md` 末尾的日期条目。
+- **vm 冒烟打桩对接层**（2026-11-17）：api32/api-acc3 顶层 `const` 对象（AAPI/FAPI）与
+  `let/const` 状态都不落 window——冒烟脚本从 fetch 层打桩喂形状数据（AAPI.req 原路径
+  跑通，别想给 AAPI.get 重新赋值），断言 `let/const` 顶层状态用
+  `vm.runInContext(expr, sandbox)` 取同环境句柄（函数声明才上全局）。
 - **IAB 验证**：用 `web-ui/mockups/iab_helpers.mjs`（用法见文件头）：`domClick`/`domFill`
   走 DOM，`waitUntil` 在 Node 侧轮询，`waitForApi` 等对接层绑完监听，`guardWrites` 默认拦截
   写请求（静态稿连着真实后端），`stubDialogs` 打桩原生弹窗。点了没反应：先确认

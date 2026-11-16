@@ -15,3 +15,4 @@
 | 2026-11-10 | 功能任务详情（api32.js showLiveTask/caseBlock）渲染改动缺轻量验证，本次临时写 vm 沙箱脚本（按函数边界切出 showLiveTask + 打桩 FAPI/document + 5 类用例 fixture）断言 HTML，一次通过 | 固化为 web-ui/mockups/render_check.cjs：可复用的切函数 + 打桩底座，fixture 放旁边 json；改详情渲染先跑它（秒级），IAB 只留视觉验收 | done（2026-11-11 落地 render_check.cjs+fixtures，5 类断言过）|
 | 2026-11-09 | 向用户托管场景写数据前未重读落点现状（脚本 001 当天被 owner 改过、TC_002 已占用），写完才撞编号冲突，删建返工一轮（约 2 分钟） | 规则：向 data/ 托管根等用户共享目录写入前，先 cat 落点文件与登记（scripts.json/updated_at），编号避开已占用空间 | done（2026-11-11 补记） |
 | 2026-11-13 | iab_sandbox 反代/后端 Popen 随前台 Bash 退出被杀（Windows job object），验证中途代理死→502/拒连空转约 3 次调用；state 文件 PID 与实际监听 PID 不一致也误导定位 | scripts/iab_sandbox.py 两处 Popen 加 Windows detached 进程组（creationflags=CREATE_NEW_PROCESS_GROUP\|DETACHED_PROCESS）+ state 记录后核验实际监听 PID；单独一轮做 + 沙箱起停回归 | open |
+| 2026-11-17 | 精度趋势页（wireAccTrends）聚合逻辑冒烟靠临时 vm 脚本一次性验证后即删，下次改趋势页要重写 | 扩展 web-ui/mockups/render_check.cjs：增加 trends 断言组（聚合形状/基线/判定表/劣化卡/图表选项），fixture 复用合成任务+run 摘要 | open |
