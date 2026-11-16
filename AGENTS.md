@@ -240,6 +240,11 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
   `cua.keypress` 编辑键（Backspace 等，keypress 不插入字符）。页面加载/导航后 cua 输入常整段
   不送达（页内零事件），先截一张图即恢复。`cua.click`、`cua.move` 各约 5 秒，一个 js 调用里
   别超过约 12 次（110 秒上限）；Playwright locator 的 click/fill 常卡 actionability 超时，直接用坐标。
+- **精度页数据集 chips 依赖 evalscope 引擎目录**（2026-11-16）：accuracy2 新建抽屉的
+  DS_ITEMS 来自 `/tools/benchmarks?engine=evalscope`（引擎内置目录，不是 /datasets 登记
+  数据集），.venv 无 evalscope 时该卡显示「基准目录加载失败」、chips 为空且 domClick
+  `#dsList .ds-row` 落空——隔离实例验证精度表单前先确认这一点；不涉 chips 渲染的改动
+  直接 evaluate 灌一条 DS_ITEMS + `renderDs()` 绕过（勾选/提交链路照常走真实 UI）。
 - **live/mock 同名分区并存**（2026-11-12）：页面里静态 mock 区与 live 渲染区有同名
   `[data-page=…]` 各一份（详情页实测 2 个），裸 `querySelector('[data-page="detail"]')` 命中
   静态区拿空——详情类断言一律 `main.page-host [data-page="detail"]` 作用域（2026-11-12 为此
