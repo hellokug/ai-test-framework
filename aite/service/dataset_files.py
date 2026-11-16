@@ -345,6 +345,94 @@ def probe_online() -> dict:
     }
 
 
+_HF_API_TIMEOUT_S = 15.0
+
+
+def _hf_api_get(path: str, params: dict[str, Any]) -> Any:
+    """HF 镜像 API GET（阻塞调用，经 run_in_threadpool 下放；端点取设置 hf_endpoint）。"""
+    endpoint = ds_settings.resolve_hf_endpoint().rstrip("/")
+    resp = httpx.get(endpoint + path, params=params, timeout=_HF_API_TIMEOUT_S,
+                     follow_redirects=True)
+    resp.raise_for_status()
+    try:
+        return resp.json()
+    except ValueError as exc:   # json.JSONDecodeError（镜像被劫持/返回 HTML 时）
+        raise RuntimeError(
+            f"镜像端点返回非 JSON（检查 hf_endpoint 是否指向 HF API 兼容服务）: {exc}") from exc
+
+
+def _hf_brief(d: dict) -> dict:
+    """搜索结果条目归一：id/热度/标签（去 task 特殊标记冒号族，截前 6 个）。"""
+    return {
+        "id": d.get("id", ""),
+        "downloads": d.get("downloads") or 0,
+        "likes": d.get("likes") or 0,
+        "gated": bool(d.get("gated")),
+        "private": bool(d.get("private")),
+        "tags": [t for t in (d.get("tags") or []) if not str(t).startswith(":")][:6],
+    }
+
+
+async def hf_search(query: str = "", limit: int = 20) -> dict:
+    """HF 镜像全库搜索（/api/datasets?search=）：任意开源数据集的「有哪些可选」入口。
+
+    query 留空按下载量倒序列热门；gated/私有照常返回（前端打标提示，导入时才
+    真正失败）。网络错误外抛 httpx.HTTPError，镜像响应异常外抛 RuntimeError，
+    均由路由层转 502。
+    """
+    params: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
+    q = query.strip()
+    if q:
+        params["search"] = q
+    else:
+        params.update({"sort": "downloads", "direction": -1})
+    # RISK: 外发网络请求（用户 query 原样进镜像搜索参数，不做二次过滤）
+    data = await run_in_threadpool(_hf_api_get, "/api/datasets", params)
+    if not isinstance(data, list):
+        raise RuntimeError("镜像搜索返回结构异常（预期数据集数组）")
+    items = [_hf_brief(d) for d in data if isinstance(d, dict) and d.get("id")]
+    return {"query": q, "count": len(items), "items": items}
+
+
+def _hf_shape_hint(files: list[str], configs: list[str]) -> str:
+    """按仓库文件形态给 split/fields 填写提示（镜像 API 拿不到 splits 元数据）。"""
+    if any(f.endswith(".parquet") for f in files):
+        return ("parquet 列式：split 常见 test/validation/train（以数据集 README 为准），"
+                "列名看 README")
+    if configs:
+        return "多配置数据集：subset 填配置名，split 以各配置 README 为准"
+    return ("原始文件型（单 JSON/jsonl）：load_dataset 默认 split=train，"
+            "对话数组类 fields 留空可原样保留作语料池")
+
+
+async def hf_detail(hf_id: str) -> dict:
+    """HF 数据集详情（/api/datasets/{id}）：文件/配置清单 + split/fields 填写提示。"""
+    hf_id = hf_id.strip()
+    segs = hf_id.split("/")
+    # RISK: hf_id 拼进 URL 路径，先挡空段/.. 段/URL 元字符，防路径注入
+    if (not hf_id or len(segs) > 2
+            or any(seg in ("", ".", "..") for seg in segs)
+            or any(ch in hf_id for ch in " ?#&")):
+        raise ValueError(f"非法 HF dataset id: {hf_id!r}")
+    data = await run_in_threadpool(_hf_api_get, f"/api/datasets/{hf_id}", {})
+    files = [s["rfilename"] for s in (data.get("siblings") or [])
+             if isinstance(s, dict) and s.get("rfilename")
+             and not s["rfilename"].startswith(".")]
+    card = data.get("cardData") or {}
+    configs = [c["config_name"] for c in (card.get("configs") or [])
+               if isinstance(c, dict) and c.get("config_name")]
+    return {
+        "id": data.get("id") or hf_id,
+        "gated": bool(data.get("gated")),
+        "private": bool(data.get("private")),
+        "tags": [t for t in (data.get("tags") or []) if not str(t).startswith(":")][:10],
+        "files": files[:20],
+        "file_count": len(files),
+        "configs": configs,
+        "hint": _hf_shape_hint(files, configs),
+    }
+
+
 def _count_lines(path: Path) -> int:
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         return sum(1 for _ in fh)

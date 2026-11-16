@@ -1524,3 +1524,17 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
 - IAB 验证（私有端口 8311/8777 + AITE_DATASETS_DIR 隔离，rubrics.json 不脏 owner 数据）：模型管理
   组侧栏四项/空态文案/新建落库（行指纹=后端 fingerprint）/编辑回填+PATCH 重算指纹（4357→006c）/
   重名 409 toast+抽屉保持/删除回空态全通。门禁 mockup_symbols --check + node --check 过。
+
+## 2026-11-16（HF 全库搜索进导入抽屉）
+
+- 导入抽屉「开源基准」模式新增 HF 全库搜索区（common2.html + api32.js）：基准库只覆盖 evalscope
+  评测基准，ShareGPT 等语料型数据集从镜像全库搜——`dsHfSearch/dsHfSearchRun/dsHfSearchSelect/
+  wireDatasetHfSearch`（api32.js v31，common2/functional2 两引用页同 bump）；点行「选用」回填
+  dataset id 并拉详情提示行（文件数/子集/gated 警告 + 按 parquet/多配置/原始文件三形态给
+  split+fields 填写指引）。后端配 `GET /datasets/hf/search`（q 留空按下载量列热门）与
+  `GET /datasets/hf/detail`（siblings 过滤点前缀文件 + cardData.configs 提取 + 形态 hint），
+  均走设置 hf_endpoint、网络在 run_in_threadpool；镜像返回非 JSON 转 RuntimeError→502，
+  hf_id 非法（空段/../段/URL 元字符）→422。抽屉 ds-mode-note 补「不会填就三步」说明。
+- IAB 验证（iab_sandbox 8310/8776 临时库，只读流程）：搜 sharegpt 出 20 行→点「选用」回填
+  id+详情提示（parquet 分支文案）+行高亮全通；镜像 429 时前端提示「详情拉取失败（不影响导入）」
+  降级路径同验（curl 502 实测）。api32.js ?v=30→31。

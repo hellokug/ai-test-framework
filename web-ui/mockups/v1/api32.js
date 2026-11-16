@@ -2546,6 +2546,99 @@ async function wireDatasetOnlinePage() {
       if (btn) dsOnlineSelect(btn.dataset.dsOnline);
     });
   }
+  wireDatasetHfSearch();   // 导入抽屉「HF 全库搜索」（基准库没有的任意开源数据集）
+}
+
+/* ---------------- 公共 · 导入抽屉 HF 全库搜索（镜像 /api/datasets） ---------------- */
+/* 基准库只覆盖 evalscope 评测基准；ShareGPT 等语料型数据集从这里搜到点「选用」
+   回填 dataset id，并拉详情给 split/fields 填写提示（失败不影响手填导入）。 */
+let DS_HF_ITEMS = [];
+let DS_HF_SEL = "";
+
+function dsHfSearchRender() {
+  const tbl = document.getElementById("dsHfSearchTbl");
+  if (!tbl) return;
+  tbl.innerHTML = `
+    <thead><tr><th>dataset_id</th><th>热度</th><th>标签</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${DS_HF_ITEMS.map(d => `<tr class="${d.id === DS_HF_SEL ? "on" : ""}">
+      <td class="rname"><b class="mono">${dsEsc(d.id)}</b>${d.gated ? ' <span class="tag">gated</span>' : ""}${d.private ? ' <span class="tag">private</span>' : ""}</td>
+      <td class="mono dim" style="font-size:11px">${(d.downloads || 0).toLocaleString()} ↓ · ${d.likes || 0} ★</td>
+      <td class="dim">${(d.tags || []).slice(0, 4).map(t => `<span class="tag">${dsEsc(t)}</span>`).join(" ") || "—"}</td>
+      <td style="text-align:right"><button class="btn sm" data-ds-hfpick="${dsEsc(d.id)}">选用</button></td>
+    </tr>`).join("") || '<tr><td colspan="4" class="ds-empty">无匹配（换个关键词试试）</td></tr>'}</tbody>`;
+}
+async function dsHfSearchRun() {
+  const input = document.getElementById("dsHfSearch");
+  const wrap = document.getElementById("dsHfSearchWrap");
+  const go = document.getElementById("dsHfSearchGo");
+  if (!input || !wrap || !go) return;
+  const q = input.value.trim();
+  go.disabled = true;
+  wrap.hidden = false;
+  document.getElementById("dsHfSearchTbl").innerHTML =
+    '<tbody><tr><td colspan="4" class="ds-empty">镜像搜索中…</td></tr></tbody>';
+  try {
+    const data = await FAPI.get(`/datasets/hf/search?q=${encodeURIComponent(q)}&limit=20`);
+    DS_HF_ITEMS = data.items || [];
+    dsHfSearchRender();
+    const hint = document.getElementById("dsHfDetailHint");
+    if (!DS_HF_ITEMS.length && hint) {
+      hint.hidden = false;
+      hint.textContent = "全库无匹配：确认 id 拼写，或到 hf-mirror.com 搜原词再回来手填";
+    }
+  } finally { go.disabled = false; }
+}
+/* 全库点选「选用」：回填 dataset id + 拉详情提示行（gated/私有警告 + split/fields 指引） */
+async function dsHfSearchSelect(id) {
+  DS_HF_SEL = id;
+  const el = document.getElementById("dsHfId");
+  if (el) el.value = id;
+  dsHfSearchRender();
+  const hint = document.getElementById("dsHfDetailHint");
+  if (!hint) return;
+  hint.hidden = false;
+  hint.textContent = "拉取数据集详情中…";
+  try {
+    const d = await FAPI.get(`/datasets/hf/detail?hf_id=${encodeURIComponent(id)}`);
+    const cfg = (d.configs || []).length
+      ? `子集：${d.configs.slice(0, 6).join("、")}${d.configs.length > 6 ? " …" : ""}`
+      : "无多配置";
+    const warn = d.gated ? " · ⚠️ gated（需 HF 授权，镜像可能拉不动）"
+      : (d.private ? " · ⚠️ 私有仓（镜像不可拉）" : "");
+    hint.innerHTML = `<b class="mono">${dsEsc(d.id)}</b> · ${d.file_count} 个文件 · ${dsEsc(cfg)}${warn} · <b>提示：</b>${dsEsc(d.hint)}`;
+  } catch (err) {
+    hint.textContent = `详情拉取失败（不影响导入，split/列名可查数据集 README）：${err.message}`;
+  }
+}
+function wireDatasetHfSearch() {
+  const run = () => {
+    if (!dsIsLive()) { dsMockGuard(); return; }
+    dsHfSearchRun().catch(err => fapiToast(`HF 搜索失败：${err.message}`, true));
+  };
+  const go = document.getElementById("dsHfSearchGo");
+  if (go && !go.dataset.liveBound) {
+    go.dataset.liveBound = "1";
+    go.addEventListener("click", run);
+  }
+  const input = document.getElementById("dsHfSearch");
+  if (input && !input.dataset.liveBound) {
+    input.dataset.liveBound = "1";
+    input.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      run();
+    });
+  }
+  const tbl = document.getElementById("dsHfSearchTbl");
+  if (tbl && !tbl.dataset.liveBound) {
+    tbl.dataset.liveBound = "1";
+    tbl.addEventListener("click", e => {
+      const btn = e.target.closest("[data-ds-hfpick]");
+      if (!btn) return;
+      if (!dsIsLive()) { dsMockGuard(); return; }
+      dsHfSearchSelect(btn.dataset.dsHfpick);
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ boot */

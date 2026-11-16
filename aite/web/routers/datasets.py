@@ -162,6 +162,30 @@ async def hf_import(body: HfImportIn, state: Any = Depends(get_state)):
         raise HTTPException(502, f"HF 拉取失败（检查 hf_endpoint 连通性）: {exc}") from exc
 
 
+@router.get("/datasets/hf/search")
+async def hf_search(q: str = "", limit: int = 20):
+    """HF 镜像全库搜索：导入选型「有哪些可选」（q 留空按下载量列热门）。"""
+    try:
+        return await dataset_files.hf_search(q, limit=limit)
+    except RuntimeError as exc:          # 镜像返回非 JSON / 结构异常
+        raise HTTPException(502, str(exc)) from exc
+    except httpx.HTTPError as exc:       # 网络/镜像不可达
+        raise HTTPException(502, f"HF 搜索失败（检查 hf_endpoint 连通性）: {exc}") from exc
+
+
+@router.get("/datasets/hf/detail")
+async def hf_detail(hf_id: str):
+    """HF 数据集详情：文件/配置清单 + split/fields 填写提示。"""
+    try:
+        return await dataset_files.hf_detail(hf_id)
+    except ValueError as exc:            # id 非法（路径注入防护）
+        raise HTTPException(422, str(exc)) from exc
+    except RuntimeError as exc:          # 镜像返回非 JSON / 结构异常
+        raise HTTPException(502, str(exc)) from exc
+    except httpx.HTTPError as exc:       # 网络/镜像不可达
+        raise HTTPException(502, f"HF 详情拉取失败（检查 hf_endpoint 连通性）: {exc}") from exc
+
+
 @router.post("/datasets/remote/import", status_code=201)
 async def remote_import(body: RemoteImportIn, state: Any = Depends(get_state)):
     """远程地址拉取（OBS 桶/其他直链）→ 复用上传校验管线 → 登记。"""

@@ -286,13 +286,19 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
         <span class="hint">POST /datasets/functional/import · harness.Case 真实校验 · 坏行报错带行号</span></div>
     </div>
     <div class="ds-mode" data-mode="hf" hidden>
-      <div class="ds-mode-note">开源基准与开源语料池：上方基准库即 evalscope 全集，点选（本机已有的标绿、近似标蓝，「选用」自动填下方参数）或手填 dataset id 走镜像仓；类型选「性能」可把 ShareGPT 等开源对话集导为压测语料池（对话数组免映射直用；配字段映射到扁平输入列则可作负载）。镜像端点/下载缓存取「全局设置」，HF 不通改用「远程直链」。名称留空自动取 id 尾段。</div>
+      <div class="ds-mode-note">开源基准与开源语料池：上方基准库即 evalscope 全集，点选（本机已有的标绿、近似标蓝，「选用」自动填下方参数）或手填 dataset id 走镜像仓；类型选「性能」可把 ShareGPT 等开源对话集导为压测语料池（对话数组免映射直用；配字段映射到扁平输入列则可作负载）。镜像端点/下载缓存取「全局设置」，HF 不通改用「远程直链」。名称留空自动取 id 尾段。不会填就三步：①评测基准在上方基准库搜了点「选用」自动回填；②基准库没有的（ShareGPT 等语料集）用下方「HF 全库搜索」点「选用」回填并看提示行；③按提示确认 split/字段映射后导入。</div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <input class="in" id="dsOnlineSearch" placeholder="搜基准名 / dataset_id / 标签（如 gsm8k、Math、swe）" style="flex:1;min-width:200px">
         <span class="chip" id="dsOnlineLocalOnly">只看本机已有 <small>0</small></span>
         <span class="badge pending" id="dsOnlineBadge" hidden><i></i></span>
       </div>
       <div id="dsOnlineWrap"><table id="dsOnlineTbl" class="sumtable"></table></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+        <input class="in" id="dsHfSearch" placeholder="HF 全库搜索（基准库没有的从镜像全库找，如 sharegpt；留空列热门）" style="flex:1;min-width:200px">
+        <button class="btn" id="dsHfSearchGo">搜全库</button>
+      </div>
+      <div id="dsHfSearchWrap" hidden style="margin-top:8px"><table id="dsHfSearchTbl" class="sumtable"></table></div>
+      <div class="hint" id="dsHfDetailHint" hidden style="margin-top:6px"></div>
       <div class="form-grid" style="margin-top:12px">
         <div class="field"><label>数据集类型</label>
           <select class="in" id="dsHfType">
@@ -614,6 +620,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=30"></script>
+<script src="api32.js?v=31"></script>
 </body>
 </html>

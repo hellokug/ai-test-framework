@@ -442,6 +442,92 @@ class TestDatasetsApi:
         pool = load_corpus(row["path"])
         assert len(pool) >= 2 and "报价行" in "\n".join(pool)
 
+    # ---------------------------------------------- HF 全库搜索 / 详情（选型发现）
+    def test_hf_search_normalizes_and_sorts(self, client, monkeypatch):
+        """全库搜索：去冒号族特殊标记、gated 归一；空 query 按下载量倒序列热门。"""
+        from aite.service import dataset_files
+        seen = {}
+
+        def fake_api_get(path, params):
+            seen["path"], seen["params"] = path, dict(params)
+            return [
+                {"id": "Aeala/ShareGPT_Vicuna_unfiltered", "downloads": 5000,
+                 "likes": 3, "tags": ["conversational", ":task:none"]},
+                {"id": "openai/gsm8k", "gated": "auto", "downloads": 1},
+                "junk-non-dict",
+            ]
+
+        monkeypatch.setattr(dataset_files, "_hf_api_get", fake_api_get)
+        resp = client.get("/api/v1/datasets/hf/search", params={"q": "share"})
+        assert resp.status_code == 200
+        assert seen["path"] == "/api/datasets" and seen["params"]["search"] == "share"
+        body = resp.json()
+        assert body["count"] == 2 and len(body["items"]) == 2
+        assert body["items"][0]["tags"] == ["conversational"]   # 冒号族标记剔除
+        assert body["items"][1]["gated"] is True                # gated 字符串归一为布尔
+        # 空 query：镜像侧按下载量排序（浏览模式）
+        client.get("/api/v1/datasets/hf/search")
+        assert seen["params"]["sort"] == "downloads"
+        assert seen["params"]["direction"] == -1 and "search" not in seen["params"]
+
+    def test_hf_search_mirror_error_502(self, client, monkeypatch):
+        from aite.service import dataset_files
+
+        def bad_get(path, params):
+            raise dataset_files.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(dataset_files, "_hf_api_get", bad_get)
+        resp = client.get("/api/v1/datasets/hf/search", params={"q": "x"})
+        assert resp.status_code == 502 and "hf_endpoint" in resp.json()["detail"]
+
+    def test_hf_detail_files_configs_hint(self, client, monkeypatch):
+        """详情：文件清单过滤点前缀、configs 提取、文件型给 split=train 指引。"""
+        from aite.service import dataset_files
+
+        def fake_api_get(path, params):
+            assert path == "/api/datasets/Aeala/ShareGPT_Vicuna_unfiltered"
+            return {
+                "id": "Aeala/ShareGPT_Vicuna_unfiltered",
+                "siblings": [{"rfilename": ".gitattributes"},
+                             {"rfilename": "ShareGPT_V4.3_unfiltered_cleaned_split.json"},
+                             "junk"],
+            }
+
+        monkeypatch.setattr(dataset_files, "_hf_api_get", fake_api_get)
+        resp = client.get("/api/v1/datasets/hf/detail",
+                          params={"hf_id": "Aeala/ShareGPT_Vicuna_unfiltered"})
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["file_count"] == 1
+        assert d["files"] == ["ShareGPT_V4.3_unfiltered_cleaned_split.json"]
+        assert d["configs"] == []
+        assert "split=train" in d["hint"]
+        # 非法 id（路径注入形态）→ 422；镜像网络错误 → 502
+        bad = client.get("/api/v1/datasets/hf/detail", params={"hf_id": "../secret"})
+        assert bad.status_code == 422
+
+        def bad_get(path, params):
+            raise dataset_files.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(dataset_files, "_hf_api_get", bad_get)
+        resp = client.get("/api/v1/datasets/hf/detail", params={"hf_id": "a/b"})
+        assert resp.status_code == 502 and "hf_endpoint" in resp.json()["detail"]
+
+    def test_hf_api_get_non_json_raises_runtime(self, monkeypatch):
+        """镜像被劫持返回 HTML：_hf_api_get 转 RuntimeError（路由层映射 502）。"""
+        from aite.service import dataset_files
+
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                raise ValueError("Expecting value")
+
+        monkeypatch.setattr(dataset_files.httpx, "get", lambda *a, **k: FakeResp())
+        with pytest.raises(RuntimeError, match="非 JSON"):
+            dataset_files._hf_api_get("/api/datasets", {"limit": 5})
+
     def test_remote_import_pulls_and_registers(self, client, monkeypatch):
         from aite.service import dataset_files
 
