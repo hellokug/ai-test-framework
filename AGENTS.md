@@ -185,6 +185,8 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
   排查编码问题先对齐这一点（2026-11-09 为此绕了约 8 次调用）。
 - `curl -d` 带**中文** JSON 在 Git Bash 下编码损坏（后端 400 parsing error）：
   HTTP 灌数/冒烟一律 `.venv/Scripts/python.exe` + httpx 内联脚本。
+- Bash 里跑带交互确认的 CLI（typer.confirm 等）必须带 `--force`/`-y`，否则
+  Aborted 空转一轮（2026-11-15 `aite dataset rm` 踩）。
 - 截长行别用 `cut -c`：它按字节切，切碎多字节中文后整段输出被按 GBK 解码成乱码；
   用 `rg --max-columns 200 --max-columns-preview`（2026-11-10）。
 - 补丁内容含反引号 / `${}` / 多行中文时不要走 bash heredoc（会截断），先
