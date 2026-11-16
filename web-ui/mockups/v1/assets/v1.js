@@ -62,7 +62,7 @@ function applyRoute() {
   const isTask = !!DOMAIN_FILES[module];
   const curPageId = (location.hash || "").replace("#", "") || pages[0].id;
   const GROUP = { datasets: "数据集管理", models: "模型管理", versions: "模型管理",
-    secrets: "模型管理", agents: "执行机管理", tasks: "任务管理" };
+    secrets: "模型管理", rubrics: "模型管理", agents: "执行机管理", tasks: "任务管理" };
   const grp = isTask ? "任务管理" : (GROUP[curPageId] || GROUP[pages[0].id]);
   if (module === "common") document.body.dataset.moduleLabel = grp;
   const activeLabel = isTask || grp === "任务管理" ? "任务管理" : grp;

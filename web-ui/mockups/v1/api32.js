@@ -1715,6 +1715,7 @@ async function wireModels() {
 
 /* ---------------- 公共 · 模型管理页（common2.html，DB 网关别名注册） ---------------- */
 let MODEL_ROWS = [];
+let RUBRIC_ROWS = [];           // rubric 资产行（编辑回填用，wireCommonRubricsPage 维护）
 async function wireCommonModelsPage() {
   const [dbData, commonData, secretData] = await Promise.all([
     FAPI.get("/models"),
@@ -1887,6 +1888,80 @@ function openModelDrawer(m) {
   drawer.querySelector(".drawer-head h3").textContent = m ? "编辑模型" : "注册模型";
   if (m) drawer.dataset.editId = m.id; else delete drawer.dataset.editId;
   keySel.dispatchEvent(new Event("change"));
+  drawer.hidden = false;
+}
+
+/* ---------------- 公共 · Rubric 管理页（common2.html，判官评分标准资产仓 /accuracy/rubrics） ---------------- */
+async function wireCommonRubricsPage() {
+  const rubData = await FAPI.get("/accuracy/rubrics");
+  RUBRIC_ROWS = rubData.items;
+  // 内容预览 = 首个非空行截 44 字 + 总字数（全文看编辑抽屉的文本域）；.rub-prev 限宽防表格横向溢出
+  const preview = c => {
+    const line = (c || "").split("\n").find(l => l.trim()) || "";
+    const more = line.length > 44 || (c || "").includes("\n") ? "…" : "";
+    return `<div class="rub-prev">${escHtml(line.slice(0, 44))}${more}</div><div class="rid">${(c || "").length} 字</div>`;
+  };
+  const tbl = document.getElementById("rubricsTbl");
+  tbl.innerHTML = `
+    <thead><tr><th>名称</th><th>打分语义</th><th>内容预览</th><th>指纹</th><th>更新时间</th><th style="text-align:right">操作</th></tr></thead>
+    <tbody>${RUBRIC_ROWS.map(r => `<tr>
+      <td class="rname"><b class="mono">${escHtml(r.name)}</b></td>
+      <td>${r.score_type ? `<span class="tag mono">${escHtml(r.score_type)}</span>` : '<span class="faint">—</span>'}</td>
+      <td style="font-size:12.5px">${preview(r.content)}</td>
+      <td class="rid">${escHtml(r.fingerprint || "—")}</td>
+      <td class="dim">${String(r.updated_at || "").slice(5, 16).replace("T", " ")}</td>
+      <td style="text-align:right"><button class="btn sm" data-edit-rubric="${r.id}">编辑</button>
+      <button class="btn sm danger" data-del-rubric="${r.id}">删除</button></td></tr>`).join("")
+      || '<tr><td colspan="6" class="ds-empty">暂无 Rubric 资产 —— 点「＋ 新建 Rubric」，或在精度页评测抽屉里把写好的标准「沉淀为资产」</td></tr>'}</tbody>`;
+  if (!tbl.dataset.liveBound) {
+    tbl.dataset.liveBound = "1";
+    tbl.addEventListener("click", async e => {
+      const edit = e.target.closest("[data-edit-rubric]");
+      if (edit) { openRubricDrawer(RUBRIC_ROWS.find(r => r.id === edit.dataset.editRubric)); return; }
+      const del = e.target.closest("[data-del-rubric]");
+      if (!del || !confirm("删除该 Rubric 资产?（任务快照里的整文不受影响，只是下拉里不再可选）")) return;
+      try { await FAPI.del(`/accuracy/rubrics/${del.dataset.delRubric}`); }
+      catch (err) { fapiToast(`删除失败：${err.message}`, true); return; }
+      fapiToast("Rubric 资产已删除");
+      await wireCommonRubricsPage();
+    });
+  }
+  const createBtn = document.querySelector('.actions [data-open-drawer="rubricDrawer"]');
+  if (createBtn && !createBtn.dataset.liveBound) {
+    createBtn.dataset.liveBound = "1";
+    createBtn.addEventListener("click", () => openRubricDrawer(null));
+  }
+  const drawer = document.getElementById("rubricDrawer");
+  if (drawer && !drawer.dataset.liveBound) {
+    drawer.dataset.liveBound = "1";
+    drawer.querySelector(".drawer-foot .btn.primary").addEventListener("click", async () => {
+      const name = document.getElementById("rubName").value.trim();
+      const content = document.getElementById("rubContent").value;
+      const scoreType = document.getElementById("rubScoreType").value.trim();
+      const editId = drawer.dataset.rubricEditId || "";
+      if (!name || !content.trim()) { fapiToast("名称与评分标准全文均必填", true); return; }
+      try {
+        if (editId) {   // 编辑：PATCH 部分更新（score_type 空串=清空备注；正文重算指纹）
+          await FAPI.req("PATCH", `/accuracy/rubrics/${editId}`, { name, content, score_type: scoreType });
+        } else {        // 新建：POST（重名 409，后端文案会提示换名）
+          await FAPI.post("/accuracy/rubrics", { name, content, score_type: scoreType });
+        }
+        drawer.hidden = true;
+        fapiToast(`Rubric「${name}」已${editId ? "更新" : "归档"}`);
+        await wireCommonRubricsPage();
+      } catch (err) { fapiToast(`${editId ? "更新" : "保存"}失败：${err.message}`, true); }
+    });
+  }
+}
+
+/* Rubric 抽屉开态：传 r = 编辑（回填 + rubricEditId 标记），null = 新建（清残留，防上次编辑的值误存成新资产） */
+function openRubricDrawer(r) {
+  const drawer = document.getElementById("rubricDrawer");
+  document.getElementById("rubName").value = r?.name || "";
+  document.getElementById("rubScoreType").value = r?.score_type || "";
+  document.getElementById("rubContent").value = r?.content || "";
+  drawer.querySelector(".drawer-head h3").textContent = r ? "编辑 Rubric" : "新建 Rubric";
+  if (r) drawer.dataset.rubricEditId = r.id; else delete drawer.dataset.rubricEditId;
   drawer.hidden = false;
 }
 
@@ -2487,6 +2562,8 @@ async function fapiBoot() {
   if (document.getElementById("modelsTbl")) {                 // 公共 · 模型管理页
     try { await wireCommonModelsPage(); }
     catch (err) { fapiToast(`模型管理对接失败：${err.message}`, true); }
+    try { await wireCommonRubricsPage(); }                     // Rubric 资产管理（判官评分标准仓）
+    catch (err) { fapiToast(`Rubric 管理对接失败：${err.message}`, true); }
     try { await wireCommonVersions(); }                        // 版本管理（§10.6）
     catch (err) { fapiToast(`版本管理对接失败：${err.message}`, true); }
     try { await wireCommonDatasetsPage(); }                    // 数据集目录（§12）

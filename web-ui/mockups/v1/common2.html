@@ -42,12 +42,15 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
 /* 基准库选中行高亮（导入抽屉内 dsOnlineTbl） */
 .sumtable tr.on td{background:color-mix(in srgb,var(--ac) 8%,transparent)}
 #dsOnlineWrap{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+/* Rubric 管理页专属：预览列限宽防表格横向溢出（live 渲染同结构 .rub-prev） */
+#rubricsTbl .rub-prev{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body data-module="common" data-module-label="公共资源">
 <script type="text/plain" id="page-list">[
   {"id":"datasets","label":"数据集管理"},
   {"id":"models","label":"模型管理"},
+  {"id":"rubrics","label":"Rubric 管理"},
   {"id":"versions","label":"版本管理"},
   {"id":"secrets","label":"密钥管理"},
   {"id":"agents","label":"执行机"},
@@ -172,6 +175,15 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
       <div class="actions"><button class="btn primary" data-open-drawer="modelDrawer">＋ 注册模型</button></div>
     </header>
     <section class="card"><table id="modelsTbl"></table></section>
+  </section>
+
+  <!-- ============ Rubric 管理 ============ -->
+  <section data-page="rubrics" hidden>
+    <header class="topbar">
+      <div><h1>Rubric 管理</h1><div class="crumb">判官评分标准资产仓 · data/rubrics.json 单文件 + 内容指纹（sha256 前 12 位）· 精度评测抽屉「选用标准」与判官校准共用 · GET/POST/PATCH/DELETE /accuracy/rubrics</div></div>
+      <div class="actions"><button class="btn primary" data-open-drawer="rubricDrawer">＋ 新建 Rubric</button></div>
+    </header>
+    <section class="card"><table id="rubricsTbl"></table></section>
   </section>
 
   <!-- ============ 版本管理 ============ -->
@@ -373,9 +385,22 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
   <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">保存</button></div>
 </div>
 
+<div class="drawer" id="rubricDrawer" hidden>
+  <div class="drawer-head"><h3>新建 Rubric</h3><button class="icon-btn" data-close>✕</button></div>
+  <div class="drawer-body">
+    <div class="field"><label>名称<span class="qmark">?<span class="tip">资产唯一名：精度评测抽屉「选用标准」下拉与判官校准都按它引用；重名保存返回 409（换名或编辑既有条目）</span></span></label>
+      <input class="in" id="rubName" placeholder="如 拒答合规-binary"></div>
+    <div class="field"><label>打分语义（可选）<span class="qmark">?<span class="tip">仅展示备注，判官不读它：binary=0/1 二值判定、graded-5=0~5 分档……帮人选对 rubric 用</span></span></label>
+      <input class="in" id="rubScoreType" placeholder="如 binary / graded-5"></div>
+    <div class="field"><label>评分标准全文<span class="qmark">?<span class="tip">判官提示词里的评分标准正文；创建任务时整文落快照、按内容算指纹（sha256 前 12 位）——改一字指纹即变，依赖指纹的校准结论随之失效重跑</span></span></label>
+      <textarea class="in" id="rubContent" rows="12" style="font-family:var(--mono);font-size:12.5px;line-height:1.7" placeholder="逐条列出评分维度、分档定义与判定规则……"></textarea></div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn primary">保存</button></div>
+</div>
+
 <div class="ribbon">V1 静态稿 · 公共资源 · 数据为模拟<small>右上角 🎨 可切主题</small></div>
 
-<script src="assets/v1.js?v=17"></script>
+<script src="assets/v1.js?v=18"></script>
 <script src="assets/live2.js?v=2"></script>
 <script>
 /* ---------- 数据集目录（静态稿演示数据；live 时 api32.js 以 GET /datasets ⊕ /datasets/online/datasets 重渲染） ---------- */
@@ -539,6 +564,20 @@ document.getElementById("modelsTbl").innerHTML = `
     <td style="text-align:right"><button class="btn sm" data-open-drawer="modelDrawer">编辑</button>
     <button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
 
+/* ---------- Rubric 管理（判官评分标准资产仓；live 由 api32.js 以 GET /accuracy/rubrics 重渲染） ---------- */
+const RUBRICS = [
+  ["拒答合规-binary", "binary", "判断回答是否属于合规拒答：涉及医疗诊断/法律意见/金融建议时应拒答并给出转介指引……", "a3f8c21d9e04"],
+  ["RAG 忠实度 graded-5", "graded-5", "0=编造召回文档不存在的事实；3=大体有据但个别论断无出处；5=每个论断都能在文档中找到出处……", "7b1e55c0a2f9"],
+  ["代码评审 rubric", "graded-4", "按正确性/边界处理/可读性分档：4=可直接合并；3=小问题需修；2=逻辑缺陷……", "c9027d4b8113"],
+];
+document.getElementById("rubricsTbl").innerHTML = `
+  <thead><tr><th>名称</th><th>打分语义</th><th>内容预览</th><th>指纹</th><th>更新时间</th><th style="text-align:right">操作</th></tr></thead>
+  <tbody>${RUBRICS.map(r => `<tr>
+    <td class="rname"><b class="mono">${r[0]}</b></td><td><span class="tag mono">${r[1]}</span></td>
+    <td style="font-size:12.5px"><div class="rub-prev">${r[2].slice(0, 44)}…</div><div class="rid">${r[2].length} 字</div></td><td class="rid">${r[3]}</td><td class="dim">11-15 23:24</td>
+    <td style="text-align:right"><button class="btn sm" data-open-drawer="rubricDrawer">编辑</button>
+    <button class="btn sm danger">删除</button></td></tr>`).join("")}</tbody>`;
+
 /* ---------- 执行机 ---------- */
 const AGENTS = [
   { n: "gpu-box-01", tags: ["linux", "locust", "evalscope"], hb: "心跳 12s 前", on: true, cur: "perf-probe-sla（running）" },
@@ -575,6 +614,6 @@ document.getElementById("bgTbl").innerHTML = `
     <td class="dim">${t[4]}</td><td class="err-text">${t[5]}</td>
     <td style="text-align:right"><button class="btn sm">日志流</button></td></tr>`).join("")}</tbody>`;
 </script>
-<script src="api32.js?v=29"></script>
+<script src="api32.js?v=30"></script>
 </body>
 </html>

@@ -1488,3 +1488,39 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
   perf.rate 对象含 qps≥ 下限 SLA ✔、创建任务落库 ✔、编辑入口回填（维度/三值/时长/SLA 全命中）✔。
   已知边界：SLA 结论卡需真实 SLA run 数据才能浏览器验证（collect 双落已单测覆盖），owner 首次
   跑 SLA 爬坡任务时目检即可。门禁 mockup_symbols --check 过；perf2 bump api-perf ?v=9。
+
+## 2026-11-16（性能/精度详情 5s 轮询把任务列表拽回详情的 bug 修复，api-perf v10 + api-acc3 v17）
+
+- 现象：打开运行中任务的详情后点「← 任务列表」（或去压测大屏），约 5s 后被自动拽回详情页。
+  根因：详情页运行态自轮询定时器（papiRearmDetail / api-acc3.js 两处同款）回调只查 seq
+  （防串任务），不查用户是否已离开详情页；回调里 showPerfTask/showAccTask 无条件
+  showPage("detail")，列表页每 5s 被拉回。
+- 修法：轮询回调加「人还在详情页」守卫——
+  document.querySelector('main.page-host [data-page="detail"]') 不存在或 hidden 就不再续期
+  （与 startPerfPolling 既有的按页守卫同款模式）；定时器自然消亡，返回详情时由 showPerfTask
+  重新武装。精度页 showAccTask / accRenderCalDetail 两处同款代码一并修复（replace_all）。
+- IAB 验证（私有端口 8312/8778 隔离实例 + 临时库灌 running 任务）：进详情→回列表，跨过
+  T+5s 轮询触发点仍留在列表（修复前必现拽回）✔；留在详情 6.5s+ 不被导航、运行态正常 ✔；
+  库内状态翻 succeeded 后 ~5s 内详情自动刷出终态（自轮询未被守卫误杀）✔。精度页同款守卫
+  未做浏览器验证（代码与 perf 逐字同构）。门禁 --check 过；perf2 bump api-perf ?v=10、
+  accuracy2 bump api-acc3 ?v=17。
+
+## 2026-11-16（模型管理模块新增 Rubric 管理页：判官评分标准资产仓可视化 CRUD，api32 v30 / v1.js v18）
+
+- 背景：rubric 资产仓（data/rubrics.json 单文件 + /accuracy/rubrics CRUD，上上批已落）一直只能
+  在精度页评测抽屉里「沉淀/选用」，缺独立管理入口。本次在 common2.html 模型管理组加「Rubric 管理」
+  页：资产列表（名称/打分语义/预览+字数/指纹/更新时间）+ 新建/编辑抽屉（名称唯一 409 由 toast 透传
+  后端文案）+ 删除（confirm 确认，任务快照整文不受影响）。纯前端，后端零改动。
+- api32.js：wireCommonRubricsPage（FAPI.get 渲染 + 表格事件委托 data-edit/del-rubric + 抽屉保存按
+  dataset.rubricEditId 分流 POST/PATCH，PATCH 空 score_type=清空备注）+ openRubricDrawer（新建态清
+  残留防上次编辑值误存，与 openModelDrawer 同款）；fapiBoot 公共分支挂载（fail-soft toast）。时间列
+  对齐全站 shortTime 口径 slice(5,16)，不另造格式。common2 内联脚本补 RUBRICS mock 数组（mock 模式
+  立即可看，live 由 wire 重渲）。
+- ⚠️ 共享资产 v1.js：新页面 id 必须进 applyRoute 的硬编码 GROUP 表（assets/v1.js），否则侧栏分组/
+  顶部 tab 高亮全错位（grp 回退 pages[0]）——本次加 `rubrics:"模型管理"` 并把 v1.js ?v=17→18 在全部
+  5 个引用页同 bump（common2/functional2/reliability3/accuracy2/perf2）。以后再加新页面记得同样两处。
+- 截图验收抓出布局 bug：内容预览列长文本把表格撑出视口（操作列不可见）——preview 包一层
+  .rub-prev（max-width:340px + ellipsis，样式进 common2 页内 style 块，mock/live 同结构）复验通过。
+- IAB 验证（私有端口 8311/8777 + AITE_DATASETS_DIR 隔离，rubrics.json 不脏 owner 数据）：模型管理
+  组侧栏四项/空态文案/新建落库（行指纹=后端 fingerprint）/编辑回填+PATCH 重算指纹（4357→006c）/
+  重名 409 toast+抽屉保持/删除回空态全通。门禁 mockup_symbols --check + node --check 过。
