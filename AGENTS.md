@@ -264,4 +264,9 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
   --db "sqlite+aiosqlite:///<临时库>"`（env 带 AITE_DATASETS_DIR/HF_HOME 隔离）+ 反代
   `AITE_API=http://127.0.0.1:8311 python web-ui/mockups/serve.py 8777`，收尾按 PID 停干净删临时
   库；起后台任务一律绝对路径。另注意后台 Bash 收尾会带走 Popen 子进程树，iab_sandbox up 别放
-  run_in_background（前台跑，子进程存活）。
+  run_in_background（前台跑，子进程存活）。up 后核对反代真起来（STATE 记的 pid 是 Popen 根
+  进程、uvicorn 日志 pid 是孙进程，互相对不上；8776 无监听时手动 `AITE_API=… serve.py 8776`
+  后台兜底，Git Bash kill 杀不动原生 exe 要 taskkill //PID <pid> //F，2026-11-16 实测）。
+- **sqlite 直写灌数**（2026-11-16）：ORM 建表的 NOT NULL 列 default（retry_count/cost_usd
+  等）是 Python 层填的，sqlite3 直写 INSERT 必须显式给全，否则 IntegrityError 逐个试错
+  空转数轮——先 `PRAGMA table_info(<表>)` 看全列再写 INSERT。
