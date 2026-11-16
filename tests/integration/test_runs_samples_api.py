@@ -29,6 +29,19 @@ def _review_row(index, score, prediction="B", target="A"):
     }
 
 
+def _error_row(index):
+    """执行失败样本（模型调用异常）：score 无 value 键 → passed=None。"""
+    return {
+        "index": index, "target": "A",
+        "messages": [{"role": "user", "content": f"问题{index}：模型调用失败"}],
+        "sample_score": {
+            "sample_id": index,
+            "score": {"status": "error", "message": "模型调用超时"},
+            "sample_metadata": {},
+        },
+    }
+
+
 def _write_reviews(work_dir, rows, model="deepseek-chat", ds="gpqa_diamond"):
     d = work_dir / "reviews" / model
     d.mkdir(parents=True, exist_ok=True)
@@ -43,7 +56,8 @@ def seeded(tmp_path):
     work_dir = tmp_path / "work"
     _write_reviews(work_dir, [_review_row(0, 1.0, prediction="A"),
                               _review_row(1, 0.0),
-                              _review_row(2, 1.0)])
+                              _review_row(2, 1.0),
+                              _error_row(3)])
 
     async def _seed():
         repo = SqlAlchemyRepository(Database(f"sqlite+aiosqlite:///{tmp_path / 'web.db'}"))
@@ -71,14 +85,16 @@ class TestRunSamplesApi:
         resp = client.get(f"/api/v1/runs/{run_id}/samples")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 3 and data["wrong"] == 1
+        assert data["total"] == 4 and data["wrong"] == 1
+        assert data["passed"] == 2 and data["error"] == 1
         assert data["datasets"] == ["gpqa_diamond"]
         rows = data["items"]
-        assert [r["passed"] for r in rows] == [True, False, True]
+        assert [r["passed"] for r in rows] == [True, False, True, None]
         assert rows[1]["extracted_prediction"] == "B"
         assert rows[1]["correct_answer"] == "与电场环流相关的选项"
         assert rows[0]["question"].startswith("问题0")
         assert rows[0]["score"] == 1.0
+        assert rows[3]["status"] == "error" and rows[3]["score"] is None
 
     def test_wrong_only_filter(self, seeded):
         client, run_id, _ = seeded
@@ -89,7 +105,7 @@ class TestRunSamplesApi:
     def test_pagination(self, seeded):
         client, run_id, _ = seeded
         data = client.get(f"/api/v1/runs/{run_id}/samples?limit=1&offset=1").json()
-        assert data["total"] == 3 and len(data["items"]) == 1
+        assert data["total"] == 4 and len(data["items"]) == 1
         assert data["items"][0]["index"] == 1
 
     def test_limit_param_validated(self, seeded):

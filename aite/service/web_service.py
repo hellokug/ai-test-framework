@@ -203,9 +203,11 @@ def load_run_samples(run: dict, *, limit: int = 200, offset: int = 0,
                      wrong_only: bool = False) -> dict | None:
     """读 run.details.work_dir 下 reviews/**/*.jsonl（evalscope 逐样本评分契约）。
 
-    返回 {items, total, wrong, datasets}；run 无 work_dir 或无逐样本产物
-    返回 None（404 语义由路由定——自研引擎域与旧运行没有该产物）。坏行跳过
-    不致命（单行损坏不该拖垮整页）。wrong_only 只留 passed=False 的行。
+    返回 {items, total, wrong, passed, error, datasets}：wrong=答错
+    （passed=False），passed=答对，error=执行失败/未出分（value 缺失，如模型
+    调用异常）。run 无 work_dir 或无逐样本产物返回 None（404 语义由路由定
+    ——自研引擎域与旧运行没有该产物）。坏行跳过不致命（单行损坏不该拖垮整页）。
+    wrong_only 只留 passed=False 的行。
     """
     work_dir = (run.get("details") or {}).get("work_dir")
     if not work_dir:
@@ -215,6 +217,8 @@ def load_run_samples(run: dict, *, limit: int = 200, offset: int = 0,
         return None
     rows: list[dict] = []
     wrong = 0
+    passed_ct = 0
+    error_ct = 0
     for p in files:
         dataset = p.stem.removesuffix("_default")
         with p.open(encoding="utf-8") as f:
@@ -227,13 +231,18 @@ def load_run_samples(run: dict, *, limit: int = 200, offset: int = 0,
                 except ValueError:
                     continue
                 row = _sample_row(raw, dataset)
+                # RISK: 统计口径——value 缺失（passed=None）一律计执行失败，不进答错
                 if row["passed"] is False:
                     wrong += 1
-                elif wrong_only:
+                elif row["passed"] is True:
+                    passed_ct += 1
+                else:
+                    error_ct += 1
+                if wrong_only and row["passed"] is not False:
                     continue
                 rows.append(row)
     return {"items": rows[offset:offset + limit], "total": len(rows),
-            "wrong": wrong,
+            "wrong": wrong, "passed": passed_ct, "error": error_ct,
             "datasets": sorted({r["dataset"] for r in rows})}
 
 

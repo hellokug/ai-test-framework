@@ -1610,3 +1610,22 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   抽屉打开（改动前 toast「仅 pending 任务可编辑」拒绝）→补场景/版本/自定义端点→
   「保存并运行」→历史 2 轮（#1/#2，#2 高亮）→点 #1 切回第一轮（该轮错误 fail-fast
   文案正确）。render_check + mockup_symbols --check 过。
+
+### 2026-11-16（23:5x）精度详情执行历史 + 样本成功/失败统计——api-acc3 v20→21
+- **api-acc3.js v20→21**（accuracy2.html 引用）：showAccTask 加 roundSel 参数（轮次
+  chips 传入），run_id 严格取所选轮自己的（fail-fast 轮不回退最新轮，旧数据无 history
+  沿用 result 快照，与功能域 showLiveTask 同口径）；详情页新增「执行历史」卡（轮次
+  chips：#n 触发方式 起始时刻 ●状态 通过率，当前轮高亮，附「复制该轮 spec」+ 该轮
+  错误行），crumb 带「第 X / N 轮」。
+- 样本统计补齐：后端 /runs/{id}/samples 聚合从 {total,wrong} 扩为
+  {total,wrong,passed,error}（error = value 缺失的执行失败/未出分行，web_service.py
+  load_run_samples）；前端统计卡「执行错误」(恒 0 的 run.error_cases) 改「执行失败
+  样本」(samples 聚合懒加载回填 #accErrStat)，逐样本 meta 升级「共 N · 答对 X ·
+  答错 Y · 执行失败 Z」。
+- IAB 隔离实例端到端（8310/8776，灌数直写临时库造 2 轮 GPQA 任务 + 两份 reviews
+  产物）：默认第 2 轮高亮、errStat=1、meta「共 4 条 · 答对 2 · 答错 1 · 执行失败 1」
+  →点 #1 chip 切轮（crumb 第 1/2 轮、meta 共 3 条/答对 1、总分 50%）全对。
+  mockup_symbols --check + node --check + ruff + 选测 6 passed 过。
+- 注意：8776 反代被 iab_sandbox up 静默失败过一次（STATE 里 proxy pid 与实际监听
+  不符），手动后台 `AITE_API=… serve.py 8776` 兜底后验证正常；down 后须 taskkill
+  手动进程（Git Bash kill 对原生 exe 无效）。

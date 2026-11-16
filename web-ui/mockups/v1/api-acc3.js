@@ -144,7 +144,7 @@ function aapiNum(v) {
     (Math.abs(v) <= 1.0001 ? (v * 100).toFixed(1) + "%" : String(v));
 }
 
-async function showAccTask(taskId) {
+async function showAccTask(taskId, roundSel) {
   const seq = showAccTask.seq = (showAccTask.seq || 0) + 1;
   if (accDetailTimer) { clearTimeout(accDetailTimer); accDetailTimer = null; }
   const detail = document.querySelector('main.page-host [data-page="detail"]');
@@ -180,9 +180,15 @@ async function showAccTask(taskId) {
   let result = null;
   try { result = await AAPI.get(`/accuracy/tasks/${taskId}/result`); }
   catch (e) { /* 409 非终态 */ }
-  // 取消/失败轮 result 为 null：run 引用兜底执行历史轮（同 api-perf 口径）
-  const runId = t.result?.run_id || result?.result?.run_id
-    || (t.history || []).filter(h => h.run_id).at(-1)?.run_id || null;
+  // 轮次选择：默认看最新一轮；roundSel 由「执行历史」chips 传入切换（与功能域
+  // showLiveTask 同口径）。run_id 严格取所选轮自己的——fail-fast 轮没有运行
+  // 记录，绝不回退最新轮；旧数据（无 history）沿用 result 快照的 run_id
+  const rounds = t.history || [];
+  const accRound = rounds.length
+    ? rounds[Math.min(Math.max(roundSel || rounds.length, 1), rounds.length) - 1]
+    : null;
+  const runId = accRound?.run_id || (rounds.length ? null
+    : (t.result?.run_id || result?.result?.run_id || null));
   let run = null;
   if (runId) {
     try { run = await AAPI.get(`/runs/${runId}`); }   // DB 唯一权威
@@ -205,13 +211,40 @@ async function showAccTask(taskId) {
   const dur = (t.started_at && t.finished_at)
     ? fmtDur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : "—";   // fmtDur 用 live2.js 共享实现
 
+  // —— 执行历史（同一任务每轮运行；轮次 chips 可切看，与功能域执行历史卡同构）——
+  const accDot = s => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${
+    s === "succeeded" ? "var(--ok)" : s === "failed" ? "var(--bad)"
+      : s === "running" ? "var(--ac)" : "var(--tx3)"};margin:0 4px 0 0;vertical-align:1px"></span>`;
+  const accStTxt = s => s === "running" ? "进行中" : s === "succeeded" ? "通过"
+    : s === "failed" ? "失败" : s === "cancelled" ? "已停止" : s === "stale" ? "已中断" : s;
+  const accTrigTxt = g => g === "retry" ? "重试" : g === "scheduled" ? "定时"
+    : g === "create" ? "创建即跑" : "运行";
+  const roundChips = rounds.map(r => `
+      <span class="chip${accRound && r.n === accRound.n ? " on" : ""}" style="cursor:pointer"
+        title="查看该轮结果（spec 快照随轮留档）"
+        onclick="showAccTask('${taskId}', ${r.n})">#${r.n}
+        ${accTrigTxt(r.trigger)} ${aapiShortTime(r.started_at).slice(6)}
+        ${accDot(r.status)}${accStTxt(r.status)}${r.pass_rate != null
+          ? ` ${(r.pass_rate * 100).toFixed(1)}%` : ""}</span>`).join("");
+  const histSec = `
+    <section class="card" style="margin-bottom:14px;padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-weight:650;font-size:12.5px;color:var(--tx3)">执行历史</span>
+        ${roundChips || '<span class="faint" style="font-size:12px">尚无运行记录 —— 发起运行后在此累积每一轮</span>'}
+        <span style="flex:1"></span>
+        ${accRound ? `<button class="btn sm" data-acc-spec="${escHtml(JSON.stringify(accRound.spec || {}))}"
+          onclick="aapiCopyRoundSpec(this)">复制该轮 spec</button>` : ""}
+      </div>
+      ${accRound && accRound.error ? `<div class="hint" style="color:var(--bad);margin:6px 0 0">该轮错误：${escHtml(accRound.error)}</div>` : ""}
+    </section>`;
+
   detail.innerHTML = `
     <header class="topbar">
       <div><h1>${escHtml(t.name || "(未命名)")} ${badge(dispStatus)}</h1>
       <div class="crumb">task ${t.id} · 引擎 ${escHtml(spec.engine || run?.details?.tool || "自研")}
       · 数据集 ${escHtml(datasets)} · ${spec.version ? `版本 ${escHtml(spec.version)} · ` : ""}模型
       ${escHtml(spec.target?.profile || spec.target?.model || "-")}
-      · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"}</div></div>
+      · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"}${rounds.length ? ` · 第 ${accRound?.n || rounds.length} / ${rounds.length} 轮` : ""}</div></div>
       <div class="actions">
         ${(t.status === "pending" || ACC_TERMINAL.includes(t.status))
           ? `<button class="btn" onclick="aapiTaskAction('run', '${taskId}')" title="${t.status === "pending" ? "发起运行" : "重跑一轮（同一任务，追加执行历史）"}">${t.status === "pending" ? "运行" : "重跑"}</button>
@@ -229,11 +262,13 @@ async function showAccTask(taskId) {
       </div>
       <div class="stat"><div class="label"><i style="background:var(--ac2)"></i>样本数</div>
         <div class="value">${run?.total_cases ?? t.result?.total_cases ?? "—"}</div></div>
-      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>执行错误</div>
-        <div class="value">${run?.error_cases ?? t.result?.error_cases ?? 0}</div></div>
+      <div class="stat"><div class="label"><i style="background:var(--bad)"></i>执行失败样本</div>
+        <div class="value" id="accErrStat">—</div>
+        <span class="delta flat">模型调用异常 / 未出分</span></div>
       <div class="stat"><div class="label"><i style="background:var(--warn)"></i>耗时</div>
         <div class="value" style="font-size:22px">${dur}</div></div>
     </section>
+    ${histSec}
     ${runErr ? `<section class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--bad) 40%,transparent)">
       <div class="card-head"><div><h3 style="color:var(--bad)">执行错误</h3></div></div>
       <pre style="white-space:pre-wrap;font-size:12.5px;margin:0">${escHtml(runErr)}</pre></section>` : ""}
@@ -365,7 +400,10 @@ async function accLoadSamples(runId, wrongOnly, seq) {
   try {
     const d = await AAPI.get(`/runs/${runId}/samples?limit=200${wrongOnly ? "&wrong_only=1" : ""}`);
     if (seq !== undefined && seq !== showAccTask.seq) return;
-    if (meta) meta.textContent = `（共 ${d.total} 条 · 答错 ${d.wrong} 条）`;
+    if (meta) meta.textContent =
+      `（共 ${d.total} 条 · 答对 ${d.passed ?? 0} · 答错 ${d.wrong} · 执行失败 ${d.error ?? 0}）`;
+    const errEl = document.getElementById("accErrStat");   // 统计卡「执行失败样本」懒加载回填
+    if (errEl) errEl.textContent = String(d.error ?? 0);
     box.innerHTML = d.items.length ? d.items.map(accSampleBlock).join("")
       : `<div class="ds-empty">${wrongOnly ? "没有答错样本（全部正确）" : "无逐样本记录"}</div>`;
   } catch (e) {
@@ -373,6 +411,17 @@ async function accLoadSamples(runId, wrongOnly, seq) {
     if (meta) meta.textContent = "";
     box.innerHTML = '<div class="ds-empty">无逐样本明细（自研引擎或旧版运行无 reviews 产物）</div>';
   }
+}
+
+/* 执行历史卡「复制该轮 spec」：spec JSON 经 data-acc-spec 属性随行携带（escHtml 转义入库） */
+async function aapiCopyRoundSpec(el) {
+  // RISK: navigator.clipboard 非安全上下文/拒绝授权时抛错，catch 兜底 toast 不可用提示
+  try {
+    await navigator.clipboard.writeText(el.dataset.accSpec || "");
+    const orig = el.textContent;
+    el.textContent = "已复制 ✓";
+    setTimeout(() => { el.textContent = orig; }, 1200);
+  } catch (e) { aapiToast("复制失败（浏览器剪贴板不可用）", true); }
 }
 
 async function stopAccTask(taskId) {
