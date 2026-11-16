@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Collection
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 
 from aite.core.interfaces import Repository
 from aite.core.types import (
+    TASK_PENDING,
     TASK_RUNNING,
     TASK_STALE,
     TASK_STOPPING,
@@ -770,11 +771,13 @@ class SqlAlchemyRepository(Repository):
     # ReliabilityTaskRow，四表同构见 models.TaskLifecycleMixin），一份实现服务四域。
     async def create_domain_task(self, table: type[Any], spec: dict[str, Any],
                                  name: str = "", retry_of: str | None = None,
-                                 retry_count: int = 0) -> dict:
+                                 retry_count: int = 0,
+                                 scheduled_at: datetime | None = None) -> dict:
         task_id = new_id()
         async with self.db.sessions() as session:
             session.add(table(id=task_id, name=name, spec=_json_safe(spec),
-                              retry_of=retry_of, retry_count=retry_count))
+                              retry_of=retry_of, retry_count=retry_count,
+                              scheduled_at=scheduled_at))
             await session.commit()
         return await self.get_domain_task(table, task_id)
 
@@ -792,7 +795,8 @@ class SqlAlchemyRepository(Repository):
                     return None
             for key, value in fields.items():
                 if key not in ("name", "spec", "status", "result", "error",
-                               "started_at", "finished_at", "history"):
+                               "started_at", "finished_at", "history",
+                               "scheduled_at"):
                     raise ValueError(f"domain task 字段不可更新: {key}")
                 if key in ("spec", "result", "history"):
                     value = _json_safe(value)
@@ -852,6 +856,20 @@ class SqlAlchemyRepository(Repository):
             await session.commit()
             return result.rowcount or 0
 
+    async def due_scheduled_domain_tasks(self, table: type[Any], now: datetime,
+                                         limit: int = 20) -> list[dict]:
+        """定时执行扫描（V1-PLAN §8.5）：pending 且 scheduled_at ≤ now，
+        到点早的先触发；调度循环每拍按域调用。"""
+        async with self.db.sessions() as session:
+            stmt = (select(table)
+                    .where(table.status == TASK_PENDING,
+                           table.scheduled_at.is_not(None),
+                           table.scheduled_at <= now)
+                    .order_by(table.scheduled_at.asc())
+                    .limit(limit))
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._domain_task_dict(r) for r in rows]
+
     @staticmethod
     def _domain_task_dict(row: Any) -> dict:
         return {
@@ -860,6 +878,7 @@ class SqlAlchemyRepository(Repository):
             "history": row.history,
             "retry_of": str(row.retry_of) if row.retry_of else None,
             "retry_count": row.retry_count,
+            "scheduled_at": aware(row.scheduled_at).isoformat() if row.scheduled_at else None,
             "created_at": aware(row.created_at).isoformat(),
             "started_at": aware(row.started_at).isoformat() if row.started_at else None,
             "finished_at": aware(row.finished_at).isoformat() if row.finished_at else None,

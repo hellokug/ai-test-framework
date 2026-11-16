@@ -91,6 +91,36 @@ class TestDomainTasksApi:
         assert client.patch(f"/api/v1/perf/tasks/{other['id']}",
                             json={"name": ""}).status_code == 422
 
+    def test_scheduled_execute_contract(self, client):
+        """execute 契约（V1-PLAN §8.5 创建 ≠ 执行）：scheduled 落 scheduled_at；
+        缺 at / 过期 at / 非法 mode → 422；mode=now 创建即 run（trigger=create）；
+        缺省 = 仅创建（兼容旧两段式前端）。"""
+        from datetime import datetime, timedelta
+
+        future = (datetime.now() + timedelta(hours=1)).isoformat()   # naive，前端 datetime-local 形态
+        task = client.post("/api/v1/perf/tasks", json={
+            "name": "sched", "spec": {"engine": "pytest"},
+            "execute": {"mode": "scheduled", "at": future}}).json()
+        assert task["status"] == "pending" and task["scheduled_at"]
+
+        assert client.post("/api/v1/perf/tasks", json={
+            "name": "no-at", "spec": {},
+            "execute": {"mode": "scheduled"}}).status_code == 422
+        assert client.post("/api/v1/perf/tasks", json={
+            "name": "past-at", "spec": {},
+            "execute": {"mode": "scheduled",
+                        "at": "2020-01-01T00:00:00+00:00"}}).status_code == 422
+        assert client.post("/api/v1/perf/tasks", json={
+            "name": "bad-mode", "spec": {},
+            "execute": {"mode": "weekly"}}).status_code == 422
+
+        now_task = client.post("/api/v1/perf/tasks", json={
+            "name": "now-mode", "spec": {"engine": "pytest"},
+            "execute": {"mode": "now"}}).json()
+        assert now_task["status"] == "running"
+        assert now_task["history"] and now_task["history"][0]["trigger"] == "create"
+        self._wait_status(client, "perf", now_task["id"], {"failed"})
+
     def test_duplicate_dedups_copy_name(self, client):
         """连复制同名源：副本名递增「· 副本」「· 副本 2」，不落 409。"""
         task = self._create(client, "perf", {"engine": "pytest"}, name="src2")

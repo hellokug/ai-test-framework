@@ -32,6 +32,8 @@ logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+SCHEDULE_TICK_S = 30.0   # 定时执行扫描周期（V1-PLAN §8.5）：触发精度 = 一拍
+
 # 422 日志脱敏：键名子串命中即打码（宁滥勿缺，同 functional/harness 思路）
 _SENSITIVE_BODY_PARTS = ("api_key", "apikey", "token", "secret",
                          "password", "authorization")
@@ -68,6 +70,8 @@ class AppState:
         self.bus = EventBus()
         self.token = token
         self.tasks: dict[str, asyncio.Task] = {}
+        # 定时执行调度循环（V1-PLAN §8.5）；独立字段不入 self.tasks（那是 bg_task 语义）
+        self.scheduler: asyncio.Task | None = None
         # 四域任务 kit（docs/domain-backends.md §2）：bus 共享 → SSE 频道同源
         self.task_kits = {
             "functional": build_functional_task_kit(self.bus),
@@ -89,8 +93,24 @@ class AppState:
             logger.warning("启动收敛：%d 个残留后台任务 + %d 个中断 run + "
                            "%d 个域任务标记为 error/stale",
                            stale, interrupted, stale_domain)
+        # 定时执行调度循环（V1-PLAN §8.5）：每拍扫四域到点 pending 任务触发 run；
+        # 重启后到点未触发的任务由首拍接手（mark_stale 只收敛 running/stopping）
+        self.scheduler = asyncio.create_task(self._schedule_loop())
+
+    async def _schedule_loop(self) -> None:
+        while True:
+            await asyncio.sleep(SCHEDULE_TICK_S)
+            try:
+                for kit in self.task_kits.values():
+                    await kit.run_due(self.repo)
+            except Exception:   # RISK: 单拍异常吞掉仅记日志——防止调度循环静默死亡
+                logger.exception("定时调度扫描失败（下一拍重试）")
 
     async def shutdown(self) -> None:
+        if self.scheduler is not None:
+            self.scheduler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.scheduler
         bg_ids = list(self.tasks)
         for task in self.tasks.values():
             task.cancel()

@@ -309,7 +309,7 @@
           </div></div>
         <div class="p-row" id="accSched2Field" hidden style="margin-bottom:0">
           <span class="p-label">定时时间</span>
-          <input class="in" type="datetime-local" value="2026-09-25T10:00" style="max-width:300px"></div>
+          <input class="in" type="datetime-local" id="accSchedAt2" style="max-width:300px"></div>
       </div>
       <div class="card" style="margin-top:14px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
         <div class="dim" style="font-size:12.5px;line-height:1.7">
@@ -482,7 +482,7 @@
       </div>
       <div class="p-row" id="schedAtField" hidden style="margin:12px 0 0">
         <span class="p-label">定时时间<span class="qmark">?<span class="tip">由后台调度器到点触发 run；触发前任务为 pending，可编辑/取消</span></span></span>
-        <input class="in" type="datetime-local" value="2026-09-25T10:00" style="max-width:300px"></div>
+        <input class="in" type="datetime-local" id="accSchedAt" style="max-width:300px"></div>
     </div>
 
     <div class="card" style="margin-top:16px;padding:12px 16px;background:color-mix(in srgb,var(--ac) 8%,transparent);border-color:color-mix(in srgb,var(--ac) 30%,transparent)">
@@ -1239,6 +1239,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=19"></script>
+<script src="api-acc3.js?v=20"></script>
 </body>
 </html>

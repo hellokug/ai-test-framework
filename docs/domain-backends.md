@@ -29,7 +29,7 @@
 
 | 方法与路径 | 语义 | 约束 |
 |---|---|---|
-| `POST /{D}/tasks` | 创建任务（`status=pending`，不运行） | body：`{name, spec}`，spec 为域自定义（§6）；name 必填非空且同域唯一（缺失/空 422，占用 409） |
+| `POST /{D}/tasks` | 创建任务（`status=pending`，不运行） | body：`{name, spec, execute?}`，spec 为域自定义（§6）；name 必填非空且同域唯一（缺失/空 422，占用 409）；execute 见下方「创建 ≠ 执行」 |
 | `GET /{D}/tasks` | 列表 | query：`status`、`retry_of`、`limit`（默认 50） |
 | `GET /{D}/tasks/{id}` | 详情（含 `history` 执行历史） | 404 不存在 |
 | `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅非运行中（`pending`/终态）；`running\|stopping` 409；改名占用同域同名 409、改空 422 |
@@ -140,6 +140,7 @@ class TaskLifecycleMixin:            # 公共列，mixin 不建表
     error: Text | None
     retry_of: GUID | None            # 索引
     retry_count: int = 0
+    scheduled_at: UTC | None         # 索引；定时执行（V1-PLAN §8.5），触发即清空
     created_at / started_at / finished_at: UTC（原则 11）
 
 class FunctionalTaskRow(Base, TaskLifecycleMixin):  __tablename__ = "functional_task"
@@ -148,9 +149,20 @@ class PerfTaskRow(Base, TaskLifecycleMixin):        __tablename__ = "perf_task"
 class ReliabilityTaskRow(Base, TaskLifecycleMixin): __tablename__ = "reliability_task"
 ```
 
-repository 增 6 个泛型方法（表类作参数，一份实现）：
+repository 增 7 个泛型方法（表类作参数，一份实现）：
 `create_domain_task / update_domain_task / list_domain_tasks / get_domain_task /
-delete_domain_task / mark_stale_domain_tasks`。
+delete_domain_task / mark_stale_domain_tasks / due_scheduled_domain_tasks`。
+
+**创建 ≠ 执行（2026-11-16 实装，V1-PLAN §8.5）**：`POST /{D}/tasks` 可带
+`execute: {mode: "now"|"scheduled"|"manual", at?}`——缺省/`manual` = 仅创建
+（兼容旧两段式前端：创建后自行 `POST /run`）；`now` = 创建后立即 run（202 语义，
+快照即 running，执行历史 trigger=create）；`scheduled` = 定时执行，`at` 必填
+（ISO 时间，无时区按服务器本地时区解释）且须为未来时间（过期 422），落
+`scheduled_at`（统一转 UTC）。四域共用调度循环（`web/app.py` AppState，
+30s 一拍）：扫 `pending` 且 `scheduled_at <= now` 的任务，按域 `kit.run_due`
+触发 run（trigger=scheduled）并清空 `scheduled_at`（消费掉，防重复调度）；
+run 的 expect_status 原子翻转保证并发拍/手动提前首发不重复拉起。重启后到点
+未触发的任务由首拍接手（mark_stale 只收敛 running/stopping，pending 保留）。
 
 **结果存储策略**：功能、精度复用公共结果存储（test_run / test_case_result /
 metric_result），任务表 `result` 只放引用与汇总；性能复用 metric_result 时序 +

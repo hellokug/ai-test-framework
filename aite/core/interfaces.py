@@ -229,7 +229,8 @@ class Repository(ABC):
     @abstractmethod
     async def create_domain_task(self, table: type[Any], spec: dict[str, Any],
                                  name: str = "", retry_of: str | None = None,
-                                 retry_count: int = 0) -> dict: ...
+                                 retry_count: int = 0,
+                                 scheduled_at: Any = None) -> dict: ...
 
     @abstractmethod
     async def update_domain_task(self, table: type[Any], task_id: str,
@@ -256,6 +257,11 @@ class Repository(ABC):
     @abstractmethod
     async def mark_stale_domain_tasks(self, table: type[Any]) -> int:
         """startup 收敛：running/stopping 残留 → stale（pending 为排队任务，保留）。"""
+
+    @abstractmethod
+    async def due_scheduled_domain_tasks(self, table: type[Any], now: Any,
+                                         limit: int = 20) -> list[dict]:
+        """定时执行扫描（V1-PLAN §8.5）：pending 且 scheduled_at ≤ now 的任务。"""
 
     # -- dataset catalog（数据集管理统一目录，docs/domain-backends.md §12）------
     @abstractmethod

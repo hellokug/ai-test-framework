@@ -479,7 +479,12 @@ expect，断言白名单校验）的结构化编辑，前端零评估逻辑—�
 5. **精度任务 spec 结构化表单形态**（2026-09-24 新增，随前端落地补；
    **2026-10-24 部分实装**：前端六卡 → suite raw 客户端组装已上线（api-acc1.js，
    映射 = TOOL-SUITE-PARAMS.md）；spec.version additive 已进 SuiteConfig；
-   **未做**：execute.mode=scheduled 后台调度器（前端显式拦截提示）、version 归档/
+   ~~execute.mode=scheduled 后台调度器~~ **✅ 已实装（2026-11-16，四域通用）**：
+   `POST /{D}/tasks` 增 `execute={mode: now|scheduled|manual, at?}` 契约（缺省
+   manual 兼容旧两段式；now = 创建即 run trigger=create；scheduled = at 必填
+   须未来时间、落 `TaskLifecycleMixin.scheduled_at` 列）+ 四域调度循环
+   （web/app.py，30s 拍，kit.run_due 到点触发 trigger=scheduled 并消费
+   scheduled_at；契约详见 docs/domain-backends.md §2/§6）。**仍待**：version 归档/
    趋势消费（§8.6））：
    `POST /accuracy/tasks` 的 spec 接受
    `{datasets:[ref…], limit_per_dataset, seed, model(别名), version(必填,被测版本), parallel, model_params{max_tokens?,temperature?,top_p?,top_k?,thinking?}, extra_model_params(JSON 合并), name?, thresholds?, execute{mode,at}?}`，

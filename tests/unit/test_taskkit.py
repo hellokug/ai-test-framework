@@ -5,6 +5,7 @@ PerfTaskRow 为载体；FakeExecutor 提供可控执行形态（立即返回 / �
 """
 
 import asyncio
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -24,6 +25,7 @@ from aite.core.types import (
     TASK_STALE,
     TASK_STOPPING,
     TASK_SUCCEEDED,
+    utcnow,
 )
 from aite.storage.models import PerfTaskRow
 from aite.web.events import EventBus
@@ -132,6 +134,37 @@ async def test_get_missing_raises(repo):
     kit = make_kit(FakeExecutor())
     with pytest.raises(TaskNotFoundError):
         await kit.delete(repo, "no-such-id")
+
+
+# ------------------------------------------------------------------ 定时执行
+async def test_create_scheduled_at_roundtrip(repo):
+    """scheduled_at 透传落库并随快照回读（V1-PLAN §8.5 定时执行）；不传 = None。"""
+    kit = make_kit(FakeExecutor())
+    at = utcnow() + timedelta(hours=1)
+    task = await kit.create(repo, {}, name="sched", scheduled_at=at)
+    assert task["status"] == TASK_PENDING and task["scheduled_at"]
+    back = datetime.fromisoformat(task["scheduled_at"])
+    assert abs((back - at).total_seconds()) < 1
+    plain = await kit.create(repo, {}, name="plain")
+    assert plain["scheduled_at"] is None
+
+
+async def test_run_due_fires_only_due_and_consumes(repo):
+    """run_due 只触发到点 pending（trigger=scheduled）并消费 scheduled_at：
+    未到点保留不动、触发后清空防重复调度、重复扫描不二次触发。"""
+    kit = make_kit(FakeExecutor(result={"pass_rate": 1.0}))
+    past = await kit.create(repo, {}, name="due",
+                            scheduled_at=utcnow() - timedelta(minutes=1))
+    future = await kit.create(repo, {}, name="not-due",
+                              scheduled_at=utcnow() + timedelta(hours=1))
+    assert await kit.run_due(repo) == 1
+    await kit.wait(repo, past["id"])
+    done = await kit.get(repo, past["id"])
+    assert done["status"] == TASK_SUCCEEDED and done["scheduled_at"] is None
+    assert done["history"][-1]["trigger"] == "scheduled"
+    kept = await kit.get(repo, future["id"])
+    assert kept["status"] == TASK_PENDING and kept["scheduled_at"] is not None
+    assert await kit.run_due(repo) == 0
 
 
 # ------------------------------------------------------------------ run 成败

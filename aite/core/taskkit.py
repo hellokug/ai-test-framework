@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Protocol
 
 from aite.core.types import (
@@ -156,11 +157,17 @@ class DomainTaskKit:
         self.bus.publish(self.channel(task_id), event)
 
     # ------------------------------------------------------------------- CRUD
-    async def create(self, repo: Any, spec: dict, name: str = "") -> dict:
-        """创建任务：名称必填非空且同域唯一（占用 → TaskNameConflictError）。"""
+    async def create(self, repo: Any, spec: dict, name: str = "",
+                     *, scheduled_at: datetime | None = None) -> dict:
+        """创建任务：名称必填非空且同域唯一（占用 → TaskNameConflictError）。
+
+        scheduled_at 非空 = 定时执行（V1-PLAN §8.5）：pending 任务挂到点
+        时间，由调度循环 run_due 到点触发 run。
+        """
         cleaned = _clean_task_name(name)
         await self._require_name_free(repo, cleaned)
-        return await repo.create_domain_task(self.table, spec, name=cleaned)
+        return await repo.create_domain_task(self.table, spec, name=cleaned,
+                                             scheduled_at=scheduled_at)
 
     async def list(self, repo: Any, *, status: str | None = None,
                    retry_of: str | None = None, limit: int = 50) -> list[dict]:
@@ -228,12 +235,15 @@ class DomainTaskKit:
         return rounds
 
     async def run(self, repo: Any, task_id: str, *, trigger: str = "run") -> dict:
-        """运行：pending 可首发、终态可重跑（同一任务，追加执行历史轮次）。"""
+        """运行：pending 可首发、终态可重跑（同一任务，追加执行历史轮次）。
+
+        首发即清空 scheduled_at：手动提前跑或到点触发都消费掉挂起的定时，
+        防同一任务被调度器重复拉起。"""
         current = await self._require(repo, task_id)
         started = await repo.update_domain_task(
             self.table, task_id, expect_status=(TASK_PENDING, *TASK_TERMINAL),
             status=TASK_RUNNING, started_at=utcnow(),
-            result=None, error=None, finished_at=None,
+            result=None, error=None, finished_at=None, scheduled_at=None,
             history=self._open_round(current, trigger))
         if started is None:
             raise TaskStateError("run 仅限 pending 或终态任务（运行中不可重复发起）")
@@ -434,6 +444,22 @@ class DomainTaskKit:
     async def mark_stale(self, repo: Any) -> int:
         """startup 调用：running/stopping 残留 → stale（pending 排队任务保留）。"""
         return await repo.mark_stale_domain_tasks(self.table)
+
+    async def run_due(self, repo: Any, *, now: datetime | None = None) -> int:
+        """定时执行（V1-PLAN §8.5）：触发 scheduled_at 已到点的 pending 任务。
+
+        调度循环每拍按域调用；run 的 expect_status 原子翻转保证并发拍/手动
+        提前首发不重复拉起（后到者 TaskStateError 静默跳过，以 DB 状态为准）。
+        返回本拍触发数。"""
+        due = await repo.due_scheduled_domain_tasks(self.table, now or utcnow())
+        fired = 0
+        for item in due:
+            try:
+                await self.run(repo, item["id"], trigger="scheduled")
+                fired += 1
+            except TaskStateError:
+                continue
+        return fired
 
     # ------------------------------------------------------------------ 内部
     async def _require_name_free(self, repo: Any, name: str,

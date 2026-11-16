@@ -1581,3 +1581,21 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   创建 UI 不动。IAB 实测（8775 预览反代 8300，guardWrites 全程零写请求）：三页空名点发起均
   toast「任务名称必填（同域内唯一，便于列表检索）」、抽屉不关、writes=0。mockup_symbols
   --check 过（含 api32 双引用页 v=32 一致）。
+
+### 2026-11-16（23:1x）精度页定时执行实装——api-acc3 v19→20
+
+后端调度器缺口闭合（主提交在 aite/ 侧；契约 docs/domain-backends.md §2/§6、V1-PLAN §8
+状态同步更新）。静态稿侧本条目范围：
+- **accuracy2.html**：两个创建抽屉的定时时间输入加 id（自定义面板 `accSchedAt` / 脚本面板
+  `accSchedAt2`，此前无 id 是「选了定时没法读值只能拦截」的根因）；去掉过期假 value
+  （2026-09-25）留空必填。**api-acc3.js ?v=19→20**（仅 accuracy2.html 引用）。
+- **api-acc3.js**：创建提交去掉「定时执行暂未实装」拦截——scheduled 时读对应时间输入
+  （空值报「定时执行需先选择执行时间」），body 增 `execute={mode:"scheduled", at}`
+  （datetime-local 无时区，后端按服务器本地时区解释）；toast 分三形态（已定时含到点
+  时间/已发起/仅创建）；now 保持两段式（创建 + run）不变。
+- IAB 隔离实例端到端（8313/8779 私有端口）：选卡→时间字段显形→提交→后端
+  pending+scheduled_at（本地 23:09 → UTC 15:09 换算正确）→调度拍到点自动 run
+  （history trigger=scheduled、scheduled_at 消费清空）→预期 failed（隔离 .venv 无
+  evalscope，引擎层预期失败）。mockup_symbols --check 过。
+- 已知边界：精度页数据集 chips 来自 `/tools/benchmarks`（evalscope 引擎目录），.venv
+  无 evalscope 时该卡显示「加载失败」——与定时执行无关，验证时 evaluate 灌 DS_ITEMS 绕过。

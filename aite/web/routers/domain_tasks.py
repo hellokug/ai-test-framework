@@ -9,13 +9,14 @@ TaskStateError（状态机守卫）→ 409（子类 TaskNameConflictError = 同�
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from aite.core.taskkit import DomainTaskKit, TaskNotFoundError, TaskStateError, TaskValidationError
-from aite.core.types import TASK_TERMINAL
+from aite.core.types import TASK_TERMINAL, utcnow
 from aite.web.deps import get_state
 from aite.web.sse import stream_events
 
@@ -23,6 +24,8 @@ from aite.web.sse import stream_events
 class TaskCreateIn(BaseModel):
     name: str   # 必填（缺失 → pydantic 422；空/纯空白 → kit 422）；同域唯一（占用 → 409）
     spec: dict[str, Any]
+    # 创建 ≠ 执行（V1-PLAN §8.5）：{mode: now|scheduled|manual, at?}；缺省 = 仅创建
+    execute: dict[str, Any] | None = None
 
 
 class TaskUpdateIn(BaseModel):
@@ -53,6 +56,39 @@ async def _call(op, *args, **kwargs):
         raise HTTPException(409, str(exc)) from exc
 
 
+_EXECUTE_MODES = ("now", "scheduled", "manual")
+
+
+def _parse_scheduled_at(execute: dict[str, Any] | None) -> tuple[str, datetime | None]:
+    """execute 键解析（V1-PLAN §8.5「创建 ≠ 执行」）：返回 (mode, scheduled_at)。
+
+    缺省/None → manual（仅创建，兼容旧两段式前端）；now → 创建后立即 run；
+    scheduled → at 必填（ISO 时间，无时区按服务器本地时区解释）且须为未来
+    时间，统一转 UTC 存储（调度比较与 created_at 同口径）。校验失败抛
+    TaskValidationError（调用方映射 422）。"""
+    if not execute:
+        return "manual", None
+    mode = str(execute.get("mode") or "manual")
+    if mode not in _EXECUTE_MODES:
+        raise TaskValidationError(
+            f"execute.mode 须为 {'/'.join(_EXECUTE_MODES)} 之一，当前 {mode!r}")
+    if mode != "scheduled":
+        return mode, None
+    raw = execute.get("at")
+    if not raw:
+        raise TaskValidationError("execute.mode=scheduled 需提供 at（ISO 时间）")
+    try:
+        at = datetime.fromisoformat(str(raw))
+    except ValueError as exc:
+        raise TaskValidationError(f"execute.at 非法（须 ISO 时间）：{raw}") from exc
+    if at.tzinfo is None:
+        at = at.astimezone()               # naive 视为服务器本地时区
+    at = at.astimezone(timezone.utc)
+    if at <= utcnow():
+        raise TaskValidationError(f"execute.at 已过期：{raw}")
+    return mode, at
+
+
 def build_domain_tasks_router(domain: str) -> APIRouter:
     """按域名构建同形任务路由（POST /{D}/tasks … GET /{D}/tasks/{id}/stream）。"""
     router = APIRouter(tags=[f"{domain}-tasks"])
@@ -60,8 +96,16 @@ def build_domain_tasks_router(domain: str) -> APIRouter:
 
     @router.post(base)
     async def create_task(body: TaskCreateIn, state: Any = Depends(get_state)):
-        return await _call(_kit(state, domain).create, state.repo,
-                           body.spec, body.name)
+        try:
+            mode, sched_at = _parse_scheduled_at(body.execute)
+        except TaskValidationError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        task = await _call(_kit(state, domain).create, state.repo,
+                           body.spec, body.name, scheduled_at=sched_at)
+        if mode == "now":   # 创建后立即 run（「创建 ≠ 执行」的 now 形态）
+            return await _call(_kit(state, domain).run, state.repo,
+                               task["id"], trigger="create")
+        return task
 
     @router.get(base)
     async def list_tasks(state: Any = Depends(get_state),

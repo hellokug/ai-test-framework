@@ -27,6 +27,11 @@ _PENDING_COLUMNS: list[tuple[str, sa.Column]] = [
     ("dataset_catalog", sa.Column("capabilities", sa.JSON(), nullable=True)),
     # 来源私有性（open=开源 / self=自建；与获取渠道 origin 正交，存量行展示层按 source 推导）
     ("dataset_catalog", sa.Column("ownership", sa.String(8), nullable=True)),
+    # 定时执行（TaskLifecycleMixin.scheduled_at，2026-11-16；V1-PLAN §8.5 调度器）
+    ("functional_task", sa.Column("scheduled_at", sa.DateTime(), nullable=True)),
+    ("accuracy_task", sa.Column("scheduled_at", sa.DateTime(), nullable=True)),
+    ("perf_task", sa.Column("scheduled_at", sa.DateTime(), nullable=True)),
+    ("reliability_task", sa.Column("scheduled_at", sa.DateTime(), nullable=True)),
 ]
 
 

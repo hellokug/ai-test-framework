@@ -241,6 +241,9 @@ class TaskLifecycleMixin:
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True)
+    # 定时执行（V1-PLAN §8.5）：非空且 status=pending 表示待调度，到点由调度循环
+    # 触发 run（触发即清空，防重复调度）；存 UTC naive（与 created_at 同口径）。
+    scheduled_at: Mapped[datetime | None] = mapped_column(sa.DateTime(), nullable=True, index=True)
 
 
 class FunctionalTaskRow(TaskLifecycleMixin, Base):

@@ -1224,14 +1224,21 @@ function bindAccSubmits() {
         ({ spec, name } = aapiCollectCustomSpec());
       }
       const mode = aapiExecModeOf(fromScript ? "accExec2Cards" : "execCards");
+      const body = { name: name || undefined, spec };
       if (mode === "scheduled") {
-        throw new Error("定时执行暂未实装（V1-PLAN §8.5 调度器缺口），请选「立即执行」或「仅创建」");
+        const atRaw = document.getElementById(fromScript ? "accSchedAt2" : "accSchedAt")?.value?.trim();
+        if (!atRaw) throw new Error("定时执行需先选择执行时间");
+        body.execute = { mode: "scheduled", at: atRaw };   // datetime-local 无时区，后端按服务器本地时区解释
       }
-      const task = await AAPI.post("/accuracy/tasks", { name: name || undefined, spec });
+      const task = await AAPI.post("/accuracy/tasks", body);
       if (mode === "now") {
         await AAPI.post(`/accuracy/tasks/${task.id}/run`);
         drawer.hidden = true;
         aapiToast(`任务已发起：${task.id.slice(0, 8)}（运行中，任务列表可查）`);
+      } else if (mode === "scheduled") {
+        drawer.hidden = true;
+        const at = task.scheduled_at ? new Date(task.scheduled_at).toLocaleString() : "";
+        aapiToast(`任务已定时：${task.id.slice(0, 8)}，${at} 到点自动运行（到点前可编辑/删除）`);
       } else {
         drawer.hidden = true;
         aapiToast(`任务已创建（仅创建）：${task.id.slice(0, 8)}，稍后在任务列表手动运行`);
