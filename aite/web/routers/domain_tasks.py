@@ -3,7 +3,8 @@
 四域契约同形 → 一份路由工厂 + 四个实例（原则 3）；kit 由 AppState.task_kits
 提供（启动装配、bus 共享 SSE 频道），业务规则全在 core/taskkit + service 层
 （原则 1：路由只做参数校验 → 调 kit → 错误映射 → 返回）。错误语义显式化：
-TaskNotFoundError → 404、TaskStateError（状态机守卫）→ 409。
+TaskNotFoundError → 404、TaskValidationError（任务名必填）→ 422、
+TaskStateError（状态机守卫）→ 409（子类 TaskNameConflictError = 同域同名占用）。
 """
 
 from __future__ import annotations
@@ -13,14 +14,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from aite.core.taskkit import DomainTaskKit, TaskNotFoundError, TaskStateError
+from aite.core.taskkit import DomainTaskKit, TaskNotFoundError, TaskStateError, TaskValidationError
 from aite.core.types import TASK_TERMINAL
 from aite.web.deps import get_state
 from aite.web.sse import stream_events
 
 
 class TaskCreateIn(BaseModel):
-    name: str = ""
+    name: str   # 必填（缺失 → pydantic 422；空/纯空白 → kit 422）；同域唯一（占用 → 409）
     spec: dict[str, Any]
 
 
@@ -46,7 +47,9 @@ async def _call(op, *args, **kwargs):
         return await op(*args, **kwargs)
     except TaskNotFoundError as exc:
         raise HTTPException(404, f"task not found: {exc}") from exc
-    except TaskStateError as exc:
+    except TaskValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except TaskStateError as exc:   # 含子类 TaskNameConflictError（同名占用 409）
         raise HTTPException(409, str(exc)) from exc
 
 

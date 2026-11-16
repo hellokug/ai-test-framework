@@ -270,8 +270,8 @@
       <div class="form-sec">
         <div class="sec-head"><span class="sec-num">2</span><b>本次运行参数</b><small>只指定 对谁测 / 测哪个版本 · 脚本内容不改动</small></div>
         <div class="p-row">
-          <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（脚本名-版本-日期），便于列表检索</span></span></span>
-          <input class="in" id="accRunName2" placeholder="留空自动生成，如 baseline-full-v1.3.0-0925"></div>
+          <span class="p-label">任务名称<span class="qmark">?<span class="tip">必填且同域唯一（同名创建/改名会被后端拒绝），便于列表检索</span></span></span>
+          <input class="in" id="accRunName2" placeholder="如 baseline-full-v1.3.0-0925（必填，同域唯一）"></div>
         <div class="p-row">
           <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
           <select class="in" id="accScriptModelSel" style="max-width:380px">
@@ -324,8 +324,8 @@
     <div class="form-sec">
       <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>任务标识与被测对象</small></div>
       <div class="p-row">
-        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（模型-数据集-日期）；建议包含模型与数据集名，便于列表检索</span></span></span>
-        <input class="in" id="accNameIn" placeholder="如 evalscope-ceval-qwen72b-20260924"></div>
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">必填且同域唯一（同名创建/改名会被后端拒绝）；建议包含模型与数据集名，便于列表检索</span></span></span>
+        <input class="in" id="accNameIn" placeholder="如 evalscope-ceval-qwen72b-20260924（必填，同域唯一）"></div>
       <div class="p-row">
         <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
         <select class="in" id="accModelSel" style="max-width:380px">
@@ -1239,6 +1239,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=18"></script>
+<script src="api-acc3.js?v=19"></script>
 </body>
 </html>

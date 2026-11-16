@@ -29,15 +29,15 @@
 
 | 方法与路径 | 语义 | 约束 |
 |---|---|---|
-| `POST /{D}/tasks` | 创建任务（`status=pending`，不运行） | body：`{name?, spec}`，spec 为域自定义（§6） |
+| `POST /{D}/tasks` | 创建任务（`status=pending`，不运行） | body：`{name, spec}`，spec 为域自定义（§6）；name 必填非空且同域唯一（缺失/空 422，占用 409） |
 | `GET /{D}/tasks` | 列表 | query：`status`、`retry_of`、`limit`（默认 50） |
 | `GET /{D}/tasks/{id}` | 详情（含 `history` 执行历史） | 404 不存在 |
-| `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅非运行中（`pending`/终态）；`running\|stopping` 409 |
+| `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅非运行中（`pending`/终态）；`running\|stopping` 409；改名占用同域同名 409、改空 422 |
 | `DELETE /{D}/tasks/{id}` | 删除 | 仅终态；非终态 409 |
 | `POST /{D}/tasks/{id}/run` | 运行 | `pending` 首发 / 终态重跑；202 返回任务快照，异步执行 |
 | `POST /{D}/tasks/{id}/stop` | 停止 | 仅 `running`（幂等：`stopping` 重复调用返回当前态） |
 | `POST /{D}/tasks/{id}/retry` | 重试 | 仅终态；**同一任务**同配置再跑一轮（追加执行历史轮次），202 返回任务快照 |
-| `POST /{D}/tasks/{id}/duplicate` | 复制 | 任意状态；**创建新任务**（独立分支变体：复制 spec，`pending` 待运行，名字加「· 副本」），201 返回新任务 |
+| `POST /{D}/tasks/{id}/duplicate` | 复制 | 任意状态；**创建新任务**（独立分支变体：复制 spec，`pending` 待运行，名字加「· 副本」，占用则续「· 副本 2/3…」保唯一），201 返回新任务 |
 | `GET /{D}/tasks/{id}/result` | 结果（域形态，§6） | 非终态 409 |
 | `GET /{D}/tasks/{id}/stream` | SSE 进度/终态 | 频道 `{D}:tasks:{id}`（§5） |
 
@@ -94,7 +94,9 @@ class DomainTaskKit:
     """公共任务框架：CRUD + run/stop/retry + SSE 频道 + stale 恢复，四域实例化。"""
     def __init__(self, domain: str, executor: TaskExecutor, bus: EventBus): ...
 
-    async def create(self, repo, spec: dict, name: str = "") -> dict
+    async def create(self, repo, spec: dict, name: str) -> dict
+    #                 name 必填非空（TaskValidationError→422）且同域唯一
+    #                 （TaskNameConflictError→409）；首尾空白规整、限 256 字符
     async def list(self, repo, *, status: str | None = None,
                    retry_of: str | None = None, limit: int = 50) -> list[dict]
     async def get(self, repo, task_id: str) -> dict | None
@@ -131,7 +133,7 @@ class DomainTaskKit:
 
 ```python
 class TaskLifecycleMixin:            # 公共列，mixin 不建表
-    name: str(256) = ""
+    name: str(256)                   # 必填，同域唯一（kit 服务层校验，非 DB 唯一索引）
     status: str(32) = "pending"      # 索引
     spec: JSON = {}                  # 域自定义任务定义
     result: JSON | None
@@ -604,7 +606,8 @@ select 策略 / fault_duration / fault.injector / probe 各键 / background.engi
 
 **字段状态**：background/probe 平铺键已实现；套件-cases 结构、target/inject
 两层、defaults 覆盖链、expect_rto 判定为 E 系列待实现。运行：`aite reliability
-tasks create --spec <套件.yaml> && aite reliability tasks run <id>`。
+tasks create --spec <套件.yaml> --name <任务名> && aite reliability tasks run <id>`
+（name 自 2026-11-16 起必填且同域唯一）。
 
 
 ### 14.1 对象选择：两层漏斗（发现层 target ≠ 注入层 inject，v3 与 §14.0 对齐）

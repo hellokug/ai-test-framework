@@ -11,8 +11,10 @@ import pytest
 from aite.core.taskkit import (
     DomainTaskKit,
     TaskExecutor,
+    TaskNameConflictError,
     TaskNotFoundError,
     TaskStateError,
+    TaskValidationError,
 )
 from aite.core.types import (
     TASK_CANCELLED,
@@ -62,6 +64,41 @@ async def drain(bus: EventBus, channel: str) -> list[dict]:
 
 
 # ------------------------------------------------------------------ CRUD 守卫
+async def test_create_name_required_and_unique(repo):
+    """任务名必填非空（首尾空白规整）且同域唯一（2026-11-16 owner 规则）。"""
+    kit = make_kit(FakeExecutor())
+    for bad in ("", "   "):
+        with pytest.raises(TaskValidationError):
+            await kit.create(repo, {}, name=bad)
+    task = await kit.create(repo, {}, name="  spaced  ")
+    assert task["name"] == "spaced"
+    await kit.create(repo, {}, name="dup")
+    with pytest.raises(TaskNameConflictError):
+        await kit.create(repo, {}, name="dup")
+
+
+async def test_update_name_guards(repo):
+    """改名同样必填且唯一：占用他人名 409 语义、改回自身放行、显式改空 422 语义。"""
+    kit = make_kit(FakeExecutor())
+    a = await kit.create(repo, {}, name="a")
+    b = await kit.create(repo, {}, name="b")
+    with pytest.raises(TaskNameConflictError):
+        await kit.update(repo, b["id"], name="a")
+    with pytest.raises(TaskValidationError):
+        await kit.update(repo, b["id"], name="")
+    renamed = await kit.update(repo, b["id"], name="b")
+    assert renamed["name"] == "b"
+    assert (await kit.get(repo, a["id"]))["name"] == "a"
+
+
+async def test_duplicate_dedups_copy_name(repo):
+    """复制名去重：连复制同名源 → 「· 副本」「· 副本 2」递增，不落 409。"""
+    kit = make_kit(FakeExecutor())
+    src = await kit.create(repo, {}, name="job")
+    d1 = await kit.duplicate(repo, src["id"])
+    d2 = await kit.duplicate(repo, src["id"])
+    assert d1["name"] == "job · 副本"
+    assert d2["name"] == "job · 副本 2"
 async def test_create_and_pending_update(repo):
     kit = make_kit(FakeExecutor())
     task = await kit.create(repo, {"target": "x"}, name="t1")
@@ -72,7 +109,7 @@ async def test_create_and_pending_update(repo):
 
 async def test_update_rejected_once_left_pending(repo):
     kit = make_kit(FakeExecutor(wait_cancel=True))
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError):
         await kit.update(repo, task["id"], name="nope")
@@ -81,7 +118,7 @@ async def test_update_rejected_once_left_pending(repo):
 
 async def test_delete_guards(repo):
     kit = make_kit(FakeExecutor(wait_cancel=True))
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError):
         await kit.delete(repo, task["id"])          # 非终态不可删
@@ -101,7 +138,7 @@ async def test_get_missing_raises(repo):
 async def test_run_success_writes_terminal_and_frames(repo):
     bus = EventBus()
     kit = make_kit(FakeExecutor(result={"pass_rate": 1.0}), bus)
-    task = await kit.create(repo, {"suite": "s"})
+    task = await kit.create(repo, {"suite": "s"}, name="t")
     await kit.run(repo, task["id"])
     done = await kit.wait(repo, task["id"])
     assert done["status"] == TASK_SUCCEEDED and done["result"] == {"pass_rate": 1.0}
@@ -114,7 +151,7 @@ async def test_run_success_writes_terminal_and_frames(repo):
 async def test_run_failure_records_error(repo):
     bus = EventBus()
     kit = make_kit(FakeExecutor(error="boom"), bus)
-    task = await kit.create(repo, {"suite": "s"})
+    task = await kit.create(repo, {"suite": "s"}, name="t")
     await kit.run(repo, task["id"])
     done = await kit.wait(repo, task["id"])
     assert done["status"] == TASK_FAILED and "boom" in done["error"]
@@ -124,7 +161,7 @@ async def test_run_failure_records_error(repo):
 
 async def test_run_only_once(repo):
     kit = make_kit(FakeExecutor(wait_cancel=True))
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError):
         await kit.run(repo, task["id"])
@@ -143,7 +180,7 @@ async def test_executor_receives_repo_and_can_emit_raw(repo):
             return {"ok": 1}
 
     kit = DomainTaskKit("perf", PerfTaskRow, Probe(), bus)
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     await kit.wait(repo, task["id"])
     assert seen["repo"] is repo
@@ -158,7 +195,7 @@ async def test_stop_running_task(repo):
     bus = EventBus()
     kit = make_kit(FakeExecutor(wait_cancel=True,
                                 result={"run_id": "r1", "total_cases": 3}), bus)
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     stopped = await kit.stop(repo, task["id"])
     assert stopped["status"] == TASK_STOPPING
@@ -179,7 +216,7 @@ async def test_exception_during_stopping_cancels_with_error(repo):
     也不把 stopping 卡成无终态（suite run error 路径 2026-11-15 新增）。"""
     bus = EventBus()
     kit = make_kit(FakeExecutor(wait_cancel=True, error="drain crashed"), bus)
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     await kit.stop(repo, task["id"])
     done = await kit.wait(repo, task["id"])
@@ -194,7 +231,7 @@ async def test_stop_force_sets_force_event(repo):
     据此杀树；未返回请求不计入统计由适配器保证，kit 只管状态机）。"""
     bus = EventBus()
     kit = make_kit(FakeExecutor(wait_force=True), bus)
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     stopped = await kit.stop(repo, task["id"], mode="force")
     assert stopped["status"] == TASK_STOPPING
@@ -208,7 +245,7 @@ async def test_stop_force_sets_force_event(repo):
 
 async def test_stop_invalid_mode_rejected(repo):
     kit = make_kit(FakeExecutor())
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError, match="mode"):
         await kit.stop(repo, task["id"], mode="nuke")
@@ -219,7 +256,7 @@ async def test_stop_stopping_escalates_to_force(repo):
     """stopping 中幂等升级：graceful 后再 force → force_event 补置位 +
     历史轮 stop_mode 改写（执行器尚在排空时的反悔路径）。"""
     kit = make_kit(FakeExecutor(wait_cancel=True, wait_force=True))
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     await kit.stop(repo, task["id"])                # graceful
     escalated = await kit.stop(repo, task["id"], mode="force")
@@ -235,7 +272,7 @@ async def test_stop_via_db_flag_cross_process(repo):
     bus = EventBus()
     kit = make_kit(FakeExecutor(wait_cancel=True), bus)
     kit.stop_poll_interval = 0.05
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     await repo.update_domain_task(PerfTaskRow, task["id"],
                                   expect_status=TASK_RUNNING, status=TASK_STOPPING)
@@ -247,7 +284,7 @@ async def test_stop_via_db_flag_cross_process(repo):
 
 async def test_stop_guards_and_idempotency(repo):
     kit = make_kit(FakeExecutor())
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     with pytest.raises(TaskStateError):
         await kit.stop(repo, task["id"])            # pending 不可停
     await kit.run(repo, task["id"])
@@ -263,7 +300,7 @@ async def test_stop_bridge_escalates_to_force_when_hung(repo, monkeypatch):
     kit = make_kit(FakeExecutor(hang=True))
     kit.stop_timeout = 0.05                         # 压短桥等待窗口
     kit.stop_poll_interval = 0.05
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     stopped = await kit.stop(repo, task["id"])
     assert stopped["status"] == TASK_STOPPING
@@ -298,7 +335,7 @@ async def test_retry_reruns_same_task(repo):
 
 async def test_retry_requires_terminal(repo):
     kit = make_kit(FakeExecutor(wait_cancel=True))
-    task = await kit.create(repo, {"a": 1})
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError):
         await kit.retry(repo, task["id"])
@@ -308,9 +345,9 @@ async def test_retry_requires_terminal(repo):
 # ----------------------------------------------------------------- stale 收敛
 async def test_mark_stale_converges_midway_states(repo):
     kit = make_kit(FakeExecutor())
-    pending = await kit.create(repo, {"a": 1})
-    running = await kit.create(repo, {"a": 2})
-    stopping = await kit.create(repo, {"a": 3})
+    pending = await kit.create(repo, {"a": 1}, name="t")
+    running = await kit.create(repo, {"a": 2}, name="t2")
+    stopping = await kit.create(repo, {"a": 3}, name="t3")
     await repo.update_domain_task(PerfTaskRow, running["id"], status=TASK_RUNNING)
     await repo.update_domain_task(PerfTaskRow, stopping["id"], status=TASK_STOPPING)
     count = await kit.mark_stale(repo)
@@ -335,7 +372,7 @@ async def test_update_expect_status_guards_race(repo):
 # ------------------------------------------------------------------ list 过滤
 async def test_list_filters_by_status_and_retry(repo):
     kit = make_kit(FakeExecutor(error="boom"))
-    first = await kit.create(repo, {"a": 1})
+    first = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, first["id"])
     await kit.wait(repo, first["id"])
     await kit.retry(repo, first["id"])

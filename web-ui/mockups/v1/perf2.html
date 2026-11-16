@@ -153,7 +153,7 @@
   <div class="drawer-head"><h3 id="newTaskTitle">新建压测任务</h3><button class="icon-btn" data-close>✕</button></div>
   <div class="drawer-body" data-src-toggle>
 
-    <div class="field" style="margin-top:0"><label>任务名称</label><input class="in" id="perfTaskName2" placeholder="留空自动生成，如 baseline-u8-1114"></div>
+    <div class="field" style="margin-top:0"><label>任务名称（必填，同域唯一）</label><input class="in" id="perfTaskName2" placeholder="如 baseline-u8-1114（必填，同域唯一）"></div>
 
     <div class="chips" style="margin:0 0 14px">
       <span class="ds-flabel" style="margin-right:4px">脚本来源</span>
@@ -602,6 +602,6 @@ document.getElementById("perfSaveScript").addEventListener("click", () => {
   document.getElementById("perfSaveHint").hidden = false;
 });
 </script>
-<script src="api-perf.js?v=10"></script>
+<script src="api-perf.js?v=11"></script>
 </body>
 </html>

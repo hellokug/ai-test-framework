@@ -818,6 +818,16 @@ class SqlAlchemyRepository(Repository):
             row = await session.get(table, task_id)
             return self._domain_task_dict(row) if row else None
 
+    async def find_domain_task_by_name(self, table: type[Any], name: str, *,
+                                       exclude_id: str | None = None) -> dict | None:
+        """同域按名取任务（kit 唯一性校验用；exclude_id 供改名排除自身）。"""
+        async with self.db.sessions() as session:
+            stmt = select(table).where(table.name == name)
+            if exclude_id:
+                stmt = stmt.where(table.id != exclude_id)
+            row = (await session.execute(stmt.limit(1))).scalars().first()
+            return self._domain_task_dict(row) if row else None
+
     async def delete_domain_task(self, table: type[Any], task_id: str) -> bool:
         async with self.db.sessions() as session:
             row = await session.get(table, task_id)

@@ -960,6 +960,8 @@ function papiFillLoadDatasets() {   // live 数据集清单就绪后刷新负载
 
 function papiCollectSpec() {
   const $ = id => document.getElementById(id);
+  const name = $("perfTaskName2")?.value.trim();
+  if (!name) throw new Error("任务名称必填（同域内唯一，便于列表检索）");
   const engine = perfCur("data-e", "evalscope-perf");
   const mode = perfCur("data-m", "baseline");
   const perf = {};
@@ -1095,8 +1097,7 @@ function papiCollectSpec() {
   const spec = { module: "perf", engine, perf };
   const target = papiTargetOf($("perfModelSel").value, "perfModelCustom");
   spec.target = target;
-  const name = $("perfTaskName2")?.value.trim();
-  if (name) spec.run_name = name;
+  spec.run_name = name;
   const thrRaw = $("perfThrIn")?.value.trim();
   if (thrRaw) {
     let thr;

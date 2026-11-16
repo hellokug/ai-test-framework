@@ -1015,6 +1015,7 @@ async function saveTaskEdit(runAfter) {
   const { taskId, spec: orig } = teState;
   const name = document.getElementById("teName").value.trim();
   const version = document.getElementById("teVersion").value.trim();
+  if (!name) { fapiToast("任务名称必填（同域内唯一，便于列表检索）", true); return; }
   if (!version) { fapiToast("被测版本必填（终态结果按版本归档）", true); return; }
   if (!teState.scenes.length) { fapiToast("至少保留一个场景", true); return; }
   // 目标模型：与「新建运行」同规则（登记项直接引用，自定义端点校验必填）
@@ -1061,7 +1062,7 @@ async function saveTaskEdit(runAfter) {
     await wireTasks();
     await showLiveTask(taskId);
   } catch (err) {
-    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在 pending，可能已被发起运行）" : ""}`, true);
+    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在 pending，或名称与同域其他任务冲突）" : ""}`, true);
   }
 }
 
@@ -1628,6 +1629,7 @@ function bindTaskSubmit() {
   submit.addEventListener("click", async () => {
     const secs = drawer.querySelectorAll(".form-sec");
     const name = secs[0].querySelector("input.in").value.trim();
+    if (!name) { fapiToast("任务名称必填（同域内唯一，便于列表检索）", true); return; }
     const modelKey = document.getElementById("ftModelSel").value;
     const version = document.getElementById("ftVerSel").value.trim();   // 全局版本注册表下拉（公共 · 版本管理创建）
     if (!version) { fapiToast("请选择被测版本（没有就点「＋ 新版本」就地创建）", true); return; }

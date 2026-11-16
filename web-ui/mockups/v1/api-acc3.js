@@ -706,7 +706,7 @@ async function saveAccTaskEdit(runAfter) {
       await showAccTask(taskId);
     }
   } catch (err) {
-    aapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在可编辑状态，可能已被发起运行）" : ""}`, true);
+    aapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在可编辑状态，或名称与同域其他任务冲突）" : ""}`, true);
   }
 }
 
@@ -1220,6 +1220,7 @@ function bindAccSubmits() {
       } else {
         ({ spec, name } = aapiCollectCustomSpec());
       }
+      if (!name) throw new Error("任务名称必填（同域内唯一，便于列表检索）");
       const mode = aapiExecModeOf(fromScript ? "accExec2Cards" : "execCards");
       if (mode === "scheduled") {
         throw new Error("定时执行暂未实装（V1-PLAN §8.5 调度器缺口），请选「立即执行」或「仅创建」");
@@ -1363,7 +1364,10 @@ function accCalCollect() {
     if (!Number.isInteger(n) || n < 1) throw new Error("抽样条数须为正整数");
     spec.limit = n;
   }
-  const name = $("accCalName").value.trim() || `判官校准·${rub.name}·${ds}`;
+  // 自动名带分时刻后缀：任务名同域唯一（2026-11-16 规则），校准重复发起不撞名
+  const ts = new Date(), p2 = v => String(v).padStart(2, "0");
+  const stamp = `${p2(ts.getMonth() + 1)}${p2(ts.getDate())}-${p2(ts.getHours())}${p2(ts.getMinutes())}`;
+  const name = $("accCalName").value.trim() || `判官校准·${rub.name}·${ds}·${stamp}`;
   return { spec, name };
 }
 

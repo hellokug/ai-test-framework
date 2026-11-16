@@ -49,6 +49,7 @@ STOP_TIMEOUT_S = 60.0              # 桥等执行器自行收口的上限，超�
 STOP_FORCE_GRACE_S = 30.0          # 升级 force 后再宽限的秒数，仍卡死才 cancel 句柄
 STOP_POLL_INTERVAL_S = 2.0         # 跨进程停止桥的 DB 轮询间隔
 STOP_MODES = ("graceful", "force")  # graceful=立即停止（排空在途）；force=强制停止
+TASK_NAME_MAX_LEN = 256             # 任务名上限，对齐 models.TaskLifecycleMixin.name
 
 
 class TaskNotFoundError(LookupError):
@@ -57,6 +58,25 @@ class TaskNotFoundError(LookupError):
 
 class TaskStateError(Exception):
     """状态机守卫违例（HTTP 409 对应）。"""
+
+
+class TaskValidationError(ValueError):
+    """任务参数校验失败（HTTP 422 对应）：任务名必填非空、超长等。"""
+
+
+class TaskNameConflictError(TaskStateError):
+    """同域任务名已占用（HTTP 409 对应；TaskStateError 子类，复用错误映射）。"""
+
+
+def _clean_task_name(name: str | None) -> str:
+    """任务名规范化：必填非空、去首尾空白、限长（2026-11-16 owner 规则：
+    四域任务名必选且同域唯一——唯一性见 DomainTaskKit._require_name_free）。"""
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise TaskValidationError("任务名称必填（不可为空或纯空白）")
+    if len(cleaned) > TASK_NAME_MAX_LEN:
+        raise TaskValidationError(f"任务名称过长（≤ {TASK_NAME_MAX_LEN} 字符）")
+    return cleaned
 
 
 class EventSink(Protocol):
@@ -137,7 +157,10 @@ class DomainTaskKit:
 
     # ------------------------------------------------------------------- CRUD
     async def create(self, repo: Any, spec: dict, name: str = "") -> dict:
-        return await repo.create_domain_task(self.table, spec, name=name)
+        """创建任务：名称必填非空且同域唯一（占用 → TaskNameConflictError）。"""
+        cleaned = _clean_task_name(name)
+        await self._require_name_free(repo, cleaned)
+        return await repo.create_domain_task(self.table, spec, name=cleaned)
 
     async def list(self, repo: Any, *, status: str | None = None,
                    retry_of: str | None = None, limit: int = 50) -> list[dict]:
@@ -152,9 +175,11 @@ class DomainTaskKit:
         """改 name/spec：非运行中即可改（pending 改首发配置，终态改完可重跑）。"""
         fields: dict[str, Any] = {}
         if name is not None:
-            fields["name"] = name
+            fields["name"] = _clean_task_name(name)   # 显式改名同样必填非空
         if spec is not None:
             fields["spec"] = spec
+        if "name" in fields:
+            await self._require_name_free(repo, fields["name"], exclude_id=task_id)
         updated = await repo.update_domain_task(
             self.table, task_id,
             expect_status=(TASK_PENDING, *TASK_TERMINAL), **fields)
@@ -388,10 +413,12 @@ class DomainTaskKit:
         """复制 = 开分支变体：同 spec 新建 pending 任务（任意状态可用）。
 
         与 retry 的分工：retry 是同一任务的历史轮次；复制是独立的新任务
-        （可 PATCH 改 spec 后再 run），名字加「· 副本」后缀便于列表区分。
+        （可 PATCH 改 spec 后再 run），名字加「· 副本」后缀（占用则续 2/3…）
+        便于列表区分，仍满足同域唯一。
         """
         current = await self._require(repo, task_id)
-        name = f"{current['name']} · 副本" if current["name"] else "副本任务"
+        base = current["name"] or "副本任务"   # 旧数据空名兜底
+        name = await self._unique_copy_name(repo, base)
         return await repo.create_domain_task(self.table, dict(current["spec"]),
                                              name=name)
 
@@ -409,6 +436,26 @@ class DomainTaskKit:
         return await repo.mark_stale_domain_tasks(self.table)
 
     # ------------------------------------------------------------------ 内部
+    async def _require_name_free(self, repo: Any, name: str,
+                                 exclude_id: str | None = None) -> None:
+        """同域唯一守卫：查到同名任务（exclude_id 供改名排除自身）即 409 语义。"""
+        existing = await repo.find_domain_task_by_name(self.table, name,
+                                                       exclude_id=exclude_id)
+        if existing is not None:
+            raise TaskNameConflictError(
+                f"任务名称已存在：{name}（{self.domain} 域内须唯一）")
+        # RISK: check-then-insert 存在并发同名竞态窗口（服务层校验，未上 DB 唯一
+        # 索引——存量空名/重名行会卡索引迁移）；SQLite 单写锁缓解，窗口仅限理论并发
+
+    async def _unique_copy_name(self, repo: Any, base: str) -> str:
+        """复制名去重：「base · 副本」占用则续「· 副本 2/3…」（复制不落 409）。"""
+        name = f"{base} · 副本"
+        n = 2
+        while await repo.find_domain_task_by_name(self.table, name) is not None:
+            name = f"{base} · 副本 {n}"
+            n += 1
+        return name
+
     async def _require(self, repo: Any, task_id: str) -> dict:
         current = await repo.get_domain_task(self.table, task_id)
         if current is None:

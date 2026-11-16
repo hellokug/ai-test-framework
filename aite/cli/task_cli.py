@@ -21,7 +21,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from aite import config
-from aite.core.taskkit import DomainTaskKit, TaskNotFoundError, TaskStateError
+from aite.core.taskkit import DomainTaskKit, TaskNotFoundError, TaskStateError, TaskValidationError
 from aite.storage import repo_session
 
 console = Console()
@@ -139,13 +139,13 @@ def _register_action_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
     def create(
         spec: str = typer.Option(..., "--spec",
                                  help="任务 spec：内联 JSON/YAML 或文件路径"),
-        name: str = typer.Option("", "--name", help="任务名"),
+        name: str = typer.Option(..., "--name", help="任务名（必填；同域唯一）"),
     ) -> None:
         """创建任务（pending，不运行）。"""
         body = _load_spec(spec)
         try:
             task = _run_with_repo(lambda repo: kit.create(repo, body, name=name))
-        except TaskStateError as exc:
+        except (TaskStateError, TaskValidationError) as exc:
             _fail(exc)
             return
         console.print(f"[green]created[/green] {task['id']} "

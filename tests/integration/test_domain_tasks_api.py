@@ -70,6 +70,34 @@ class TestDomainTasksApi:
         result = client.get(f"/api/v1/perf/tasks/{task['id']}/result")
         assert result.status_code == 409
 
+    def test_name_required_and_unique(self, client):
+        """名称必填（缺失/空 → 422）且同域唯一（占用 → 409）；跨域同名不受限。"""
+        assert client.post("/api/v1/perf/tasks",
+                           json={"spec": {}}).status_code == 422
+        assert client.post("/api/v1/perf/tasks",
+                           json={"name": "  ", "spec": {}}).status_code == 422
+        assert client.post("/api/v1/perf/tasks",
+                           json={"name": "u1", "spec": {}}).status_code == 200
+        assert client.post("/api/v1/perf/tasks",
+                           json={"name": "u1", "spec": {}}).status_code == 409
+        assert client.post("/api/v1/accuracy/tasks",
+                           json={"name": "u1", "spec": {}}).status_code == 200
+        other = client.post("/api/v1/perf/tasks",
+                            json={"name": "u2", "spec": {}}).json()
+        assert client.patch(f"/api/v1/perf/tasks/{other['id']}",
+                            json={"name": "u1"}).status_code == 409
+        assert client.patch(f"/api/v1/perf/tasks/{other['id']}",
+                            json={"name": "u2"}).status_code == 200
+        assert client.patch(f"/api/v1/perf/tasks/{other['id']}",
+                            json={"name": ""}).status_code == 422
+
+    def test_duplicate_dedups_copy_name(self, client):
+        """连复制同名源：副本名递增「· 副本」「· 副本 2」，不落 409。"""
+        task = self._create(client, "perf", {"engine": "pytest"}, name="src2")
+        d1 = client.post(f"/api/v1/perf/tasks/{task['id']}/duplicate").json()
+        d2 = client.post(f"/api/v1/perf/tasks/{task['id']}/duplicate").json()
+        assert [d1["name"], d2["name"]] == ["src2 · 副本", "src2 · 副本 2"]
+
     def test_unknown_task_404(self, client):
         assert client.get("/api/v1/perf/tasks/nope").status_code == 404
         assert client.patch("/api/v1/perf/tasks/nope",

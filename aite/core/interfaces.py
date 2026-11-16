@@ -247,6 +247,10 @@ class Repository(ABC):
     async def get_domain_task(self, table: type[Any], task_id: str) -> dict | None: ...
 
     @abstractmethod
+    async def find_domain_task_by_name(self, table: type[Any], name: str, *,
+                                       exclude_id: str | None = None) -> dict | None: ...
+
+    @abstractmethod
     async def delete_domain_task(self, table: type[Any], task_id: str) -> bool: ...
 
     @abstractmethod

@@ -216,8 +216,8 @@
     <div class="form-sec" style="margin-top:0">
       <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>任务标识与被测对象</small></div>
       <div class="p-row">
-        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空自动生成（场景范围-模型-日期）；建议体现运行目的，便于列表检索</span></span></span>
-        <input class="in" placeholder="如 ft-regression-0930（留空自动生成）"></div>
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">必填且同域唯一（同名创建/改名会被后端拒绝）；建议体现运行目的，便于列表检索</span></span></span>
+        <input class="in" placeholder="如 ft-regression-0930（必填，同域唯一）"></div>
       <div class="p-row">
         <span class="p-label">目标模型<span class="qmark">?<span class="tip">预制模型来自「公共 · 模型管理」（端点与密钥按登记配置执行）；选「自定义」可临时指定端点，免登记直接跑</span></span></span>
         <select class="in" id="ftModelSel" style="max-width:380px">
@@ -293,7 +293,7 @@
       <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>与「新建运行」同形 · 只影响下一次运行</small></div>
       <div class="p-row">
         <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空列表显示「未命名」；建议体现本轮改动目的，便于任务列表检索</span></span></span>
-        <input class="in" id="teName" placeholder="任务名称"></div>
+        <input class="in" id="teName" placeholder="任务名称（必填，同域唯一）"></div>
       <div class="p-row">
         <span class="p-label">被测版本<i class="req">*</i><span class="qmark">?<span class="tip">终态后结果按此版本归档进「版本结果库」；候选来自公共 · 版本管理，也可直接手填新版本号</span></span></span>
         <input class="in" id="teVersion" list="teVerList" placeholder="如 v1.3.0-rc" style="max-width:300px">
@@ -1446,6 +1446,6 @@ document.getElementById("scnDimOk").addEventListener("click", scnDimConfirm);
 document.getElementById("scnDimName").addEventListener("keydown", e => { if (e.key === "Enter") scnDimConfirm(); });
 renderScnDims();
 </script>
-<script src="api32.js?v=31"></script>
+<script src="api32.js?v=32"></script>
 </body>
 </html>
