@@ -60,6 +60,7 @@ let ACC_SCRIPT_DOCS = {};      // id → 脚本详情（含 spec；清单瘦身�
 let ACC_SCENARIOS = [];        // 场景清单（/accuracy/scenarios：筛选/分组/保存落点）
 let ACC_MODEL_SOURCES = [];    // [{key, label, profile|target}]
 let ACC_RUBRICS = [];          // rubric 资产（/accuracy/rubrics：评测抽屉选用 + 校准抽屉数据源）
+const ACC_TERMINAL = ["succeeded", "failed", "cancelled", "stale"];   // 与后端 core.types TASK_TERMINAL 对齐（可重试/可编辑终态）
 let accDetailTimer = null;
 
 /* ------------------------------------------------------------ 任务列表 */
@@ -212,7 +213,12 @@ async function showAccTask(taskId) {
       ${escHtml(spec.target?.profile || spec.target?.model || "-")}
       · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"}</div></div>
       <div class="actions">
+        ${(t.status === "pending" || ACC_TERMINAL.includes(t.status))
+          ? `<button class="btn" onclick="aapiTaskAction('run', '${taskId}')" title="${t.status === "pending" ? "发起运行" : "重跑一轮（同一任务，追加执行历史）"}">${t.status === "pending" ? "运行" : "重跑"}</button>
+        <button class="btn" onclick="aapiTaskAction('edit', '${taskId}')" title="改配置（非运行中可改）：模型/版本/数据集/抽样/Judge/阈值/压力">编辑</button>` : ""}
         ${running ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
+        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
+        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>
@@ -376,6 +382,332 @@ async function stopAccTask(taskId) {
     aapiToast("停止指令已下发");
     showAccTask(taskId);
   } catch (err) { aapiToast(`停止失败：${err.message}`, true); }
+}
+
+/* ------------------------------------ 任务操作：运行/停止/重试/复制/编辑（§编辑重试） */
+/* 与功能域 api32.fapiTaskAction 同构（精度页不加载 api32，独立实现防重名，函数名带 aapi 前缀）：
+   run pending 首发/终态重跑；retry 仅终态 = 同一任务同配置再跑一轮（后端
+   core/taskkit.py DomainTaskKit.retry，不新建任务）；copy 任意状态 = 同 spec
+   新 pending 任务（/duplicate）并自动打开编辑抽屉；edit 打开精度编辑抽屉
+   （保存 = PATCH /accuracy/tasks/{id}，后端仅 pending/终态可改，运行中 409）。
+   ref = 列表行下标（ACC_TASK_IDS 索引）或任务 id（详情页）；mock 模式点击只提示。 */
+async function aapiTaskAction(action, ref, ev) {
+  ev?.stopPropagation();
+  const byId = typeof ref === "string";
+  const tid = byId ? ref : ACC_TASK_IDS[ref];
+  if (!AAPI.live || !tid) {
+    aapiToast("该操作需 live 模式（后端启动后）可用", true);
+    return;
+  }
+  const onDetail = byId && sessionStorage.getItem("aite-acc-last-task") === ref;
+  const refresh = async () => {
+    await wireAccTasks();
+    if (onDetail) {
+      const detail = document.querySelector('main.page-host [data-page="detail"]');
+      if (detail && !detail.hidden) await showAccTask(tid);
+    }
+  };
+  try {
+    if (action === "run") {
+      await AAPI.post(`/accuracy/tasks/${tid}/run`);   // RISK: 网络 POST，触发任务执行（异步起跑）
+      aapiToast(`任务 ${tid.slice(0, 8)} 已发起运行`);
+    } else if (action === "stop") {
+      await AAPI.post(`/accuracy/tasks/${tid}/stop`);   // RISK: 网络 POST，协作式停止运行中任务
+      aapiToast(`任务 ${tid.slice(0, 8)} 已停止`);
+    } else if (action === "retry") {
+      // RISK: 网络 POST，原任务原地重置 running 并追加执行历史轮（历史任务不可逆地多一轮）
+      const rt = await AAPI.post(`/accuracy/tasks/${tid}/retry`);
+      aapiToast(`已重跑同一任务 ${rt.id.slice(0, 8)}（第 ${(rt.history || []).length} 轮，运行中）`);
+    } else if (action === "copy") {
+      // RISK: 网络 POST，同 spec 深拷贝新建 pending 任务（原任务不变）
+      const nt = await AAPI.post(`/accuracy/tasks/${tid}/duplicate`);
+      aapiToast(`已复制为「${nt.name}」（${nt.id.slice(0, 8)}，pending）`);
+      await openAccTaskEdit(nt.id);
+    } else if (action === "edit") {
+      await openAccTaskEdit(tid);
+    }
+    await refresh();
+  } catch (err) { aapiToast(`任务操作失败：${err.message}`, true); }
+}
+
+/* ---------- 精度任务编辑（pending/终态限定）：复制/重试生成的草稿改参再跑 ----------
+   spec 以原 spec 深拷贝打底、表单字段覆盖，未识别键原样保留（脚本发起固化的
+   spec 与 CLI 造的任务不丢字段）；判官校准任务（task_type=judge_calibration）
+   走抽屉内的独立校准面板。键位契约 = web-ui/TOOL-SUITE-PARAMS.md。 */
+
+let aeState = null;   // 当前编辑上下文 {taskId, spec, cal, datasets}
+
+const ae$ = id => document.getElementById(id);
+
+function aeThToggle() {
+  const w = ae$("aeThJsonWrap");
+  if (w) w.hidden = ae$("aeThMode").value !== "custom";
+}
+
+function aeCalJudgeToggle() {
+  const pane = ae$("aeCalJudgeCustom");
+  if (pane) pane.hidden = ae$("aeCalJudgeSel").value !== "__custom__";
+}
+
+function aeRenderDs() {
+  const box = ae$("aeDs");
+  if (!box || !aeState || aeState.cal) return;
+  box.innerHTML = aeState.datasets.length ? aeState.datasets.map(d =>
+    `<span class="chip on">${escHtml(d)} <span data-ae-del="${escHtml(d)}" title="移除该数据集" style="cursor:pointer;font-weight:700">✕</span></span>`).join("")
+    : '<span class="hint" style="margin:0;color:var(--bad)">未选任何数据集 —— 至少保留一个才能保存</span>';
+}
+
+async function openAccTaskEdit(taskId) {
+  const drawer = ae$("accTaskEditDrawer");
+  if (!drawer) return;
+  let t;
+  try { t = await AAPI.get(`/accuracy/tasks/${taskId}`); }   // RISK: 网络读任务详情（编辑底稿）
+  catch (err) { aapiToast(`载入任务失败：${err.message}`, true); return; }
+  if (t.status !== "pending" && !ACC_TERMINAL.includes(t.status)) {
+    aapiToast(`仅 pending / 终态任务可编辑（当前 ${t.status}）——「复制」可开出 pending 变体`, true);
+    return;
+  }
+  const spec = t.spec || {};
+  const cal = spec.task_type === "judge_calibration";
+  const dsSeed = Array.isArray(spec.tools?.datasets) ? spec.tools.datasets.map(String)
+    : (spec.datasets || []).map(d => typeof d === "string" ? d : (d.name || d.id || d.ref || d.path))
+      .filter(Boolean).map(String);
+  aeState = { taskId, spec, cal, datasets: dsSeed };
+  ae$("aeSpecView").textContent = JSON.stringify(spec, null, 2);
+  ae$("aeCalSpecView").textContent = JSON.stringify(spec, null, 2);
+  // 候选重建（模型/Judge/rubric 与创建抽屉同源；ACC_MODEL_SOURCES/ACC_RUBRICS 由 boot 步骤装配）
+  ae$("aeJudgeSel").innerHTML = '<option value="">不配置（默认 · 仅规则判分）</option>'
+    + ACC_MODEL_SOURCES.filter(s => s.profile).map(s => `<option value="${escHtml(s.profile)}">${escHtml(s.label)}</option>`).join("");
+  ae$("aeCalJudgeSel").innerHTML = '<option value="">— 选择判官 —</option><option value="__custom__">自定义端点…</option>'
+    + ACC_MODEL_SOURCES.filter(s => s.profile).map(s => `<option value="${escHtml(s.profile)}">${escHtml(s.label)}</option>`).join("");
+  ae$("aeCalRubricSel").innerHTML = '<option value="">（保持原标准不变）</option>'
+    + ACC_RUBRICS.map(r => `<option value="${escHtml(r.id)}">${escHtml(r.name)} · ${r.fingerprint}</option>`).join("");
+  ae$("aeDsList").innerHTML = [...new Set([...(DS_ITEMS || []).map(d => d.n), ...aeState.datasets])]
+    .map(n => `<option value="${escHtml(n)}">`).join("");
+  if (cal) {
+    ae$("aeCalName").value = t.name || "";
+    ae$("aeCalLimit").value = spec.limit ?? "";
+    ae$("aeCalJudgeSel").value = spec.judge?.profile
+      || (spec.judge?.base_url ? "__custom__" : "");
+    aeCalJudgeToggle();
+    ae$("aeCalJudgeUrl").value = spec.judge?.base_url || "";
+    ae$("aeCalJudgeModel").value = spec.judge?.model || "";
+    ae$("aeCalRubricSel").value = ACC_RUBRICS.some(r => r.id === spec.rubric_id) ? spec.rubric_id : "";
+    const cds = ae$("aeCalDsSel");
+    try {
+      const d = await AAPI.get("/datasets?type=accuracy");   // RISK: 网络读校准数据集清单（失败按原值兜底）
+      const items = d.items || [];
+      const cur = String(spec.dataset || "");
+      cds.innerHTML = '<option value="">— 选择校准数据集 —</option>'
+        + items.map(it => `<option value="${escHtml(it.name)}">${escHtml(it.name)}</option>`).join("")
+        + (cur && !items.some(it => it.name === cur)
+          ? `<option value="${escHtml(cur)}">${escHtml(cur)}（原值 · 清单中已不存在）</option>` : "");
+      cds.value = cur;
+    } catch (e) {
+      cds.innerHTML = `<option value="${escHtml(String(spec.dataset || ""))}">${escHtml(String(spec.dataset || "加载失败"))}</option>`;
+    }
+  } else {
+    const tools = spec.tools || {};
+    const extra = tools.extra_args || {};
+    const target = spec.target || {};
+    ae$("aeName").value = t.name || spec.run_name || "";
+    ae$("aeVersion").value = spec.version || "";
+    aeRenderDs();
+    ae$("aeLimit").value = tools.limit_per_subset ?? "";
+    ae$("aeResumeSel").value = tools.resume || "auto";
+    ae$("aeJudgeSel").value = tools.judge?.profile || "";
+    ae$("aeRubric").value = tools.judge?.prompt_template || "";
+    const th = tools.metric_thresholds;
+    ae$("aeThMode").value = th === "auto" ? "auto" : (th && typeof th === "object") ? "custom" : "none";
+    ae$("aeThJson").value = th && typeof th === "object" ? JSON.stringify(th, null, 2) : "";
+    aeThToggle();
+    ae$("aeBatch").value = extra.eval_batch_size ?? "";
+    ae$("aeTimeout").value = extra.timeout_s ?? "";
+    ae$("aeSeed").value = extra.seed ?? "";
+    ae$("aeAdvJson").value = "";
+    // 目标模型：profile / 端点命中登记项则选中，否则落自定义面板回填（与功能域 openTaskEdit 同规则）
+    const sel = ae$("aeModelSel");
+    sel.innerHTML = ACC_MODEL_SOURCES.map(s => `<option value="${escHtml(s.key)}">${escHtml(s.label)}</option>`).join("")
+      + '<option value="__custom__">自定义（手填端点）</option>';
+    const hit = ACC_MODEL_SOURCES.find(s => target.profile && s.profile === target.profile)
+      || ACC_MODEL_SOURCES.find(s => target.type === "openai_compatible" && s.target
+        && s.target.base_url === (target.base_url || "") && s.target.model === (target.model || ""));
+    const pane = ae$("aeModelCustom");
+    if (hit) {
+      sel.value = hit.key;
+      pane.hidden = true;
+    } else {
+      sel.value = "__custom__";
+      pane.hidden = false;
+      ae$("aeBaseUrl").value = target.base_url || "";
+      ae$("aeModelName").value = target.model || "";
+      const kSel = pane.querySelector("[data-keysel]");
+      if (kSel) {
+        try { wireKeySelect(kSel, (await AAPI.get("/secrets")).items || []); }   // RISK: 网络读密钥库（失败按空处理）
+        catch (e) { wireKeySelect(kSel, []); }
+        const kEnv = pane.querySelector("[data-keyenv]");
+        if (target.api_key_env && kEnv) {
+          kSel.value = "__env__";
+          kEnv.hidden = false;
+          kEnv.value = target.api_key_env;
+        }
+      }
+    }
+    bindModelCustom("aeModelSel", "aeModelCustom");   // 选项重建后重挂显隐（幂等）
+    wireVerCombo(ae$("aeVersion"));                   // 版本建议下拉（dataset.verBound 幂等）
+  }
+  if (!drawer.dataset.aeBound) {                      // foot 按钮与联动监听只挂一次
+    drawer.dataset.aeBound = "1";
+    drawer.querySelector("#aeSaveBtn").addEventListener("click", () => saveAccTaskEdit(false));
+    drawer.querySelector("#aeRunBtn").addEventListener("click", () => saveAccTaskEdit(true));
+    ae$("aeDs").addEventListener("click", e => {
+      const del = e.target.closest("[data-ae-del]");
+      if (!del || !aeState) return;
+      aeState.datasets = aeState.datasets.filter(d => d !== del.dataset.aeDel);
+      aeRenderDs();
+    });
+    ae$("aeAddDsBtn").addEventListener("click", () => {
+      const input = ae$("aeAddDs");
+      const d = input.value.trim();
+      if (!d || !aeState) return;
+      if (aeState.datasets.includes(d)) { aapiToast(`数据集 ${d} 已在列表`, true); return; }
+      aeState.datasets.push(d);
+      input.value = "";
+      aeRenderDs();
+    });
+    ae$("aeThMode").addEventListener("change", aeThToggle);
+    ae$("aeCalJudgeSel").addEventListener("change", aeCalJudgeToggle);
+  }
+  // 双面板显隐：suite 评测任务 / 判官校准任务二选一
+  drawer.querySelectorAll("[data-ae-pane]").forEach(p => { p.hidden = p.dataset.aePane !== (cal ? "cal" : "eval"); });
+  drawer.hidden = false;
+}
+
+async function saveAccTaskEdit(runAfter) {
+  if (!aeState) return;
+  const { taskId, spec: orig, cal } = aeState;
+  const name = ae$(cal ? "aeCalName" : "aeName").value.trim();
+  const spec = JSON.parse(JSON.stringify(orig || {}));   // 原样打底：表单未覆盖的字段不丢
+  const bail = msg => { aapiToast(msg, true); };
+  if (cal) {
+    const ds = ae$("aeCalDsSel").value;
+    if (!ds) { bail("请选择校准数据集"); return; }
+    spec.dataset = ds;
+    const limRaw = ae$("aeCalLimit").value.trim();
+    if (limRaw !== "") {
+      const n = Number(limRaw);
+      if (!Number.isInteger(n) || n < 1) { bail("抽样条数须为正整数"); return; }
+      spec.limit = n;
+    } else delete spec.limit;
+    const jv = ae$("aeCalJudgeSel").value;
+    if (jv === "__custom__") {
+      const base_url = ae$("aeCalJudgeUrl").value.trim();
+      const model = ae$("aeCalJudgeModel").value.trim();
+      if (!base_url || !model) { bail("自定义判官需填 访问 url 与 模型名"); return; }
+      spec.judge = { base_url, model };
+    } else {
+      if (!jv) { bail("请选择判官（预制或自定义端点）"); return; }
+      spec.judge = { profile: jv };
+    }
+    const rub = ACC_RUBRICS.find(x => x.id === ae$("aeCalRubricSel").value);
+    if (rub) { spec.rubric_id = rub.id; spec.rubric_text = rub.content; }   // 未选 = 原标准字段保留
+  } else {
+    const tools = { ...(orig.tools || {}) };
+    if (!aeState.datasets.length) { bail("至少保留一个评测数据集"); return; }
+    tools.datasets = [...aeState.datasets];
+    const ver = ae$("aeVersion").value.trim();
+    if (ver) spec.version = ver; else delete spec.version;
+    // 目标模型：与「创建评测任务」同规则（登记项直接引用，自定义端点校验必填）
+    let target;
+    const modelKey = ae$("aeModelSel").value;
+    if (modelKey === "__custom__") {
+      target = { type: "openai_compatible",
+                 base_url: ae$("aeBaseUrl").value.trim(),
+                 model: ae$("aeModelName").value.trim() };
+      const kSel = document.querySelector("#aeModelCustom [data-keysel]");
+      const keyEnv = kSel ? keyEnvValue(kSel) : "";
+      if (keyEnv) target.api_key_env = keyEnv;
+      if (!target.base_url || !target.model) { bail("自定义端点需填写 模型访问 url 与 模型名称"); return; }
+    } else {
+      const src = ACC_MODEL_SOURCES.find(s => s.key === modelKey);
+      if (!src) { bail("目标模型已失效，请重新选择"); return; }
+      target = src.profile ? { profile: src.profile } : { ...src.target };
+    }
+    spec.target = target;
+    const limRaw = ae$("aeLimit").value.trim();
+    if (limRaw !== "") {
+      const n = Number(limRaw);
+      if (!Number.isInteger(n) || n < 1) { bail("每子集抽样条数须为正整数"); return; }
+      tools.limit_per_subset = n;
+    } else delete tools.limit_per_subset;
+    const resume = ae$("aeResumeSel").value;
+    if (resume && resume !== "auto") tools.resume = resume; else delete tools.resume;
+    const judge = ae$("aeJudgeSel").value;
+    const rubric = ae$("aeRubric").value.trim();
+    if (judge) {
+      tools.judge = { profile: judge };
+      if (rubric) tools.judge.prompt_template = rubric;
+    } else {
+      if (rubric) { bail("评分标准（rubric）需先选择 Judge 裁判模型"); return; }
+      delete tools.judge;
+    }
+    const thMode = ae$("aeThMode").value;
+    if (thMode === "auto") tools.metric_thresholds = "auto";
+    else if (thMode === "custom") {
+      let th;
+      try { th = JSON.parse(ae$("aeThJson").value.trim() || "{}"); }
+      catch (e) { bail(`阈值 JSON 不合法：${e.message}`); return; }
+      if (!th || typeof th !== "object" || Array.isArray(th) || !Object.keys(th).length) {
+        bail('自定义阈值需非空 JSON 对象（{"指标": 阈值}）'); return;
+      }
+      tools.metric_thresholds = th;
+    } else delete tools.metric_thresholds;
+    // extra_args：原值打底覆盖显式键，再并入扩展 JSON（与创建抽屉 aapiCollectCustomSpec 同语义）
+    const extra = JSON.parse(JSON.stringify(tools.extra_args || {}));
+    const setNum = (raw, key, integer) => {
+      if (raw.trim() === "") { delete extra[key]; return true; }
+      const n = Number(raw);
+      if (Number.isNaN(n) || (integer && !Number.isInteger(n))) {
+        bail(`${key} 须为${integer ? "整数" : "数字"}`);
+        return false;
+      }
+      extra[key] = n;
+      return true;
+    };
+    if (!setNum(ae$("aeBatch").value, "eval_batch_size")) return;
+    if (!setNum(ae$("aeTimeout").value, "timeout_s")) return;
+    if (!setNum(ae$("aeSeed").value, "seed", true)) return;
+    const advRaw = ae$("aeAdvJson").value.trim();
+    if (advRaw) {
+      let adv;
+      try { adv = JSON.parse(advRaw); }
+      catch (e) { bail(`扩展参数 JSON 不合法：${e.message}`); return; }
+      if (adv.generation_config) extra.generation_config = { ...(extra.generation_config || {}), ...adv.generation_config };
+      if (adv.dataset_args !== undefined) extra.dataset_args = adv.dataset_args;
+      for (const [k, v] of Object.entries(adv)) {
+        if (k !== "generation_config" && k !== "dataset_args") extra[k] = v;
+      }
+    }
+    if (Object.keys(extra).length) tools.extra_args = extra; else delete tools.extra_args;
+    spec.tools = tools;
+    if (name) spec.run_name = name; else delete spec.run_name;
+  }
+  try {
+    // RISK: 网络 PATCH 覆盖任务 name/spec（深拷贝打底保未知键，但被改字段不可回退）
+    await AAPI.patch(`/accuracy/tasks/${taskId}`, { name: name || undefined, spec });
+    if (runAfter) await AAPI.post(`/accuracy/tasks/${taskId}/run`);   // RISK: 网络 POST，触发任务执行
+    ae$("accTaskEditDrawer").hidden = true;
+    aapiToast(runAfter
+      ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行`
+      : `配置已保存（${taskId.slice(0, 8)}），未运行`);
+    await wireAccTasks();
+    const detail = document.querySelector('main.page-host [data-page="detail"]');
+    if (detail && !detail.hidden && sessionStorage.getItem("aite-acc-last-task") === taskId) {
+      await showAccTask(taskId);
+    }
+  } catch (err) {
+    aapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在可编辑状态，可能已被发起运行）" : ""}`, true);
+  }
 }
 
 /* ---------------------------------------------------------------- 脚本库 */
@@ -940,6 +1272,10 @@ function bindAccDelegation() {
   if (tbl && !tbl.dataset.accBound) {
     tbl.dataset.accBound = "1";
     tbl.addEventListener("click", e => {
+      // RISK: capture 拦截须豁免行内操作按钮（data-acc-act），否则下面的
+      // stopImmediatePropagation 会连按钮自身 onclick 一起吞掉（按钮 onclick 内
+      // 再 stopPropagation 防冒泡误开详情）；「报告 ↗」等无标记按钮维持原拦截开详情
+      if (e.target.closest("[data-acc-act]")) return;
       const tr = e.target.closest("tr.clickable");
       if (!tr) return;
       e.stopImmediatePropagation();
@@ -1121,7 +1457,12 @@ async function accRenderCalDetail(t, taskId, seq) {
       <div class="crumb">判官校准 · 数据集 ${escHtml(String(spec.dataset || "—"))} · 判官 ${judge}
       · rubric 指纹 ${escHtml(String(fp))} · ${t.started_at ? aapiShortTime(t.started_at) : "未开始"} · 耗时 ${dur}</div></div>
       <div class="actions">
+        ${(t.status === "pending" || ACC_TERMINAL.includes(t.status))
+          ? `<button class="btn" onclick="aapiTaskAction('run', '${taskId}')" title="${t.status === "pending" ? "发起校准" : "重跑一轮（同一任务，追加执行历史）"}">${t.status === "pending" ? "运行" : "重跑"}</button>
+        <button class="btn" onclick="aapiTaskAction('edit', '${taskId}')" title="改校准配置（非运行中可改）：校准集/判官/rubric/抽样">编辑</button>` : ""}
         ${t.status === "running" ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
+        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再校准一轮（同一任务，追加执行历史）">重试</button>` : ""}
+        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>

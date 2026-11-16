@@ -531,6 +531,147 @@
     <button class="btn" data-close>取消</button><button class="btn primary" id="accCalRunBtn">创建并执行</button></div>
 </div>
 
+<!-- 精度任务编辑抽屉（pending/终态限定）：复制/重试生成的草稿与既有任务改参再跑；
+     suite 评测任务走表单面板（原 spec 打底覆盖，未识别键保留），判官校准任务走校准面板。
+     行为实现在 api-acc3.js openAccTaskEdit / saveAccTaskEdit。 -->
+<div class="drawer drawer-lg" id="accTaskEditDrawer" hidden>
+  <div class="drawer-head"><div><h3>编辑精度任务</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-body">
+
+    <!-- ===== suite 评测任务编辑面板 ===== -->
+    <div data-ae-pane="eval">
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>基础配置</b><small>与「创建评测任务」同形 · 只影响下一次运行</small></div>
+      <div class="p-row">
+        <span class="p-label">任务名称<span class="qmark">?<span class="tip">留空 = 保持不变；建议体现本轮改动目的，便于任务列表检索</span></span></span>
+        <input class="in" id="aeName" placeholder="任务名称（留空 = 保持不变）"></div>
+      <div class="p-row">
+        <span class="p-label">被测版本<span class="qmark">?<span class="tip">候选来自公共 · 版本管理，可直接手填；留空 = 清除版本标注</span></span></span>
+        <div class="ver-combo" style="max-width:300px"><input class="in" id="aeVersion" placeholder="如 v1.3.0（可输入或下拉选）"></div></div>
+      <div class="p-row">
+        <span class="p-label">目标模型<span class="qmark">?<span class="tip">候选与创建同源（公共 · 模型管理 + 平台注册）；当前配置命中不了下拉时自动落「自定义」并回填端点</span></span></span>
+        <select class="in" id="aeModelSel" style="max-width:380px"></select></div>
+      <div id="aeModelCustom" hidden>
+        <div class="p-row">
+          <span class="p-label">模型访问 url<span class="qmark">?<span class="tip">OpenAI 兼容端点地址，含版本路径</span></span></span>
+          <input class="in" id="aeBaseUrl" placeholder="如 http://10.1.2.3:8000/v1" style="max-width:380px"></div>
+        <div class="p-row">
+          <span class="p-label">模型名称<span class="qmark">?<span class="tip">请求体 model 字段</span></span></span>
+          <input class="in" id="aeModelName" placeholder="如 DeepSeek-V3" style="max-width:300px"></div>
+        <div class="p-row" style="margin-bottom:0">
+          <span class="p-label">鉴权密钥（api_key_env）<span class="qmark">?<span class="tip">密钥库已归档密钥直接选择（运行时解密注入）；或选「仅环境变量」手填本机变量名</span></span></span>
+          <div style="display:flex;gap:8px;align-items:center;max-width:440px">
+            <select class="in" data-keysel style="flex:1"></select>
+            <input class="in" data-keyenv placeholder="本机已有变量名，如 OPENAI_API_KEY" hidden style="flex:1">
+          </div></div>
+      </div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>数据集与抽样</b><small>tools.datasets / limit_per_subset / resume</small></div>
+      <div class="p-row">
+        <span class="p-label">已选数据集<span class="qmark">?<span class="tip">点 ✕ 移除；下方补选框加回（候选来自数据集目录 benchmarks）</span></span></span>
+        <div class="chips" id="aeDs" style="flex:1;min-width:260px"></div></div>
+      <div class="p-row">
+        <span class="p-label">补选数据集</span>
+        <div style="display:flex;gap:8px;max-width:440px">
+          <input class="in" id="aeAddDs" list="aeDsList" placeholder="数据集名，如 ceval" style="flex:1">
+          <button class="btn sm" type="button" id="aeAddDsBtn">添加</button></div>
+        <datalist id="aeDsList"></datalist></div>
+      <div class="p-row">
+        <span class="p-label">每子集抽样条数<span class="qmark">?<span class="tip">每个子集各 N 条；留空 = 全量</span></span></span>
+        <input class="in" id="aeLimit" type="number" min="1" placeholder="留空 = 全量" style="max-width:300px"></div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">断点续推 resume<span class="qmark">?<span class="tip">auto = 状态感知续推；改阈值/判官后重跑只重判不重生成（预测缓存按 sample_id 复用）</span></span></span>
+        <select class="in" id="aeResumeSel" style="max-width:300px">
+          <option value="auto">auto（默认 · 状态感知续推）</option>
+          <option value="true">true（强制续推）</option>
+          <option value="false">false（全新起跑）</option>
+        </select></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">3</span><b>Judge 与阈值判定</b><small>tools.judge / tools.metric_thresholds</small></div>
+      <div class="p-row">
+        <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">不配置 = 纯规则判分；清除 Judge 会连同评分标准一并移除</span></span></span>
+        <select class="in" id="aeJudgeSel" style="max-width:300px"></select></div>
+      <div class="p-row">
+        <span class="p-label">评分标准（rubric）<span class="qmark">?<span class="tip">自定义判官评分提示词，占位符 {question}/{pred}/{gold}；需先选 Judge，留空 = 官方默认</span></span></span>
+        <textarea class="in" id="aeRubric" rows="3" style="max-width:440px" placeholder="留空 = 官方默认"></textarea></div>
+      <div class="p-row">
+        <span class="p-label">判定模式<span class="qmark">?<span class="tip">auto = 内置推荐阈值；自定义 = 逐指标 JSON；不判定 = 仅记录分数</span></span></span>
+        <select class="in" id="aeThMode" style="max-width:300px">
+          <option value="none">不判定（仅记录分数）</option>
+          <option value="auto">auto（内置基准推荐阈值）</option>
+          <option value="custom">自定义（JSON）</option>
+        </select></div>
+      <div class="p-row" id="aeThJsonWrap" hidden style="margin-bottom:0">
+        <span class="p-label">阈值 JSON<span class="qmark">?<span class="tip">{"指标名": 阈值} 逐指标 ≥ 判定；指标名需与该数据集的指标一致（如 mean_acc / exact_match）</span></span></span>
+        <textarea class="in mono" id="aeThJson" rows="3" style="max-width:440px" placeholder='{"mean_acc": 0.8}'></textarea></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">4</span><b>压力与扩展参数</b><small>tools.extra_args · 长尾参数走下方 JSON 合并</small></div>
+      <div class="p-row">
+        <span class="p-label">并发数 eval_batch_size<span class="qmark">?<span class="tip">评测并发（生成 + 判官共用）；留空 = 引擎缺省</span></span></span>
+        <input class="in" id="aeBatch" type="number" min="1" placeholder="如 10；留空 = 引擎缺省" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">最大运行时间 timeout_s<span class="qmark">?<span class="tip">整场子进程墙钟上限（秒）；留空 = 缺省 14400（4 小时）</span></span></span>
+        <input class="in" id="aeTimeout" type="number" min="1" placeholder="如 14400；留空 = 缺省 4 小时" style="max-width:300px"></div>
+      <div class="p-row">
+        <span class="p-label">随机种子 seed<span class="qmark">?<span class="tip">同 seed 抽到的样本一致（TaskConfig.seed，管抽样）；留空 = 不传</span></span></span>
+        <input class="in" id="aeSeed" placeholder="整数；留空 = 不传" style="max-width:300px"></div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">扩展参数 JSON<span class="qmark">?<span class="tip">合并入 extra_args：generation_config 深合并、dataset_args 整体覆盖、其余键覆盖；留空 = 保持原值。generation_config 常规键（max_tokens/temperature/top_p…）也在这里改</span></span></span>
+        <textarea class="in mono" id="aeAdvJson" rows="3" style="max-width:440px" placeholder='{"generation_config": {"max_tokens": 1024}}'></textarea></div>
+    </div>
+
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">5</span><b>原始 spec（只读参照）</b><small>保存以上方表单为准 · 表单未覆盖的字段原样保留（脚本发起的固化字段也在其中）</small></div>
+      <pre class="mono" id="aeSpecView" style="font-size:11px;white-space:pre-wrap;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:180px;overflow:auto;margin:0"></pre>
+    </div>
+    </div>
+
+    <!-- ===== 判官校准任务编辑面板 ===== -->
+    <div data-ae-pane="cal" hidden>
+    <div class="form-sec" style="margin-top:0">
+      <div class="sec-head"><span class="sec-num">1</span><b>校准集与抽样</b><small>校准结论只对这套「判官 + rubric 指纹」有效，改动后需重新校准</small></div>
+      <div class="p-row">
+        <span class="p-label">任务名称</span>
+        <input class="in" id="aeCalName" placeholder="任务名称（留空 = 保持不变）"></div>
+      <div class="p-row">
+        <span class="p-label">校准数据集<span class="qmark">?<span class="tip">accuracy 类型数据集（行含 human_score 人工标注列）</span></span></span>
+        <select class="in" id="aeCalDsSel" style="max-width:380px"></select></div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">抽样条数<span class="qmark">?<span class="tip">只跑前 N 行（冒烟/试跑）；留空 = 全量</span></span></span>
+        <input class="in" id="aeCalLimit" placeholder="留空 = 全量" style="max-width:200px"></div>
+    </div>
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">2</span><b>判官与评分标准</b><small>换判官或改标准后，旧 κ 结论不再适用</small></div>
+      <div class="p-row">
+        <span class="p-label">Judge 裁判模型<span class="qmark">?<span class="tip">预制判官来自公共 · 模型管理；自定义端点密钥走 api_key_env 环境变量</span></span></span>
+        <select class="in" id="aeCalJudgeSel" style="max-width:300px"></select></div>
+      <div id="aeCalJudgeCustom" hidden>
+        <div class="p-row">
+          <span class="p-label">判官访问 url</span>
+          <input class="in" id="aeCalJudgeUrl" placeholder="如 http://localhost:11434/v1" style="max-width:380px"></div>
+        <div class="p-row" style="margin-bottom:0">
+          <span class="p-label">判官模型名</span>
+          <input class="in" id="aeCalJudgeModel" placeholder="如 qwen2.5:3b" style="max-width:300px"></div>
+      </div>
+      <div class="p-row" style="margin-bottom:0">
+        <span class="p-label">评分标准（rubric 资产）<span class="qmark">?<span class="tip">改选即换标准：保存后按新资产内容落快照、指纹变化；不选 = 保持原标准不动</span></span></span>
+        <select class="in" id="aeCalRubricSel" style="max-width:380px"></select></div>
+    </div>
+    <div class="form-sec">
+      <div class="sec-head"><span class="sec-num">3</span><b>原始 spec（只读参照）</b><small>保存以上方表单为准 · 未覆盖字段原样保留</small></div>
+      <pre class="mono" id="aeCalSpecView" style="font-size:11px;white-space:pre-wrap;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:180px;overflow:auto;margin:0"></pre>
+    </div>
+    </div>
+  </div>
+  <div class="drawer-foot"><button class="btn" data-close>取消</button><button class="btn" id="aeSaveBtn">保存（不运行）</button><button class="btn primary" id="aeRunBtn">保存并运行</button></div>
+</div>
+
 <div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=18"></script>
@@ -856,11 +997,26 @@ function renderRuns(status, owner, kw) {
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
   document.getElementById("runsTbl").innerHTML = `
   <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>状态</th><th>通过率</th><th>样本</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${hits.length ? hits.map(r => `<tr class="clickable" onclick="showPage('detail')">
+  <tbody>${hits.length ? hits.map(r => {
+    const i = RUNS.indexOf(r);
+    const st = r[3];
+    // 操作按状态渲染（终态集合与后端 TASK_TERMINAL 对齐，passed 为静态演示行兼容口径；
+    // data-acc-act 标记供 bindAccDelegation capture 放行，行为见 api-acc3 aapiTaskAction）
+    const acts = [
+      ["pending", "succeeded", "failed", "cancelled", "stale", "passed"].includes(st)
+        ? `<button class="btn sm" data-acc-act onclick="aapiTaskAction('run', ${i}, event)" title="${st === "pending" ? "发起运行" : "重跑一轮（同一任务，追加执行历史）"}">${st === "pending" ? "运行" : "重跑"}</button>
+      <button class="btn sm" data-acc-act onclick="aapiTaskAction('edit', ${i}, event)" title="改配置（非运行中可改）：模型/版本/数据集/抽样/Judge/阈值/压力">编辑</button>` : "",
+      st === "running" ? `<button class="btn sm" data-acc-act onclick="aapiTaskAction('stop', ${i}, event)" title="协作式停止">停止</button>` : "",
+      ["succeeded", "failed", "cancelled", "stale", "passed"].includes(st) ? `<button class="btn sm" data-acc-act onclick="aapiTaskAction('retry', ${i}, event)" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : "",
+      `<button class="btn sm" data-acc-act onclick="aapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>`,
+      `<button class="btn sm">报告 ↗</button>`,
+    ].filter(Boolean).join("");
+    return `<tr class="clickable" onclick="showPage('detail')">
     <td class="rname"><b>${r[0]}</b><div class="rid">${r[1]}</div></td>
     <td class="dim">${r[2]}</td><td class="dim">${r[7]}</td><td>${badge(r[3])}</td><td>${passCell(r[4])}</td>
     <td class="num">${r[5]}</td><td class="dim">${r[6]}</td>
-    <td style="text-align:right"><button class="btn sm">报告 ↗</button></td></tr>`).join("")
+    <td style="text-align:right;white-space:nowrap">${acts}</td></tr>`;
+  }).join("")
     : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
 }
 bindTaskFilter("runsFilter", renderRuns);
@@ -1083,6 +1239,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=17"></script>
+<script src="api-acc3.js?v=18"></script>
 </body>
 </html>
