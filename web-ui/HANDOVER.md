@@ -1538,3 +1538,12 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
 - IAB 验证（iab_sandbox 8310/8776 临时库，只读流程）：搜 sharegpt 出 20 行→点「选用」回填
   id+详情提示（parquet 分支文案）+行高亮全通；镜像 429 时前端提示「详情拉取失败（不影响导入）」
   降级路径同验（curl 502 实测）。api32.js ?v=30→31。
+
+## 2026-11-16（Rubric 打分语义 datalist 候选）
+
+- 「打分语义」自由文本输入加 datalist 下拉候选（common2.html rubricDrawer 表单）：业界约定
+  五词 binary / graded-5 / graded-10 / weighted-sum / pairwise（无官方标准，LLM-as-judge
+  事实惯例）；datalist 而非硬 select——score_type 后端本就是自由字符串仅展示，候选保检索
+  一致性、不锁自定义口径。tip 同步扩写五词释义（graded-5 修正为 1~5 分档 G-Eval 式、
+  graded-10=MT-Bench 式）。仅静态稿页面改动，api32.js 无需动（读写 rubScoreType 不变），
+  无 ?v= bump。mockup_symbols --check 过；datalist 交互未上浏览器（原生控件无脚本逻辑）。
