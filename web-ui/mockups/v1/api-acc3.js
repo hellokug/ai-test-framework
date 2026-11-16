@@ -1204,6 +1204,9 @@ function bindAccSubmits() {
   submit.addEventListener("click", async () => {
     const fromScript = !!drawer.querySelector('.chip[data-src="script"].on');
     try {
+      // 名称必填最先校验（2026-11-16 规则；输入框随来源切换：脚本→accRunName2 / 自定义→accNameIn）
+      const nameEl = document.getElementById(fromScript ? "accRunName2" : "accNameIn");
+      if (!nameEl.value.trim()) throw new Error("任务名称必填（同域内唯一，便于列表检索）");
       let spec, name;
       if (fromScript) {
         const sid = document.getElementById("accScriptSel").value;
@@ -1220,7 +1223,6 @@ function bindAccSubmits() {
       } else {
         ({ spec, name } = aapiCollectCustomSpec());
       }
-      if (!name) throw new Error("任务名称必填（同域内唯一，便于列表检索）");
       const mode = aapiExecModeOf(fromScript ? "accExec2Cards" : "execCards");
       if (mode === "scheduled") {
         throw new Error("定时执行暂未实装（V1-PLAN §8.5 调度器缺口），请选「立即执行」或「仅创建」");

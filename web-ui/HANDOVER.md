@@ -1563,3 +1563,21 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
   functional2，当时在他人认领中，本轮按单文件收口；rubrics.json items=[] 无存量风险），后续动
   api32 时补。v1.css 的 input.in[list]{color-scheme:dark} 成死代码但保留（免五页 bump，未来再引
   datalist 仍需要）。改动仅 common2.html，无 ?v= bump；mockup_symbols --check 过。
+
+### 2026-11-16（22:5x）四域任务 name 必填+同域唯一——三对接层与三页提示同步
+
+owner 规则落地（后端 TaskValidationError→422 / TaskNameConflictError→409 见 aite/core/taskkit.py，
+REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
+- **api32.js v31→32**（functional2.html + common2.html 两引用页同 bump）：功能「新建运行」
+  空名先行 toast 拦截（return，不发请求）；「编辑任务」teName 空名拦截；保存失败 409 提示语
+  扩为「不在 pending 或名称冲突」双义；新建/编辑名称 placeholder+tip 改「必填，同域唯一」。
+- **api-acc3.js v18→19**（仅 accuracy2.html 引用）：创建抽屉名称必填校验提到脚本/自定义分支
+  分派之前（输入框随来源切 accRunName2/accNameIn，比脚本/数据集校验更早报错）；保存 409
+  提示语同扩；校准自动名加分时刻后缀（判官校准·rub·ds·MMDD-HHMM）防重复发起撞唯一约束。
+- **api-perf.js v10→11**（仅 perf2.html 引用）：papiCollectSpec 开头即查空名（throw→提交
+  catch→toast「发起失败：任务名称必填…」），废弃原「留空自动生成」；perf2.html 名称
+  label/placeholder 改必填。
+- functional2/accuracy2 两页名称输入的 placeholder+tip 文案同步改必填；reliability3 无任务
+  创建 UI 不动。IAB 实测（8775 预览反代 8300，guardWrites 全程零写请求）：三页空名点发起均
+  toast「任务名称必填（同域内唯一，便于列表检索）」、抽屉不关、writes=0。mockup_symbols
+  --check 过（含 api32 双引用页 v=32 一致）。
