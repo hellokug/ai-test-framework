@@ -10,10 +10,16 @@ import pytest
 
 class TestJudgeCalibrationApi:
     @pytest.fixture()
-    def client(self, tmp_path):
+    def client(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
+        from aite.service import rubric_store
         from aite.web.app import create_app
+
+        # rubric 仓是 data_root 下共享文件（不随任务临时库隔离），必须指到
+        # tmp_path——否则断言撞 owner 真实评分标准，失败路径还把测试数据留进真仓
+        monkeypatch.setattr(rubric_store, "default_path",
+                            lambda: tmp_path / "rubrics.json")
         app = create_app(storage_url=f"sqlite+aiosqlite:///{tmp_path / 'web.db'}")
         with TestClient(app) as c:
             yield c

@@ -76,18 +76,56 @@ def test_requires_rubric_and_judge(tmp_path):
             _ctx({**base, "rubric_text": "r", "judge": {}})))
 
 
+def _write_ds_at(dir_path, name="mycal.jsonl"):
+    dir_path.mkdir(parents=True, exist_ok=True)
+    p = dir_path / name
+    p.write_text(json.dumps(
+        {"question": "q", "model_output": "p", "reference_answer": "g", "human_score": 1},
+        ensure_ascii=False), encoding="utf-8")
+    return p
+
+
 def test_resolve_dataset_by_name(tmp_path, monkeypatch):
     from aite.datasets import userstore
 
     d = tmp_path / "accuracy"
-    d.mkdir()
-    (d / "mycal.jsonl").write_text(json.dumps(
-        {"question": "q", "model_output": "p", "reference_answer": "g", "human_score": 1},
-        ensure_ascii=False), encoding="utf-8")
+    _write_ds_at(d)
     monkeypatch.setattr(userstore, "dataset_dir", lambda t: d)
-    assert jc.resolve_dataset_file({"dataset": "mycal"}).name == "mycal.jsonl"
+    assert asyncio.run(
+        jc.resolve_dataset_file(None, {"dataset": "mycal"})).name == "mycal.jsonl"
     with pytest.raises(FileNotFoundError):
-        jc.resolve_dataset_file({"dataset": "nope"})
+        asyncio.run(jc.resolve_dataset_file(None, {"dataset": "nope"}))
+
+
+def _repo_with(catalog_path):
+    async def _find(t, n):
+        return {"type": t, "name": n, "path": str(catalog_path)}
+    return SimpleNamespace(find_dataset_catalog=_find)
+
+
+def test_resolve_dataset_catalog_path_first(tmp_path, monkeypatch):
+    """换过全局存储路径后：catalog 登记的归档绝对路径优先于当前目录拼接。"""
+    from aite.datasets import userstore
+
+    old = _write_ds_at(tmp_path / "old_root" / "datasets" / "accuracy")
+    monkeypatch.setattr(userstore, "dataset_dir",
+                        lambda t: tmp_path / "new_root" / "datasets" / "accuracy")
+    assert asyncio.run(
+        jc.resolve_dataset_file(_repo_with(old), {"dataset": "mycal"})) == old
+
+
+def test_resolve_dataset_stale_catalog_falls_back(tmp_path, monkeypatch):
+    """登记路径文件已删 → 回退当前目录拼接；两处都落空时报出全部试过路径。"""
+    from aite.datasets import userstore
+
+    gone = tmp_path / "old_root" / "datasets" / "accuracy" / "mycal.jsonl"
+    here = _write_ds_at(tmp_path / "new_root" / "datasets" / "accuracy")
+    monkeypatch.setattr(userstore, "dataset_dir", lambda t: here.parent)
+    assert asyncio.run(jc.resolve_dataset_file(
+        _repo_with(gone), {"dataset": "mycal"})) == here
+    with pytest.raises(FileNotFoundError, match="登记路径.*拼接路径"):
+        asyncio.run(jc.resolve_dataset_file(
+            _repo_with(gone), {"dataset": "nope"}))
 
 
 def test_plain_api_key_rejected():

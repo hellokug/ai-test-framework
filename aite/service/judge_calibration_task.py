@@ -60,8 +60,14 @@ def load_rows(path: Path) -> list[dict]:
     return rows
 
 
-def resolve_dataset_file(spec: dict) -> Path:
-    """spec.dataset（accuracy 数据集名，走平台数据集目录）或 dataset_path（测试/临时）。"""
+async def resolve_dataset_file(repo: Any, spec: dict) -> Path:
+    """spec.dataset（accuracy 数据集名）或 dataset_path（测试/临时）→ 校准集文件。
+
+    按名解析优先 catalog 登记的归档绝对路径：全局存储路径只决定「新上传落哪」，
+    不迁移旧文件——换路径后按当前目录拼接会指向新根找不到旧文件；catalog 行
+    记的正是上传时的真实落位（数据集页展示的就是它）。未入 catalog 的孤儿
+    文件回退当前目录拼接。
+    """
     path = spec.get("dataset_path")
     if path:
         p = Path(path)
@@ -71,12 +77,23 @@ def resolve_dataset_file(spec: dict) -> Path:
     name = str(spec.get("dataset") or "").strip()
     if not name:
         raise ValueError("校准 spec 缺 dataset（accuracy 数据集名）或 dataset_path")
+    tried: list[str] = []
+    if repo is not None:
+        # RISK: catalog 路径是上传时快照，文件可能已被人工移动/删除——缺失须回退拼接而非直接报错
+        row = await repo.find_dataset_catalog("accuracy", name)
+        p = Path(row["path"]) if row and row.get("path") else None
+        if p is not None and p.is_file():
+            return p
+        if p is not None:
+            tried.append(f"登记路径 {p}（文件不在——换过全局存储路径旧目录不随迁）")
     from aite.datasets.userstore import dataset_dir  # 懒导入对齐 service→datasets 边界
 
     p = dataset_dir("accuracy") / f"{name}.jsonl"
-    if not p.exists():
-        raise FileNotFoundError(f"accuracy 数据集不存在: {name}（{p}；先在数据集页上传）")
-    return p
+    if p.is_file():
+        return p
+    tried.append(f"拼接路径 {p}")
+    raise FileNotFoundError(
+        f"accuracy 数据集不存在: {name}（试过：{'；'.join(tried)}；先在数据集页上传）")
 
 
 def resolve_judge(judge: dict) -> tuple[str, str, str]:
@@ -223,7 +240,7 @@ async def execute_calibration(ctx: Any, *,
                               transport: httpx.BaseTransport | None = None) -> dict:
     """TaskExecutor 入口：spec 解析 → 逐行调判官（行间可 graceful 停止）→ 校准报告。"""
     spec = ctx.spec or {}
-    rows = load_rows(resolve_dataset_file(spec))
+    rows = load_rows(await resolve_dataset_file(getattr(ctx, "repo", None), spec))
     limit = int(spec.get("limit") or 0)
     if limit:
         rows = rows[:limit]
