@@ -1547,3 +1547,10 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
   一致性、不锁自定义口径。tip 同步扩写五词释义（graded-5 修正为 1~5 分档 G-Eval 式、
   graded-10=MT-Bench 式）。仅静态稿页面改动，api32.js 无需动（读写 rubScoreType 不变），
   无 ?v= bump。mockup_symbols --check 过；datalist 交互未上浏览器（原生控件无脚本逻辑）。
+- owner 提出样式统一复查（IAB 8779 私有代理反代 owner 8300）：闭合态实测 input.in 与同抽屉
+  输入框一致（同 .in 底座）；弹层差异实证——全站无 color-scheme，select 弹层靠
+  option{background:var(--card)} 强制暗色、datalist 原生弹层跟系统走（亮色系统弹白底不一致）；
+  修法 v1.css 增 `input.in[list]{color-scheme:dark}`（作用域仅限带 datalist 的输入框，不动全局
+  原生控件），IAB 重载实测 computed colorScheme=dark、assets/v1.css?v=21 生效；五引用页
+  （common2/perf2/reliability3/accuracy2/functional2）统一 bump v=20→21。原生弹层颜色无法
+  截图取证（浏览器合成层，CDP 截屏不含），以 computed style + Chromium 行为为准。

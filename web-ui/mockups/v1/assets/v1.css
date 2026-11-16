@@ -175,6 +175,7 @@ input.in,select.in,textarea.in{background:var(--input);border:1px solid var(--li
 input.in:focus,select.in:focus,textarea.in:focus{border-color:color-mix(in srgb,var(--ac) 55%,transparent);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 15%,transparent)}
 select.in option{background:var(--card);color:var(--tx)}
+input.in[list]{color-scheme:dark}
 textarea.in{font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertical}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
 .radio-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
