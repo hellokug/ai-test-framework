@@ -1599,3 +1599,14 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   evalscope，引擎层预期失败）。mockup_symbols --check 过。
 - 已知边界：精度页数据集 chips 来自 `/tools/benchmarks`（evalscope 引擎目录），.venv
   无 evalscope 时该卡显示「加载失败」——与定时执行无关，验证时 evaluate 灌 DS_ITEMS 绕过。
+
+### 2026-11-16（23:2x）任务编辑放开终态——api32 v32→33
+- **api32.js v32→33**（functional2/common2 两页引用）：openTaskEdit 编辑门槛从「仅
+  pending」放宽为「非运行中可改」（running/stopping 拒绝，pending+终态放行，与后端
+  kit.update expect_status 对齐）；终态任务「编辑→保存并运行」= 同一任务 PATCH 后 run，
+  执行历史追加新轮（spec 快照随轮留档），详情页「执行历史」chips 按轮切看——不再需要
+  「复制」出新任务导致历史留在旧任务。toast/注释文案同步；任务级 result 仍是最新轮快照。
+- IAB 隔离实例端到端（8310/8776）：灌数造 fail-fast failed 终态任务→详情点「编辑」
+  抽屉打开（改动前 toast「仅 pending 任务可编辑」拒绝）→补场景/版本/自定义端点→
+  「保存并运行」→历史 2 轮（#1/#2，#2 高亮）→点 #1 切回第一轮（该轮错误 fail-fast
+  文案正确）。render_check + mockup_symbols --check 过。

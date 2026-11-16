@@ -10,5 +10,3 @@ docs/efficiency-log.md / HANDOVER，本文件只留活跃租约。同一域同�
 格式：`- YYYY-MM-DD HH:MM｜会话/任务一句话｜认领范围（目录或文件）｜预计释放`
 
 ## 在认领
-
-- 2026-11-15 23:59｜性能语料池选不了 ShareGPT 纠偏（owner 指正；根因：add_hf convert_records 只认扁平输入键，ShareGPT 纯对话记录整条被丢——fields=None 导入即 422「no usable records」；顺带真实导入一份 ShareGPT 语料进平台）｜aite/datasets/add_hf.py, tests/unit/test_add_hf.py｜预计释放 本会话收尾

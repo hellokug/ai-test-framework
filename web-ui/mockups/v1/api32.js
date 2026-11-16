@@ -913,9 +913,11 @@ async function fapiTaskAction(action, ref, ev) {
   } catch (err) { fapiToast(`任务操作失败：${err.message}`, true); }
 }
 
-/* ---------- 任务编辑（pending 限定）：复制/重试生成的草稿改参再跑 ----------
-   保存 = PATCH /functional/tasks/{id}（后端守卫 pending，非 pending 409）；
-   spec 以原 spec 为底、表单字段覆盖，未识别键原样保留（CLI 造的 spec 不丢字段）。 */
+/* ---------- 任务编辑（非运行中可改）：pending 改首发配置 / 终态改参重跑 ----------
+   保存 = PATCH /functional/tasks/{id}（后端守卫 pending+终态，运行中 409）；
+   spec 以原 spec 为底、表单字段覆盖，未识别键原样保留（CLI 造的 spec 不丢字段）。
+   终态任务改完「保存并运行」= 同一任务追加历史轮次（spec 快照随轮留档），
+   之前的执行历史在详情页「执行历史」卡按轮保留可切看——不再需要复制出新任务。 */
 let teState = null;   // 当前编辑上下文 {taskId, spec, scenes}
 
 function teEsc(s) { return escHtml(s); }   // 转义统一走 live2.js
@@ -934,10 +936,12 @@ async function openTaskEdit(taskId) {
   let t;
   try { t = await FAPI.get(`/functional/tasks/${taskId}`); }
   catch (err) { fapiToast(`载入任务失败：${err.message}`, true); return; }
-  if (t.status !== "pending") {
-    fapiToast(`仅 pending 任务可编辑（当前 ${t.status}）—— 重试/复制会生成 pending 新任务`, true);
+  if (["running", "stopping"].includes(t.status)) {
+    fapiToast(`运行中/停止中的任务不可编辑（当前 ${t.status}），停止或跑完再改`, true);
     return;
   }
+  // RISK: 终态任务「保存并运行」会真跑一轮（saveTaskEdit PATCH+run，打真实模型端点）——
+  // 门槛若再放宽到 running/stopping，会与在途运行互相踩（后端 409 兜底，前端不再拦）。
   const spec = t.spec || {};
   teState = { taskId, spec, scenes: [...((spec.tools || {}).datasets || [])] };
   document.getElementById("teName").value = t.name || "";
@@ -1057,12 +1061,12 @@ async function saveTaskEdit(runAfter) {
     if (runAfter) await FAPI.post(`/functional/tasks/${taskId}/run`);
     document.getElementById("taskEditDrawer").hidden = true;
     fapiToast(runAfter
-      ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行`
-      : `配置已保存（${taskId.slice(0, 8)}，仍为 pending，随时可运行）`);
+      ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行（本轮追加进执行历史）`
+      : `配置已保存（${taskId.slice(0, 8)}，随时可运行，历史不受影响）`);
     await wireTasks();
     await showLiveTask(taskId);
   } catch (err) {
-    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在 pending，或名称与同域其他任务冲突）" : ""}`, true);
+    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务正在运行中不可改，或名称与同域其他任务冲突）" : ""}`, true);
   }
 }
 
