@@ -395,10 +395,14 @@ function papiClearDetailTimer() {
   if (PERF_DETAIL_TIMER) { clearTimeout(PERF_DETAIL_TIMER); PERF_DETAIL_TIMER = null; }
 }
 
-/* 详情页运行态自轮询（5s）：以 poll 模式续期，保住已渲染的详情骨架 */
+/* 详情页运行态自轮询（5s）：以 poll 模式续期，保住已渲染的详情骨架。
+   seq 只防串任务不防离开：人已回列表/去大屏时详情 section 被 hidden，不再续期——
+   否则回调里的 showPage("detail") 会每 5s 把用户从列表拽回详情 */
 function papiRearmDetail(seq, taskId) {
   PERF_DETAIL_TIMER = setTimeout(() => {
-    if (seq === showPerfTask.seq) showPerfTask(taskId, { poll: true });
+    const sec = document.querySelector('main.page-host [data-page="detail"]');
+    if (seq !== showPerfTask.seq || !sec || sec.hidden) return;
+    showPerfTask(taskId, { poll: true });
   }, 5000);
 }
 

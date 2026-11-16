@@ -276,7 +276,9 @@ async function showAccTask(taskId) {
   if (runId) accLoadSamples(runId, false, seq);
   if (running && t.status === "running") {
     accDetailTimer = setTimeout(() => {
-      if (seq === showAccTask.seq) showAccTask(taskId);
+      const cur = document.querySelector('main.page-host [data-page="detail"]');
+      // seq 只防串任务不防离开：人已回列表（detail hidden）就不再续期，否则每 5s 把列表拽回详情
+      if (seq === showAccTask.seq && cur && !cur.hidden) showAccTask(taskId);
     }, 5000);
   }
 }
@@ -1158,7 +1160,9 @@ async function accRenderCalDetail(t, taskId, seq) {
   `;
   if (running && t.status === "running") {
     accDetailTimer = setTimeout(() => {
-      if (seq === showAccTask.seq) showAccTask(taskId);
+      const cur = document.querySelector('main.page-host [data-page="detail"]');
+      // seq 只防串任务不防离开：人已回列表（detail hidden）就不再续期，否则每 5s 把列表拽回详情
+      if (seq === showAccTask.seq && cur && !cur.hidden) showAccTask(taskId);
     }, 5000);
   }
 }
