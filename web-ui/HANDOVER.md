@@ -1629,3 +1629,12 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
 - 注意：8776 反代被 iab_sandbox up 静默失败过一次（STATE 里 proxy pid 与实际监听
   不符），手动后台 `AITE_API=… serve.py 8776` 兜底后验证正常；down 后须 taskkill
   手动进程（Git Bash kill 对原生 exe 无效）。
+
+## 2026-11-16
+
+- 任务时间时区修复：shortTime（live2.js）/papiShortTime（api-perf.js）/api32.js
+  rubrics 表内联切片原本裸切 UTC ISO 串当本地时间显示（差 8 小时），改为
+  new Date parse 后按浏览器本地时区渲染（输出格式仍 MM-DD HH:mm，.slice(6)
+  取时刻的调用方不受影响；解析失败回退旧切片）。live2.js v=2→3（accuracy2/
+  functional2/common2）、api32.js v=33→34（functional2/common2）、api-perf.js
+  v=11→12（perf2）。mockup_symbols --check + render_check + node 时区断言过。

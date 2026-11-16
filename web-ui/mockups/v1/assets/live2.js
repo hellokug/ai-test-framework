@@ -17,7 +17,15 @@ function liveToast(msg, bad = false) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 4600);
 }
-function shortTime(iso) { return (iso || "").slice(5, 16).replace("T", " "); }
+/* 后端时间统一是 UTC aware ISO（+00:00），必须 parse 后按浏览器本地时区渲染，
+   裸切片拿到的是 UTC 数字（本地看差 8 小时）；解析失败回退旧切片 */
+function shortTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso).slice(5, 16).replace("T", " ");
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function fmtDur(s) {
   return s == null ? "—" : s >= 3600 ? `${(s / 3600).toFixed(1)} 小时`
     : s >= 60 ? `${Math.round(s / 60)} 分钟` : `${Math.round(s)} 秒`;

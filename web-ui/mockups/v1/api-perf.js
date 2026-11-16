@@ -63,7 +63,14 @@ function papiToast(msg, bad = false) {
 }
 
 function papiEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function papiShortTime(iso) { return (iso || "").slice(5, 16).replace("T", " "); }
+/* 同 live2.js shortTime：后端给 UTC aware ISO（+00:00），parse 后按本地时区渲染，别裸切片 */
+function papiShortTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso).slice(5, 16).replace("T", " ");
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function papiFmtDur(s) {
   return s == null ? "—" : s >= 3600 ? `${(s / 3600).toFixed(1)} 小时`
     : s >= 60 ? `${Math.round(s / 60)} 分钟` : `${Math.round(s)} 秒`;

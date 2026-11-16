@@ -1915,7 +1915,7 @@ async function wireCommonRubricsPage() {
       <td>${r.score_type ? `<span class="tag mono">${escHtml(r.score_type)}</span>` : '<span class="faint">—</span>'}</td>
       <td style="font-size:12.5px">${preview(r.content)}</td>
       <td class="rid">${escHtml(r.fingerprint || "—")}</td>
-      <td class="dim">${String(r.updated_at || "").slice(5, 16).replace("T", " ")}</td>
+      <td class="dim">${fapiShortTime(r.updated_at)}</td>
       <td style="text-align:right"><button class="btn sm" data-edit-rubric="${r.id}">编辑</button>
       <button class="btn sm danger" data-del-rubric="${r.id}">删除</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="ds-empty">暂无 Rubric 资产 —— 点「＋ 新建 Rubric」，或在精度页评测抽屉里把写好的标准「沉淀为资产」</td></tr>'}</tbody>`;
