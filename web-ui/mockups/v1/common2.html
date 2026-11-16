@@ -396,15 +396,15 @@ section[data-page="datasets"]>header.topbar+div.ds-kicker{margin-top:16px}
   <div class="drawer-body">
     <div class="field"><label>名称<span class="qmark">?<span class="tip">资产唯一名：精度评测抽屉「选用标准」下拉与判官校准都按它引用；重名保存返回 409（换名或编辑既有条目）</span></span></label>
       <input class="in" id="rubName" placeholder="如 拒答合规-binary"></div>
-    <div class="field"><label>打分语义（可选）<span class="qmark">?<span class="tip">仅展示备注，判官不读它，帮人选对 rubric 用；业界约定词：binary=0/1 二值判定、graded-5=1~5 分档（G-Eval 式）、graded-10=1~10（MT-Bench 式）、weighted-sum=子项加权求和、pairwise=A/B 偏好比较（另一种判官形态）——可下拉选，也可自由输入</span></span></label>
-      <input class="in" id="rubScoreType" list="rubScoreTypeOptions" placeholder="如 binary / graded-5">
-      <datalist id="rubScoreTypeOptions">
+    <div class="field"><label>打分语义（可选）<span class="qmark">?<span class="tip">仅展示备注，判官不读它，帮人选对 rubric 用；固定约定词表（与其他下拉框同款 select）：binary=0/1 二值判定、graded-5=1~5 分档（G-Eval 式）、graded-10=1~10（MT-Bench 式）、weighted-sum=子项加权求和、pairwise=A/B 偏好比较（另一种判官形态）</span></span></label>
+      <select class="in" id="rubScoreType">
+        <option value="">（无）</option>
         <option value="binary">binary —— 0/1 二值判定</option>
         <option value="graded-5">graded-5 —— 1~5 分档（G-Eval 式）</option>
         <option value="graded-10">graded-10 —— 1~10 打分（MT-Bench 式）</option>
         <option value="weighted-sum">weighted-sum —— 子项加权求和</option>
         <option value="pairwise">pairwise —— A/B 偏好比较</option>
-      </datalist></div>
+      </select></div>
     <div class="field"><label>评分标准全文<span class="qmark">?<span class="tip">判官提示词里的评分标准正文；创建任务时整文落快照、按内容算指纹（sha256 前 12 位）——改一字指纹即变，依赖指纹的校准结论随之失效重跑</span></span></label>
       <textarea class="in" id="rubContent" rows="12" style="font-family:var(--mono);font-size:12.5px;line-height:1.7" placeholder="逐条列出评分维度、分档定义与判定规则……"></textarea></div>
   </div>

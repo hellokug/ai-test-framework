@@ -1554,3 +1554,12 @@ mockup_symbols --check 全过；IAB 隔离实例（8310/8776 被并行会话沙�
   原生控件），IAB 重载实测 computed colorScheme=dark、assets/v1.css?v=21 生效；五引用页
   （common2/perf2/reliability3/accuracy2/functional2）统一 bump v=20→21。原生弹层颜色无法
   截图取证（浏览器合成层，CDP 截屏不含），以 computed style + Chromium 行为为准。
+- owner 复看后仍判不一致（datalist 原生弹层与箭头是浏览器固定渲染，CSS 够不着）→ 定稿换真
+  select：common2.html rubricDrawer 打分语义 input+datalist 整体换 `<select class="in"
+  id="rubScoreType">`（（无）/binary/graded-5/graded-10/weighted-sum/pairwise 六项，与其他下拉
+  同元素同类样式 100% 一致，IAB 截图 + computed 双证）；api32.js 读写 rubScoreType（.value/.trim）
+  零改动兼容。⚠️ 已知边界：存量 score_type 若有词表外自定义值，编辑回填会静默重置为（无）、保存即
+  清——openRubricDrawer 未知值注入 option 的保护未做（api32.js 是共享资产、其 ?v= bump 要动
+  functional2，当时在他人认领中，本轮按单文件收口；rubrics.json items=[] 无存量风险），后续动
+  api32 时补。v1.css 的 input.in[list]{color-scheme:dark} 成死代码但保留（免五页 bump，未来再引
+  datalist 仍需要）。改动仅 common2.html，无 ?v= bump；mockup_symbols --check 过。
