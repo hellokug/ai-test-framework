@@ -1,5 +1,6 @@
-"""Stop hook 门禁：本轮改过代码必须在最终回复附「教学 / 设计说明」小节
-（owner 2026-11-12 确认：CLAUDE.md 教学义务口头规范无效，走 Stop 强制）。
+"""Stop hook 门禁：本轮改过代码必须在最终回复给「四项契约交付」
+（owner 2026-11-16 改约：教学四段式退役——owner 保的是项目级掌握
+（契约面/风险面/数据流/依赖边），模块内部实现教学改第 5 条点名制）。
 
 由 ``.zcode/config.json`` 注册到 ZCode 的 Stop 事件（process 类型）。判定：
 
@@ -7,9 +8,10 @@
   「本轮是否动过代码」从 transcript_path / rollout（model-io JSONL）取——
   最后一条 user 消息之后的 Write/Edit/MultiEdit 工具调用，其 file_path 后缀
   属于 CODE_SUFFIXES 即视为改码（.md 文档不算）。
-- 改码且回复无 ``^#{2,4} (教学|设计说明)`` 小节、也无 TEACH_SKIP_MARKER
-  （``<!--teach-skip-->``）→ exit 2：stderr 列出涉及的代码文件，提示按
-  CLAUDE.md 教学义务四段式补小节（做什么 → 为什么 → 模式取舍 → 以后改哪里）。
+- 改码且回复缺 DELIVERY 四项（【契约摘要】【风险点位清单】【数据流简述】
+  【依赖变更】）任一项、也无 TEACH_SKIP_MARKER（``<!--teach-skip-->``）→
+  exit 2：stderr 列出缺的项与涉及的代码文件，提示按 CLAUDE.md 交付契约补齐
+  （四项在前、代码在后；代码内风险行加 RISK 注释）。
 - fail-open：读不到证据、没动代码 → exit 0。
 
 手工验证::
@@ -26,7 +28,8 @@ from pathlib import Path
 TAIL_CHARS = 60000
 CODE_SUFFIXES = {".py", ".js", ".ts", ".cjs", ".mjs", ".html", ".css"}
 TEACH_SKIP_MARKER = "<!--teach-skip-->"
-TEACHING = re.compile(r"(?m)^#{2,4}\s*(?:教学|设计说明)")
+# 四项契约交付（owner 2026-11-16 改约）：最终回复缺任一标记即拦，全部命中才放行
+DELIVERY = ("【契约摘要】", "【风险点位清单】", "【数据流简述】", "【依赖变更】")
 # Write/Edit/MultiEdit 的工具调用 → 捕获 file_path（file_path 在 name 后 300 字符内）
 TOOL_CALL = re.compile(
     r'"name"\s*:\s*"(?:Write|Edit|MultiEdit)".{0,300}?"file_path"\s*:\s*"([^"]+)"', re.S)
@@ -40,6 +43,10 @@ def _release() -> None:
 def _block(reason: str) -> None:
     print(reason, file=sys.stderr)
     sys.exit(2)
+
+
+def _missing_items(text: str) -> list[str]:
+    return [item for item in DELIVERY if item not in text]
 
 
 def _stdin() -> dict:
@@ -108,14 +115,18 @@ def main() -> None:
     if not raw:
         _release()                                   # 证据不全 fail-open
     code_files = _code_files(raw)
-    if not code_files or TEACH_SKIP_MARKER in text or TEACHING.search(text):
+    missing = _missing_items(text)
+    if not code_files or TEACH_SKIP_MARKER in text or not missing:
         _release()
     shown = "、".join(Path(p).name for p in code_files[:6])
     extra = f" 等共 {len(code_files)} 个" if len(code_files) > 6 else ""
-    _block(f"教学小节缺失：本轮改动过代码文件（{shown}{extra}）。按 CLAUDE.md 教学义务"
-           "在最终回复补「### 教学」（或「### 设计说明」）小节：做什么 → 为什么这么做 → "
-           "用了什么模式/机制 → 以后改哪里；简化语言、结论直接给表格。琐碎修复"
-           "（错字/一行日志等）可在回复加 <!--teach-skip--> 显式跳过。")
+    _block(f"交付四项缺失（缺 {'、'.join(missing)}）：本轮改动过代码文件"
+           f"（{shown}{extra}）。按 CLAUDE.md 交付契约补齐，四项在前、代码在后："
+           "【契约摘要】（对外函数/接口的入参/返回/异常，标新增/修改/不变）→"
+           "【风险点位清单】（DB 写入/网络请求/全局状态/异常捕获/删除/复杂分支，"
+           "文件:行号+函数+一句话）→【数据流简述】（≤3 行）→【依赖变更】（import "
+           "增删改+跨层调用）；代码内风险行加 # RISK:（Python）或 // RISK:（JS）"
+           "注释。琐碎修复（错字/一行日志等）可加 <!--teach-skip--> 显式跳过。")
 
 
 if __name__ == "__main__":

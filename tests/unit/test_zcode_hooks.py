@@ -371,29 +371,35 @@ def test_commit_gate_claim_scope_parsing_and_exclusion(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- stop_teach_gate
 
-def test_teach_gate_detects_code_edits_and_teaching_section():
+def test_teach_gate_detects_code_edits_and_delivery_items():
     gate = _load("teach_gate_under_test", SCRIPTS / "hooks" / "stop_teach_gate.py")
     raw = ('{"role":"user","content":"改一下"}\n'
            '{"name":"Edit","input":{"file_path":"D:/proj/aite/web/app.py","old_string":"a"}}\n'
            '{"name":"Write","input":{"file_path":"D:/proj/docs/note.md"}}')
     assert gate._code_files(raw) == ["D:/proj/aite/web/app.py"]   # .md 不算改码
-    assert gate.TEACHING.search("### 教学\n- 做什么")
-    assert gate.TEACHING.search("### 设计说明")
-    assert not gate.TEACHING.search("## 总结")
+    assert gate.DELIVERY == ("【契约摘要】", "【风险点位清单】", "【数据流简述】", "【依赖变更】")
+    full = "x".join(gate.DELIVERY)
+    assert gate._missing_items(full) == []
+    assert gate._missing_items("【契约摘要】和【数据流简述】") == ["【风险点位清单】", "【依赖变更】"]
 
 
-def test_teach_gate_cli_requires_teaching_section(tmp_path):
+def test_teach_gate_cli_requires_delivery_items(tmp_path):
     transcript = tmp_path / "t.jsonl"
     transcript.write_text('{"role":"user","content":"go"}\n'
                           '{"name":"Write","input":{"file_path":"a.py"}}', encoding="utf-8")
     base = {"hook_event_name": "Stop", "transcript_path": str(transcript)}
     plain = _run_hook(SCRIPTS / "hooks" / "stop_teach_gate.py",
                       json.dumps({**base, "responseText": "done"}).encode("utf-8"), tmp_path)
-    assert plain.returncode == 2 and "教学" in plain.stderr.decode("utf-8")
+    assert plain.returncode == 2 and "契约摘要" in plain.stderr.decode("utf-8")
     taught = _run_hook(SCRIPTS / "hooks" / "stop_teach_gate.py",
-                       json.dumps({**base, "responseText": "### 教学\n- 四段"}).encode("utf-8"),
+                       json.dumps({**base, "responseText": " ".join(
+                           ("【契约摘要】", "【风险点位清单】", "【数据流简述】", "【依赖变更】"))}).encode("utf-8"),
                        tmp_path)
     assert taught.returncode == 0
+    partial = _run_hook(SCRIPTS / "hooks" / "stop_teach_gate.py",
+                        json.dumps({**base, "responseText": "【契约摘要】 only"}).encode("utf-8"),
+                        tmp_path)
+    assert partial.returncode == 2
     skipped = _run_hook(SCRIPTS / "hooks" / "stop_teach_gate.py",
                         json.dumps({**base, "responseText": "typo <!--teach-skip-->"}).encode("utf-8"),
                         tmp_path)
