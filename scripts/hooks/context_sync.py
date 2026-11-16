@@ -118,8 +118,8 @@ def _open_items() -> str:
                  for c in _CELL_SPLIT.split(line.strip().strip("|"))]
         if len(cells) < 4 or not cells[0][:4].isdigit():
             continue  # 表头、分隔行、正文
-        if cells[-1].lower() in DONE_STATUSES:
-            continue
+        if any(cells[-1].lower().startswith(s) for s in DONE_STATUSES):
+            continue  # 兼容「done（2026-11-16 核实说明）」带后缀的关账写法
         rows.append(f"- {cells[0]}｜{cells[1]}｜→ {cells[2]}")
     if not rows:
         return ""

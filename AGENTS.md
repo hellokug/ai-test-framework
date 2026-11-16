@@ -33,6 +33,11 @@ token、单工具请求占比、最慢的调用和撑大上下文的输出。
 就自己读尾部 10 条）；大任务开工前过一遍，能顺手消除的做掉并把状态改 done；owner 可随时
 要求清账。会话级深度复盘用 `/retro`。
 
+**定期自查**（owner 2026-11-17 要求：落地的小优化点多了注意力会散）：每周一 09:30 定时
+任务跑 `scripts/opt_audit.py` 出报告，随后关陈旧账（人工核对产物确实覆盖才改 done）+
+机械合并散落小点（重复条目/同坑多处记录/已被脚本或 skill 取代的速查段），语义取舍列出
+来留 owner 决策；没账可关、没点可并就不硬凑改动。
+
 **维护**：调阈值/改标记改 `scripts/hooks/stop_efficiency_gate.py` 顶部常量；
 临时停用把 `.zcode/config.json` 的 `hooks.enabled` 置为 `false`。写新钩子照
 `scripts/hooks/context_sync.py` 文件头（stdin 字段、输出 schema、信任审批）。

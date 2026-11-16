@@ -27,6 +27,7 @@ EFF_LOG = (
     "| 2026-11-08 | 全量回归跑 3 次 | affected_tests.py | open |\n"
     "| 2026-11-08 | 汇总行被吞 | 统一 `2>&1 \\| tail -1` | done |\n"
     "| 2026-11-09 | 管道 `a \\| b` 截断 | 改用文件 | open |\n"
+    "| 2026-11-10 | 已关账带说明 | 已落地 affected_tests.py | done（2026-11-16 核对） |\n"
 )
 
 CLAIMS_MD = (
@@ -109,6 +110,7 @@ def test_session_start_injects_open_items_and_records_baseline(sync):
     text = sync._on_session_start({"source": "startup"}, "s1")
     assert "全量回归跑 3 次" in text and "管道 `a | b` 截断" in text
     assert "汇总行被吞" not in text
+    assert "已关账带说明" not in text
     assert sync._snapshot_path("s1").exists()
 
 
