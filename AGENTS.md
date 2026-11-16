@@ -116,6 +116,13 @@ token、单工具请求占比、最慢的调用和撑大上下文的输出。
 
 ## 验证门禁命令速查（2026-11-08 固化，别再试错找入口）
 
+**一键收尾（2026-11-16 起）**：`.venv/Scripts/python.exe scripts/preflight.py` —— 门禁 +
+按 diff 选测建议 + 重启判定一条命令全出（`--run-tests` 连选出的 pytest 一起跑；
+`--skip-tests` 只跑门禁；`--base <ref>` 指定基线，缺省脏树比 HEAD、干净树比 HEAD~1）。
+选测是 ast 导入图反向闭包，偏保守宁多选不漏测；映射为空时用下面的人工对照兜底。
+共享工作树下选测覆盖整树全部未提交改动（含并行会话在途文件），跑之前先扫一眼改动列表。
+下列明细命令仍可单独调用：
+
 ```
 .venv/Scripts/python.exe -m ruff check aite tests scripts   # lint（ruff format 不是门禁，勿跑 --check）
 .venv/Scripts/lint-imports.exe                              # 分层合同（不是 python -m lint_imports）
@@ -133,7 +140,7 @@ pytest：`pyproject.toml` 的 addopts 已带 `-q -n 4`，命令行不要再加 `
 新写 Python 代码默认 `zip(..., strict=True)`、简单赋值分支直接写三元式——仓库 ruff
 活跃规则 B905/SIM108 会拦（2026-11-15 写判官校准脚本为此返工两轮）。
 
-选测对照（全量只在跨域改动与发布前，CLAUDE.md 原则 4）：精度资产层改动 →
+选测对照（一键选测跑上面的 preflight，此处人工备查。全量只在跨域改动与发布前，CLAUDE.md 原则 4）：精度资产层改动 →
 `pytest tests/unit/test_accuracy_assets.py tests/unit/test_cli_accuracy_assets.py
 tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
 `tests/unit/test_cli_functional_assets.py tests/integration/test_functional_assets_api.py`。
@@ -166,7 +173,8 @@ tests/integration/test_accuracy_assets_api.py -q`；功能资产层 →
 
 ## 改动收尾必答：要不要重启（2026-11-11 owner 要求，长期有效）
 
-每轮改动收尾必须在结论里说明「是否需要重启服务 + 自己启动用哪条命令」，不许留白：
+每轮改动收尾必须在结论里说明「是否需要重启服务 + 自己启动用哪条命令」，不许留白
+（preflight 会按 diff 自动判定并输出提示，直接抄进结论即可）：
 
 - **静态稿改动（web-ui/mockups/）**：不需要重启任何服务。serve.py 预览是 no-store
   直读磁盘、对接层 JS 靠 `?v=` bump 防缓存，刷新页面即生效；后端（aite serve）没改代码也别动。
