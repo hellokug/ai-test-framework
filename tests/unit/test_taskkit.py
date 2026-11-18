@@ -121,9 +121,13 @@ async def test_update_rejected_once_left_pending(repo):
 async def test_delete_guards(repo):
     kit = make_kit(FakeExecutor(wait_cancel=True))
     task = await kit.create(repo, {"a": 1}, name="t")
+    await kit.delete(repo, task["id"])              # pending（未跑——复制副本/排队）可删
+    assert await kit.get(repo, task["id"]) is None
+
+    task = await kit.create(repo, {"a": 1}, name="t")
     await kit.run(repo, task["id"])
     with pytest.raises(TaskStateError):
-        await kit.delete(repo, task["id"])          # 非终态不可删
+        await kit.delete(repo, task["id"])          # 运行中不可删（先 stop）
     await kit.stop(repo, task["id"])
     await kit.wait(repo, task["id"])                # 停止异步收口 → 终态后可删
     await kit.delete(repo, task["id"])              # 终态可删

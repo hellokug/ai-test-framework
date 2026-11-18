@@ -156,7 +156,7 @@ def _register_action_commands(app: typer.Typer, kit: DomainTaskKit) -> None:
         task_id: str = typer.Argument(...),
         force: bool = typer.Option(False, "--force", help="跳过确认"),
     ) -> None:
-        """删除终态任务。"""
+        """删除 pending/终态任务（运行中先停止）。"""
         if not force and not typer.confirm(f"删除任务 {task_id}?"):
             raise typer.Abort()
 

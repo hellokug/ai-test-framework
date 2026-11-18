@@ -63,6 +63,7 @@ let ACC_SCENARIOS = [];        // 场景清单（/accuracy/scenarios：筛选/�
 let ACC_MODEL_SOURCES = [];    // [{key, label, profile|target}]
 let ACC_RUBRICS = [];          // rubric 资产（/accuracy/rubrics：评测抽屉选用 + 校准抽屉数据源）
 const ACC_TERMINAL = ["succeeded", "failed", "cancelled", "stale"];   // 与后端 core.types TASK_TERMINAL 对齐（可重试/可编辑终态）
+const ACC_DELETABLE = ["pending", ...ACC_TERMINAL];   // 后端 delete 契约：未跑（复制副本/排队）+ 终态可删，运行中先停止
 let accDetailTimer = null;
 
 /* ------------------------------------------------------------ 任务列表 */
@@ -261,7 +262,7 @@ async function showAccTask(taskId, roundSel) {
         ${running ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
         ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
         <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
-        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
+        ${ACC_DELETABLE.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该任务（执行历史与结果快照一并移除，不可恢复；运行中先停止）">删除</button>` : ""}
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>
@@ -449,8 +450,8 @@ async function stopAccTask(taskId) {
    core/taskkit.py DomainTaskKit.retry，不新建任务）；copy 任意状态 = 打开「复制
    草稿」抽屉（此刻不建任务，点「创建副本/创建并运行」才 POST /duplicate +
    PATCH 表单改动，取消不复制）；edit 打开精度编辑抽屉（保存 = PATCH
-   /accuracy/tasks/{id}，后端仅 pending/终态可改，运行中 409）；delete 仅终态 =
-   confirm 后 DELETE（执行历史与结果一并移除，pending/运行中后端 409）。
+   /accuracy/tasks/{id}，后端仅 pending/终态可改，运行中 409）；delete pending/终态 =
+   confirm 后 DELETE（执行历史与结果一并移除，运行中后端 409）。
    ref = 列表行下标（ACC_TASK_IDS 索引）或任务 id（详情页）；mock 模式点击只提示。 */
 async function aapiTaskAction(action, ref, ev) {
   ev?.stopPropagation();
@@ -482,7 +483,7 @@ async function aapiTaskAction(action, ref, ev) {
     } else if (action === "copy") {
       await openAccTaskEdit(tid, { copy: true });   // 草稿抽屉：保存才建副本，取消不复制
     } else if (action === "delete") {
-      // RISK: 网络删除终态任务——执行历史与结果快照一并移除不可恢复（pending/运行中后端 409）
+      // RISK: 网络删除 pending/终态任务——执行历史与结果快照一并移除不可恢复（运行中后端 409）
       const t = await AAPI.get(`/accuracy/tasks/${tid}`);
       if (!confirm(`删除任务「${t.name || "(未命名)"}」（${tid.slice(0, 8)}）？\n执行历史与结果快照一并移除，不可恢复。`)) return;
       await AAPI.del(`/accuracy/tasks/${tid}`);
@@ -1575,7 +1576,7 @@ async function accRenderCalDetail(t, taskId, seq) {
         ${t.status === "running" ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
         ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再校准一轮（同一任务，追加执行历史）">重试</button>` : ""}
         <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
-        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
+        ${ACC_DELETABLE.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该任务（执行历史与结果快照一并移除，不可恢复；运行中先停止）">删除</button>` : ""}
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>

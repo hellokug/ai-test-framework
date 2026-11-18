@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -252,7 +252,8 @@ class Repository(ABC):
                                        exclude_id: str | None = None) -> dict | None: ...
 
     @abstractmethod
-    async def delete_domain_task(self, table: type[Any], task_id: str) -> bool: ...
+    async def delete_domain_task(self, table: type[Any], task_id: str,
+                                 expect_status: str | Collection[str] | None = None) -> bool: ...
 
     @abstractmethod
     async def mark_stale_domain_tasks(self, table: type[Any]) -> int:

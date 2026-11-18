@@ -33,7 +33,7 @@
 | `GET /{D}/tasks` | 列表 | query：`status`、`retry_of`、`limit`（默认 50） |
 | `GET /{D}/tasks/{id}` | 详情（含 `history` 执行历史） | 404 不存在 |
 | `PATCH /{D}/tasks/{id}` | 改 name/spec | 仅非运行中（`pending`/终态）；`running\|stopping` 409；改名占用同域同名 409、改空 422 |
-| `DELETE /{D}/tasks/{id}` | 删除 | 仅终态；非终态 409 |
+| `DELETE /{D}/tasks/{id}` | 删除 | 仅 `pending`/终态（未跑副本/排队可删）；`running`\|`stopping` 409 |
 | `POST /{D}/tasks/{id}/run` | 运行 | `pending` 首发 / 终态重跑；202 返回任务快照，异步执行 |
 | `POST /{D}/tasks/{id}/stop` | 停止 | 仅 `running`（幂等：`stopping` 重复调用返回当前态） |
 | `POST /{D}/tasks/{id}/retry` | 重试 | 仅终态；**同一任务**同配置再跑一轮（追加执行历史轮次），202 返回任务快照 |
@@ -102,7 +102,7 @@ class DomainTaskKit:
     async def get(self, repo, task_id: str) -> dict | None
     async def update(self, repo, task_id: str, *, name: str | None = None,
                      spec: dict | None = None) -> dict          # 仅非运行中
-    async def delete(self, repo, task_id: str) -> None          # 仅终态
+    async def delete(self, repo, task_id: str) -> None          # pending/终态
     async def run(self, repo, task_id: str, *, trigger: str = "run") -> dict
     async def stop(self, repo, task_id: str) -> dict            # running→stopping→cancelled
     async def retry(self, repo, task_id: str) -> dict           # 终态→同任务重跑一轮

@@ -875,7 +875,7 @@ function openRunDetail(idx) {
    run pending 首发/终态重跑、stop 仅 running；retry 仅终态 = 同一任务同配置
    再跑一轮（不再新建任务）；copy 任意状态 = 打开「复制草稿」抽屉（此刻不建任务，
    点「创建副本/创建并运行」才 POST duplicate + PATCH 表单改动，取消不复制）；
-   delete 仅终态 = confirm 后 DELETE（执行历史与结果一并移除，pending/运行中后端 409）。
+   delete pending/终态 = confirm 后 DELETE（执行历史与结果一并移除，运行中后端 409）。
    终态集合与后端 core.types TASK_TERMINAL 对齐；mock 模式点击只提示。 */
 async function fapiTaskAction(action, ref, ev) {
   ev?.stopPropagation();
@@ -906,7 +906,7 @@ async function fapiTaskAction(action, ref, ev) {
     } else if (action === "copy") {
       await openTaskEdit(tid, { copy: true });   // 草稿抽屉：保存才建副本，取消不复制
     } else if (action === "delete") {
-      // RISK: 网络删除终态任务——执行历史与结果快照一并移除不可恢复（pending/运行中后端 409）
+      // RISK: 网络删除 pending/终态任务——执行历史与结果快照一并移除不可恢复（运行中后端 409）
       const t = await FAPI.get(`/functional/tasks/${tid}`);
       if (!confirm(`删除任务「${t.name || "(未命名)"}」（${tid.slice(0, 8)}）？\n执行历史与结果快照一并移除，不可恢复。`)) return;
       await FAPI.del(`/functional/tasks/${tid}`);
@@ -1423,7 +1423,7 @@ async function showLiveTask(taskId, roundSel) {
         ${["running", "stopping"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('stop', '${taskId}')">停止</button>` : ""}
         ${["succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
         <button class="btn" onclick="fapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
-        ${["succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn danger" onclick="fapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
+        ${["pending", "succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn danger" onclick="fapiTaskAction('delete', '${taskId}')" title="删除该任务（执行历史与结果快照一并移除，不可恢复；运行中先停止）">删除</button>` : ""}
         <button class="btn" onclick="showLiveTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>

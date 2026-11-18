@@ -641,7 +641,7 @@ aite perf tasks get <id>                                          # 详情：spe
 aite perf tasks run <id>                                          # 运行并等待终态（exit 0=succeeded）
 aite perf tasks stop <id>                                         # 协作式停止；60s 兜底强转 cancelled
 aite perf tasks retry <id>                                        # 终态→新任务（retry_of 链，不改原记录）
-aite perf tasks rm <id>                                           # 删除（仅终态）
+aite perf tasks rm <id>                                           # 删除（pending/终态；运行中先停止）
 ```
 
 四个域命令同形；spec 与 `aite run -c` 的 suite YAML 完全同构（perf 域即

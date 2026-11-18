@@ -57,8 +57,6 @@ class TestDomainTasksApi:
         assert patched.status_code == 200
         assert patched.json()["name"] == "renamed"
 
-        # pending 非终态：删除 409
-        assert client.delete(f"/api/v1/perf/tasks/{task['id']}").status_code == 409
         # pending 不允许 stop（仅 running）；stop body（mode）合法透传到 kit
         # （非法 mode / 非法状态都映射 409，而非 422 解析失败）
         assert client.post(f"/api/v1/perf/tasks/{task['id']}/stop").status_code == 409
@@ -69,6 +67,9 @@ class TestDomainTasksApi:
         # 非终态无 result
         result = client.get(f"/api/v1/perf/tasks/{task['id']}/result")
         assert result.status_code == 409
+        # pending（未跑——复制副本/排队）可直接删，删后 404
+        assert client.delete(f"/api/v1/perf/tasks/{task['id']}").json()["deleted"] is True
+        assert client.get(f"/api/v1/perf/tasks/{task['id']}").status_code == 404
 
     def test_name_required_and_unique(self, client):
         """名称必填（缺失/空 → 422）且同域唯一（占用 → 409）；跨域同名不受限。"""

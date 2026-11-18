@@ -832,14 +832,21 @@ class SqlAlchemyRepository(Repository):
             row = (await session.execute(stmt.limit(1))).scalars().first()
             return self._domain_task_dict(row) if row else None
 
-    async def delete_domain_task(self, table: type[Any], task_id: str) -> bool:
+    async def delete_domain_task(self, table: type[Any], task_id: str,
+                                 expect_status: str | Collection[str] | None = None) -> bool:
+        """删任务行（执行历史/结果随行移除）。expect_status = 原子条件删
+        （DELETE ... WHERE status IN ...，防 kit 检查后、删除前被并发改状态）；
+        行不存在或状态不符均返回 False，由调用方区分口径。"""
         async with self.db.sessions() as session:
-            row = await session.get(table, task_id)
-            if row is None:
-                return False
-            await session.delete(row)
+            stmt = sa_delete(table).where(table.id == task_id)
+            if expect_status is not None:
+                allowed = ({expect_status} if isinstance(expect_status, str)
+                           else set(expect_status))
+                stmt = stmt.where(table.status.in_(allowed))
+            # RISK: 不可恢复删除；rowcount=0 即条件未命中（不存在/状态已变）
+            result = await session.execute(stmt)
             await session.commit()
-            return True
+            return bool(result.rowcount)
 
     async def mark_stale_domain_tasks(self, table: type[Any]) -> int:
         """startup 收敛（原则 8）：running/stopping 残留 → stale。

@@ -195,10 +195,16 @@ class DomainTaskKit:
         return updated
 
     async def delete(self, repo: Any, task_id: str) -> None:
+        """删除：pending（未跑——复制副本/排队）与终态可删；running/stopping 409（先 stop）。"""
         current = await self._require(repo, task_id)
-        if current["status"] not in TASK_TERMINAL:
-            raise TaskStateError(f"delete 仅限终态任务，当前 {current['status']}")
-        await repo.delete_domain_task(self.table, task_id)
+        if current["status"] not in (TASK_PENDING, *TASK_TERMINAL):
+            raise TaskStateError(f"delete 仅限 pending/终态任务，当前 {current['status']}")
+        # RISK: 删行连带执行历史/结果快照，不可恢复；expect_status 原子条件删防与
+        # run/调度器竞态（检查后、删除前被并发翻成 running 则 rowcount=0 拒删）
+        deleted = await repo.delete_domain_task(
+            self.table, task_id, expect_status=(TASK_PENDING, *TASK_TERMINAL))
+        if not deleted:
+            raise TaskStateError("delete 仅限 pending/终态任务（状态刚被并发变更，请重试）")
 
     # -------------------------------------------------------- run/stop/retry
     @staticmethod

@@ -85,14 +85,15 @@ def test_dup_copies_spec_without_retry_chain(cli):
     assert missing.exit_code == 1                     # TaskNotFoundError
 
 
-def test_stop_guard_and_rm_terminal_only(cli):
+def test_stop_guard_and_rm(cli):
     task_id = _create(cli, '{"a": 1}')
     stopped = runner.invoke(cli, ["stop", task_id])
     assert stopped.exit_code == 1                     # pending 不可停（TaskStateError）
     removed = runner.invoke(cli, ["rm", "--force", task_id])
-    assert removed.exit_code == 1                     # pending 不可删（契约：仅终态）
+    assert removed.exit_code == 0, removed.output     # pending（未跑副本）可删
 
-    runner.invoke(cli, ["run", task_id])              # 跑到终态
+    task_id = _create(cli, '{"a": 1}')                # 跑到终态后同样可删
+    runner.invoke(cli, ["run", task_id])
     removed = runner.invoke(cli, ["rm", "--force", task_id])
     assert removed.exit_code == 0, removed.output
     missing = runner.invoke(cli, ["get", task_id])
