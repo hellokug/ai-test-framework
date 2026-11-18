@@ -72,6 +72,9 @@ function aapiRerenderRuns() {
              bar?.querySelector("[data-owner]")?.value || "all",
              bar?.querySelector("[data-kw]")?.value?.trim().toLowerCase() || "");
 }
+/* 任务列表翻页绑定（分页组件在 assets/live2.js，本文件加载时已就绪；accuracy2 的 runs 表
+   容器，mock/live 通吃，宿主不存在即空操作） */
+uiPagerBind("#runsPager", "runs", aapiRerenderRuns);
 
 function rebuildAccRuns(items) {
   ACC_ID8 && Object.keys(ACC_ID8).forEach(k => delete ACC_ID8[k]);

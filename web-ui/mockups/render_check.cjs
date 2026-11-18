@@ -123,5 +123,54 @@ global.FAPI = { async get(url) {
   assert(html.includes("fapiTaskAction('edit'") === !["running", "stopping"].includes(fx.task.status),
     "编辑按钮未按非运行中状态渲染");
 
-  console.log(`render_check PASS：${fx.cases.length} 类用例渲染断言全过（断言判定/请求头/完整请求体/展开id唯一/日志直出/旧数据快照/错误占位/执行历史）`);
+  // —— 通用分页条（live2.js uiPageSlice/uiPagerHtml/uiPagerBind，任务列表/数据集目录共用）：
+  //    档位下拉 / 页码点击 / 最前最后直达 / 输入跳页四项能力 + 越界收拢、单页只留档位 ——
+  {
+    const rows = Array.from({ length: 37 }, (_, i) => i);      // 37 行 @15/页 = 3 页
+    let p = uiPageSlice("t", rows);
+    assert(p.pages === 3 && p.slice.length === 15 && p.slice[0] === 0, "首页切片 15 行失败");
+    uiPageState("t").num = 2;
+    p = uiPageSlice("t", rows);
+    assert(p.slice[0] === 15 && p.slice.length === 15, "第 2 页切片偏移失败");
+    uiPageState("t").num = 99;                                  // 越界 → 收拢回末页
+    p = uiPageSlice("t", rows);
+    assert(uiPageState("t").num === 3 && p.slice[0] === 30 && p.slice.length === 7, "页码越界未收拢回末页");
+    uiPageState("t").size = 0;                                  // 「全部」→ 一页铺完
+    p = uiPageSlice("t", rows);
+    assert(p.pages === 1 && p.slice.length === 37, "档位「全部」未一页铺完");
+
+    uiPageState("t").size = 15; uiPageState("t").num = 2;
+    let bar = uiPagerHtml("t", 3);
+    assert(bar.includes('data-pg-to="1"') && /title="跳至最前页"/.test(bar), "缺最前页直达按钮");
+    assert(bar.includes('data-pg-to="3"') && /title="跳至最后页"/.test(bar), "缺最后页直达按钮");
+    assert(bar.includes("data-pg-jump") && bar.includes("第 2 / 3 页"), "缺跳页输入/页位指示");
+    assert(bar.includes("data-pg-size") && bar.includes("50 条/页") && bar.includes(">全部</option>"), "档位下拉缺 15/30/50/全部");
+    assert((bar.match(/btn sm primary/g) || []).length === 1 && bar.includes('data-pg-to="2"'), "当前页未高亮且仅一处");
+    bar = uiPagerHtml("t", 1);                                  // 单页：只留档位下拉（逃生口）
+    assert(!bar.includes("data-pg-to") && bar.includes("data-pg-size"), "单页仍铺页码或缺档位下拉");
+    bar = uiPagerHtml("t", Math.ceil(200 / 15));                // 14 页：首末 + 当前窗口 + 省略号
+    assert(bar.includes("…") && bar.includes('data-pg-to="14"') && bar.includes('data-pg-to="1"'), "多页省略号/首末页缺失");
+
+    // 委托行为：stub 宿主收监听器，模拟点击/档位/跳页回车
+    const lsn = {};
+    const host = { dataset: {}, addEventListener(t, fn) { (lsn[t] = lsn[t] || []).push(fn); } };
+    const docQs = global.document.querySelector;
+    global.document.querySelector = () => host;
+    let renders = 0;
+    uiPagerBind("#stub", "t2", () => renders++);
+    uiPagerBind("#stub", "t2", () => renders++);                // 二次绑定应被 pgBound 挡住
+    global.document.querySelector = docQs;
+    const fakeBtn = to => ({ disabled: false, dataset: { pgTo: String(to) } });
+    lsn.click.forEach(fn => fn({ target: { closest: s => s === "[data-pg-to]" ? fakeBtn(3) : null } }));
+    assert(renders === 1 && uiPageState("t2").num === 3, "页码点击未翻页或重复绑定未挡");
+    lsn.change.forEach(fn => fn({ target: { matches: s => s === "[data-pg-size]", value: "0" } }));
+    assert(renders === 2 && uiPageState("t2").size === 0 && uiPageState("t2").num === 1, "档位切换未生效");
+    uiPageState("t2").size = 15; uiPageState("t2").num = 1;
+    lsn.keydown.forEach(fn => fn({ key: "Enter", target: { matches: s => s === "[data-pg-jump]", value: "abc" } }));
+    assert(renders === 2, "非数字跳页输入不应触发重渲染");
+    lsn.keydown.forEach(fn => fn({ key: "Enter", target: { matches: s => s === "[data-pg-jump]", value: "2" } }));
+    assert(renders === 3 && uiPageState("t2").num === 2, "跳页回车未生效");
+  }
+
+  console.log(`render_check PASS：${fx.cases.length} 类用例渲染断言全过（断言判定/请求头/完整请求体/展开id唯一/日志直出/旧数据快照/错误占位/执行历史）+ 通用分页条（切片/越界收拢/四项能力/委托绑定）`);
 })().catch(err => { console.error("render_check FAIL:", err.message); process.exit(1); });

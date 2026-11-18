@@ -675,7 +675,7 @@
 <div class="ribbon">精度评测 · 左下角徽标 LIVE=真后端 / MOCK=演示数据<small>右上角 🎨 可切主题</small></div>
 
 <script src="assets/v1.js?v=18"></script>
-<script src="assets/live2.js?v=4"></script>
+<script src="assets/live2.js?v=5"></script>
 <script>
 /* ---------- 数据集选择器（可搜索多选 + 归属/存储位置筛选）
    数据源 = GET /api/v1/tools/benchmarks（name / pretty_name / metrics / tags / few_shot_num / subsets / dataset_id）
@@ -993,13 +993,13 @@ const RUNS = [
 let RUNS_LAST_F = "";   // 筛选签名：变化时翻页回第 1 页；轮询/翻页重渲染保持当前页
 function renderRuns(status, owner, kw) {
   const sig = `${status}|${owner}|${kw}`;
-  if (sig !== RUNS_LAST_F) { RUNS_LAST_F = sig; if (window.uiPageState) uiPageState("runs").num = 1; }
+  if (sig !== RUNS_LAST_F) { RUNS_LAST_F = sig; uiPageState("runs").num = 1; }
   syncStatusChips("runsFilter", RUNS, r => r[3]);
   const hits = RUNS.filter(r => (status === "all" || r[3] === status)
     && (owner === "all" || r[7] === owner)
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
-  // 分页切片（通用组件 key="runs"）；api-acc3 未加载时的首渲染铺满不分页——此刻只有静态演示数据
-  const { pages, slice } = window.uiPageSlice ? uiPageSlice("runs", hits) : { pages: 1, slice: hits };
+  // 分页切片（通用组件在 assets/live2.js，先于本内联脚本加载，key="runs"）
+  const { pages, slice } = uiPageSlice("runs", hits);
   document.getElementById("runsTbl").innerHTML = `
   <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>状态</th><th>通过率</th><th>样本</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
   <tbody>${hits.length ? slice.map(r => {
@@ -1027,8 +1027,7 @@ function renderRuns(status, owner, kw) {
   const note = document.getElementById("runsCount");
   if (note) note.textContent = `共 ${hits.length} 条记录（域过滤 domain=accuracy）`;
   const pager = document.getElementById("runsPager");
-  if (pager) pager.innerHTML =
-    window.uiPagerHtml && (pages > 1 || !uiPageState("runs").size) ? uiPagerHtml("runs", pages) : "";
+  if (pager) pager.innerHTML = (pages > 1 || !uiPageState("runs").size) ? uiPagerHtml("runs", pages) : "";
 }
 bindTaskFilter("runsFilter", renderRuns);
 bindModelCustom("accModelSel", "accModelCustom");
@@ -1250,6 +1249,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=24"></script>
+<script src="api-acc3.js?v=25"></script>
 </body>
 </html>
