@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -220,6 +221,83 @@ print(json.dumps(out, ensure_ascii=False))
                 f"benchmarks 列举失败（{python_exe}）：{(proc.stderr or '')[-400:]}")
         return _tasks_from_stdout(proc.stdout)
 
+    # 基准额外依赖跑前预检：evalscope 把部分基准的判分器拆在独立 pip 包里
+    # （如 bfcl_v3/v4 → bfcl-eval==2025.10.27.1，声明在
+    # benchmarks/bfcl/requirements.txt），且只在判分阶段懒加载——不预装
+    # 就每次跑到一半才报 ModuleNotFoundError。注册名与目录名不保证一致
+    # （bfcl_v3 的代码在 benchmarks/bfcl/v3/，evalscope 靠 glob 自发现），
+    # 预检按注册名下划线拆段、从长到短枚举祖先目录找 requirements.txt。
+    # find_spec 定位不执行 evalscope 包代码，无事可做时秒级返回；pip 对
+    # 已满足的 == 锁定不发网络请求，重复跑幂等。
+    DEP_PREFLIGHT_BOOTSTRAP = """
+import importlib.util, json, pathlib, subprocess, sys
+
+datasets = json.loads(sys.argv[1])
+spec = importlib.util.find_spec("evalscope")
+if spec is None or not spec.submodule_search_locations:
+    raise SystemExit("evalscope 未安装于该环境——先 pip install evalscope")
+base = pathlib.Path(list(spec.submodule_search_locations)[0]) / "benchmarks"
+planned, seen = [], set()
+for ds in datasets:
+    parts = ds.split("_")
+    cands = [base / ds] + [base.joinpath(*parts[:i])
+                           for i in range(len(parts), 0, -1)]
+    for cand in cands:
+        req = cand / "requirements.txt"
+        if not req.exists() or str(req) in seen:
+            continue
+        lines = [ln.strip() for ln in req.read_text(encoding="utf-8").splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")]
+        if lines:
+            planned.append(req)
+            seen.add(str(req))
+for req in planned:
+    print("[dep-preflight] pip install -r", req, flush=True)
+    proc = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)])
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"pip install -r {req} 失败（exit {proc.returncode}）："
+            "请在该环境手动执行同一命令排查后重跑")
+print("[dep-preflight] done:",
+      [str(p.parent.relative_to(base)) for p in planned]
+      or "no extra requirements", flush=True)
+"""
+
+    async def _ensure_benchmark_deps(self, python_exe: str, datasets: list[str],
+                                     progress_cb=None,
+                                     env_extra: dict[str, str] | None = None,
+                                     ) -> list[str]:
+        """跑前把基准自带的额外依赖装进目标环境，返回 [dep-preflight] 输出行。
+
+        env_extra 附加注入子进程环境（测试用 PYTHONPATH 指向假包布局）。
+        失败抛 RuntimeError（带输出尾部与手动命令提示）——把「跑到判分段才
+        炸 ModuleNotFoundError」提前成起跑前 30 秒内的可行动报错。"""
+        env = {**os.environ, "PYTHONUTF8": "1"}
+        if env_extra:
+            env.update(env_extra)
+        # RISK: 在目标环境执行 pip install（变更其 site-packages）；只装
+        # evalscope 官方 benchmarks/<ds>/requirements.txt 锁定的内容
+        try:
+            proc = await run_sync_in_thread(
+                subprocess.run,
+                [python_exe, "-c", self.DEP_PREFLIGHT_BOOTSTRAP,
+                 json.dumps(datasets)],
+                capture_output=True, encoding="utf-8", errors="replace",
+                timeout=900, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"基准依赖预检失败（{python_exe}）：{exc}") from exc
+        lines = [ln for ln in (proc.stdout or "").splitlines()
+                 if ln.startswith("[dep-preflight]")]
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "")[-500:]
+            raise RuntimeError(f"基准依赖预检失败（{python_exe}）：{tail}")
+        for ln in lines:
+            logger.info(ln)
+            if progress_cb:
+                progress_cb({"type": "log", "line": ln})
+        return lines
+
     def build_config(self, req: ToolRunRequest) -> dict:
         url, api_key = api_endpoint(req.target)
         cfg: dict[str, Any] = {
@@ -287,6 +365,8 @@ print(json.dumps(out, ensure_ascii=False))
                 "evalscope 不可导入：安装到 aite 环境，或在 tools.extra_args."
                 f"python_exe 指向独立 evalscope 环境（原错误：{exc}）") from exc
         cfg = self.build_config(req)
+        await self._ensure_benchmark_deps(  # 进程内跑：目标环境即当前解释器
+            sys.executable, cfg["datasets"], req.progress_cb)
         await run_sync_in_thread(run_task, cfg)
         return self.collect(req)
 
@@ -330,6 +410,9 @@ print(json.dumps(out, ensure_ascii=False))
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                             encoding="utf-8")
+        # 起跑前先补基准额外依赖（bfcl 等判分器独立 pip 包；幂等，已装秒过）
+        await self._ensure_benchmark_deps(
+            python_exe, cfg["datasets"], req.progress_cb)
         # 中文 Windows 保命：docker-py/工具链读 UTF-8 文件（如 docker context
         # meta 含用户名路径）默认用 GBK 解码会炸，UTF-8 模式一揽子纠正；
         # HF 镜像默认注入（环境变量 > 数据集设置 > 默认镜像，开箱即用）；

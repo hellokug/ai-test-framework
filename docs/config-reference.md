@@ -192,7 +192,7 @@ run_name/description/module/target/report/output_dir/storage；`datasets`/
 | `resume` | auto\|true\|false | auto | 断点续推档位（CLI `--resume` / API `resume` 同名透传）。**auto（缺省，状态感知）**：最近一次输出目录没跑完（断电/402 中断）→ 就地续推只补缺失项；跑完 → 再跑自动全新起跑。**true（force）**：强制复用最近目录——改判官后只重判不重生成、或对已完成目录重出报告；旧版目录无状态文件时照续（身份交 evalscope 校验）。**false**：永远全新目录。任一档位下，生成侧身份（模型/端点/数据集/limit/生成参数，见 `run_state.json` 的 identity_hash）变更一律全新起跑，续推不混入不可比预测；判官变更不算身份变更（走 rerun_review 重判）。evalscope 侧身份快照缺失/异版本校验不符时自动降级 `rerun_review` 一次 |
 | `cases` | list[str] | 全部 | pytest 引擎用例 id 过滤 |
 | `tests_dir` | str | — | pytest 引擎自建用例目录（datasets 可空） |
-| `extra_args.python_exe` | str | common 缺省 | 独立环境解释器（venv/conda 任意路径均可；不配则要求主环境可导入 evalscope） |
+| `extra_args.python_exe` | str | common 缺省 | 独立环境解释器（venv/conda 任意路径均可；不配则要求主环境可导入 evalscope）。起跑前自动预检基准额外依赖：evalscope 官方 `benchmarks/<基准>/requirements.txt`（如 bfcl_v3/v4 → `bfcl-eval==2025.10.27.1`）缺失即在目标环境 `pip install -r`（幂等，已装约 10s 跳过；失败报错带手动命令） |
 | `extra_args.timeout_s` | float | 14400 | evalscope 子进程墙钟上限（aite 看门狗，超时杀整棵进程树） |
 | `extra_args.<其余>` | any | — | 原样透传 evalscope TaskConfig。常用：`eval_batch_size`（评测并发，生成+判官两段共用，远程 API 缺省 8）、`generation_config: {timeout, max_tokens, temperature}`（单请求墙钟/生成长度，缺省 timeout 600s 对推理模型必超时）、`eval_backend`、`judge`（高级原生形态，如多判官列表） |
 
