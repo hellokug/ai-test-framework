@@ -36,6 +36,9 @@ dependencies = [
     "pyyaml>=6.0",
     "tenacity>=8.3",
     "aiolimiter>=1.1",
+    # serve 启动链（create_app → routers/functional → functional_assets →
+    # functional/harness）顶层 import pytest，缺失则启动即 ModuleNotFoundError
+    "pytest>=8.2",
 ]
 
 [project.optional-dependencies]
