@@ -51,8 +51,8 @@
     </div>
     <section class="card">
       <table id="runsTbl"></table>
-      <div class="foot-note"><span>共 128 条记录（域过滤 domain=accuracy）</span>
-        <div class="pager"><span>‹</span><span class="on">1</span><span>2</span><span>3</span><span>›</span></div></div>
+      <div id="runsPager"></div>
+      <div class="foot-note"><span id="runsCount">共 128 条记录（域过滤 domain=accuracy）</span></div>
     </section>
   </section>
 
@@ -535,7 +535,7 @@
      suite 评测任务走表单面板（原 spec 打底覆盖，未识别键保留），判官校准任务走校准面板。
      行为实现在 api-acc3.js openAccTaskEdit / saveAccTaskEdit。 -->
 <div class="drawer drawer-lg" id="accTaskEditDrawer" hidden>
-  <div class="drawer-head"><div><h3>编辑精度任务</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-head"><div><h3 id="aeTitle">编辑精度任务</h3><div id="aeHint" style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
   <div class="drawer-body">
 
     <!-- ===== suite 评测任务编辑面板 ===== -->
@@ -990,14 +990,19 @@ const RUNS = [
   ["quickstart-openai", "#c7d80e33", "gpt-4o-mini", "passed", 96.2, "42 / 1 err", "09-19 14:32", "zhimeng"],
   ["manual-eval-round2", "#5f19c2ab", "人工评审", "pending", null, "30", "09-18 18:03", "刘畅"],
 ];
+let RUNS_LAST_F = "";   // 筛选签名：变化时翻页回第 1 页；轮询/翻页重渲染保持当前页
 function renderRuns(status, owner, kw) {
+  const sig = `${status}|${owner}|${kw}`;
+  if (sig !== RUNS_LAST_F) { RUNS_LAST_F = sig; if (window.uiPageState) uiPageState("runs").num = 1; }
   syncStatusChips("runsFilter", RUNS, r => r[3]);
   const hits = RUNS.filter(r => (status === "all" || r[3] === status)
     && (owner === "all" || r[7] === owner)
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
+  // 分页切片（通用组件 key="runs"）；api-acc3 未加载时的首渲染铺满不分页——此刻只有静态演示数据
+  const { pages, slice } = window.uiPageSlice ? uiPageSlice("runs", hits) : { pages: 1, slice: hits };
   document.getElementById("runsTbl").innerHTML = `
   <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>状态</th><th>通过率</th><th>样本</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${hits.length ? hits.map(r => {
+  <tbody>${hits.length ? slice.map(r => {
     const i = RUNS.indexOf(r);
     const st = r[3];
     // 操作按状态渲染（终态集合与后端 TASK_TERMINAL 对齐，passed 为静态演示行兼容口径；
@@ -1008,7 +1013,8 @@ function renderRuns(status, owner, kw) {
       <button class="btn sm" data-acc-act onclick="aapiTaskAction('edit', ${i}, event)" title="改配置（非运行中可改）：模型/版本/数据集/抽样/Judge/阈值/压力">编辑</button>` : "",
       st === "running" ? `<button class="btn sm" data-acc-act onclick="aapiTaskAction('stop', ${i}, event)" title="协作式停止">停止</button>` : "",
       ["succeeded", "failed", "cancelled", "stale", "passed"].includes(st) ? `<button class="btn sm" data-acc-act onclick="aapiTaskAction('retry', ${i}, event)" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : "",
-      `<button class="btn sm" data-acc-act onclick="aapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>`,
+      `<button class="btn sm" data-acc-act onclick="aapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>`,
+      ["succeeded", "failed", "cancelled", "stale"].includes(st) ? `<button class="btn sm danger" data-acc-act onclick="aapiTaskAction('delete', ${i}, event)" title="删除终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : "",
       `<button class="btn sm">报告 ↗</button>`,
     ].filter(Boolean).join("");
     return `<tr class="clickable" onclick="showPage('detail')">
@@ -1018,6 +1024,11 @@ function renderRuns(status, owner, kw) {
     <td style="text-align:right;white-space:nowrap">${acts}</td></tr>`;
   }).join("")
     : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+  const note = document.getElementById("runsCount");
+  if (note) note.textContent = `共 ${hits.length} 条记录（域过滤 domain=accuracy）`;
+  const pager = document.getElementById("runsPager");
+  if (pager) pager.innerHTML =
+    window.uiPagerHtml && (pages > 1 || !uiPageState("runs").size) ? uiPagerHtml("runs", pages) : "";
 }
 bindTaskFilter("runsFilter", renderRuns);
 bindModelCustom("accModelSel", "accModelCustom");
@@ -1239,6 +1250,6 @@ document.getElementById("manualGrid").innerHTML = MANUAL.map((m, i) => `
          <button class="btn sm primary">提交评分</button></div>`}
   </div>`).join("");
 </script>
-<script src="api-acc3.js?v=23"></script>
+<script src="api-acc3.js?v=24"></script>
 </body>
 </html>

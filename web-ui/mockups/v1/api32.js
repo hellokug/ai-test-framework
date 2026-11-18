@@ -792,6 +792,14 @@ function bindToolsUi() {
 
 /* ------------------------------------------------------------ 任务列表 */
 let RUN_TASK_IDS = [];
+/* 按筛选条当前取值重渲染任务列表（轮询兜底/pass_rate 补齐/翻页回调共用；
+   runsFilter DOM 未就绪或未选时全量。renderRuns 定义在 functional2/accuracy2 页面脚本） */
+function runsApplyFilter() {
+  const bar = document.getElementById("runsFilter");
+  renderRuns(bar?.querySelector(".chip[data-status].on")?.dataset.status || "all",
+             bar?.querySelector("[data-owner]")?.value || "all",
+             bar?.querySelector("[data-kw]")?.value?.trim().toLowerCase() || "");
+}
 function rebuildRunsFromTasks(items) {
   // 与假数据完全相同的数组形状（renderRuns/bindTaskFilter 按下标渲染），
   // 行点击经 openRunDetail 路由到真实任务详情
@@ -818,18 +826,10 @@ function rebuildRunsFromTasks(items) {
       const rate = total ? rows.reduce((acc, r) => acc + (r.value || 0) * (r.count || 0), 0) / total : null;
       const passed = rows.reduce((acc, r) => acc + Math.round((r.value || 0) * (r.count || 0)), 0);
       RUNS[i][4] = { rate, total, passed };
-      const bar = document.getElementById("runsFilter");
-      renderRuns(bar?.querySelector(".chip[data-status].on")?.dataset.status || "all",
-                 bar?.querySelector("[data-owner]")?.value || "all",
-                 bar?.querySelector("[data-kw]")?.value?.trim().toLowerCase() || "");
+      runsApplyFilter();
     }).catch(() => { /* 静默：下一轮轮询重试 */ });
   });
-  const bar = document.getElementById("runsFilter");
-  const on = bar?.querySelector(".chip[data-status].on");
-  const owner = bar?.querySelector("[data-owner]");
-  const kw = bar?.querySelector("[data-kw]");
-  renderRuns(on?.dataset.status || "all", owner?.value || "all",
-             kw?.value?.trim().toLowerCase() || "");
+  runsApplyFilter();
 }
 
 async function wireTasks() {
@@ -871,11 +871,12 @@ function openRunDetail(idx) {
   showPage("detail");   // mock 模式走原静态详情
 }
 
-/* ---------- 任务操作：运行/停止/重试/复制/编辑（ref = 列表行下标或任务 id） ----------
+/* ---------- 任务操作：运行/停止/重试/复制/编辑/删除（ref = 列表行下标或任务 id） ----------
    run pending 首发/终态重跑、stop 仅 running；retry 仅终态 = 同一任务同配置
-   再跑一轮（不再新建任务）；copy 任意状态 = 独立分支变体（同 spec 新任务）。
-   两者都打开编辑抽屉（非运行中可改 spec，改完「保存并运行」）。终态集合与
-   后端 core.types TASK_TERMINAL 对齐；mock 模式点击只提示。 */
+   再跑一轮（不再新建任务）；copy 任意状态 = 打开「复制草稿」抽屉（此刻不建任务，
+   点「创建副本/创建并运行」才 POST duplicate + PATCH 表单改动，取消不复制）；
+   delete 仅终态 = confirm 后 DELETE（执行历史与结果一并移除，pending/运行中后端 409）。
+   终态集合与后端 core.types TASK_TERMINAL 对齐；mock 模式点击只提示。 */
 async function fapiTaskAction(action, ref, ev) {
   ev?.stopPropagation();
   const byId = typeof ref === "string";
@@ -903,9 +904,16 @@ async function fapiTaskAction(action, ref, ev) {
       const rt = await FAPI.post(`/functional/tasks/${tid}/retry`);
       fapiToast(`已重跑同一任务 ${rt.id.slice(0, 8)}（第 ${(rt.history || []).length} 轮，运行中）`);
     } else if (action === "copy") {
-      const nt = await FAPI.post(`/functional/tasks/${tid}/duplicate`);
-      fapiToast(`已复制为「${nt.name}」（${nt.id.slice(0, 8)}，pending）`);
-      await openTaskEdit(nt.id);
+      await openTaskEdit(tid, { copy: true });   // 草稿抽屉：保存才建副本，取消不复制
+    } else if (action === "delete") {
+      // RISK: 网络删除终态任务——执行历史与结果快照一并移除不可恢复（pending/运行中后端 409）
+      const t = await FAPI.get(`/functional/tasks/${tid}`);
+      if (!confirm(`删除任务「${t.name || "(未命名)"}」（${tid.slice(0, 8)}）？\n执行历史与结果快照一并移除，不可恢复。`)) return;
+      await FAPI.del(`/functional/tasks/${tid}`);
+      fapiToast(`任务 ${tid.slice(0, 8)} 已删除`);
+      await wireTasks();
+      if (onDetail) backToRuns();   // 详情页删除 → 回列表（refresh 会重拉已删任务，不走）
+      return;
     } else if (action === "edit") {
       await openTaskEdit(tid);
     }
@@ -930,21 +938,38 @@ function teRenderScenes() {
     : '<span class="hint" style="margin:0;color:var(--bad)">未选任何场景 —— 至少保留一个才能保存</span>';
 }
 
-async function openTaskEdit(taskId) {
+/* 抽屉文案随模式切换：复制草稿（保存才建副本）/ 常规编辑（PATCH 原任务） */
+function teSetMode(copy) {
+  const title = document.getElementById("teTitle");
+  const hint = document.getElementById("teHint");
+  const save = document.getElementById("teSaveBtn");
+  const run = document.getElementById("teRunBtn");
+  if (!title || !save || !run) return;
+  title.textContent = copy ? "复制为新任务（草稿）" : "编辑任务配置";
+  if (hint) hint.textContent = copy
+    ? "尚未创建任何任务——「创建副本 / 创建并运行」才以当前表单 POST duplicate 新建 pending 变体；「取消」直接放弃，不复制"
+    : "非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「重试」产出的新一轮会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史";
+  save.textContent = copy ? "创建副本（不运行）" : "保存（不运行）";
+  run.textContent = copy ? "创建并运行" : "保存并运行";
+}
+
+async function openTaskEdit(taskId, opts) {
+  const copy = !!(opts && opts.copy);   // 复制草稿：以源任务 spec 打底，保存才真建任务
   const drawer = document.getElementById("taskEditDrawer");
   if (!drawer) return;
   let t;
   try { t = await FAPI.get(`/functional/tasks/${taskId}`); }
   catch (err) { fapiToast(`载入任务失败：${err.message}`, true); return; }
-  if (["running", "stopping"].includes(t.status)) {
+  if (!copy && ["running", "stopping"].includes(t.status)) {
     fapiToast(`运行中/停止中的任务不可编辑（当前 ${t.status}），停止或跑完再改`, true);
     return;
   }
   // RISK: 终态任务「保存并运行」会真跑一轮（saveTaskEdit PATCH+run，打真实模型端点）——
   // 门槛若再放宽到 running/stopping，会与在途运行互相踩（后端 409 兜底，前端不再拦）。
   const spec = t.spec || {};
-  teState = { taskId, spec, scenes: [...((spec.tools || {}).datasets || [])] };
-  document.getElementById("teName").value = t.name || "";
+  teState = { taskId: copy ? null : taskId, copyFrom: copy ? taskId : null,
+              spec, scenes: [...((spec.tools || {}).datasets || [])] };
+  document.getElementById("teName").value = copy ? `${t.name || "任务"} · 副本` : (t.name || "");
   document.getElementById("teVersion").value = spec.version || "";
   document.getElementById("teTimeout").value = (spec.extra || {}).timeout ?? "";
   document.getElementById("teCases").value = ((spec.tools || {}).cases || []).join("\n");
@@ -1011,12 +1036,13 @@ async function openTaskEdit(taskId) {
       teRenderScenes();
     });
   }
+  teSetMode(copy);
   drawer.hidden = false;
 }
 
 async function saveTaskEdit(runAfter) {
   if (!teState) return;
-  const { taskId, spec: orig } = teState;
+  const { taskId: editId, copyFrom, spec: orig } = teState;
   const name = document.getElementById("teName").value.trim();
   const version = document.getElementById("teVersion").value.trim();
   if (!name) { fapiToast("任务名称必填（同域内唯一，便于列表检索）", true); return; }
@@ -1057,16 +1083,30 @@ async function saveTaskEdit(runAfter) {
   }
   if (name) spec.run_name = name; else delete spec.run_name;
   try {
-    await FAPI.patch(`/functional/tasks/${taskId}`, { name: name || undefined, spec });
+    let taskId = editId;
+    if (copyFrom) {
+      // RISK: 网络 POST duplicate——从这一刻起才真建任务；随后 PATCH 表单改动。名字冲突时
+      // 副本已按默认「· 副本」名留在列表（不静默回滚），改完重存即可（teState 已切到新任务，只 PATCH）
+      const nt = await FAPI.post(`/functional/tasks/${copyFrom}/duplicate`);
+      taskId = nt.id;
+      teState.taskId = taskId;
+      teState.copyFrom = null;
+      await FAPI.patch(`/functional/tasks/${taskId}`, { name, spec });
+      fapiToast(`已复制为「${name}」（${taskId.slice(0, 8)}，pending）`);
+    } else {
+      await FAPI.patch(`/functional/tasks/${taskId}`, { name: name || undefined, spec });
+    }
     if (runAfter) await FAPI.post(`/functional/tasks/${taskId}/run`);
     document.getElementById("taskEditDrawer").hidden = true;
-    fapiToast(runAfter
+    if (!copyFrom) fapiToast(runAfter
       ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行（本轮追加进执行历史）`
       : `配置已保存（${taskId.slice(0, 8)}，随时可运行，历史不受影响）`);
     await wireTasks();
     await showLiveTask(taskId);
   } catch (err) {
-    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务正在运行中不可改，或名称与同域其他任务冲突）" : ""}`, true);
+    fapiToast(`保存失败：${err.message}${/409/.test(err.message) ? (copyFrom && teState.taskId
+      ? "（副本已创建，改名/改参失败——修正后重存即补写，或到列表中处理该副本）"
+      : "（任务正在运行中不可改，或名称与同域其他任务冲突）") : ""}`, true);
   }
 }
 
@@ -1382,7 +1422,8 @@ async function showLiveTask(taskId, roundSel) {
         <button class="btn" onclick="fapiTaskAction('edit', '${taskId}')" title="改配置（非运行中可改）：模型/版本/场景/用例过滤/超时">编辑</button>` : ""}
         ${["running", "stopping"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('stop', '${taskId}')">停止</button>` : ""}
         ${["succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn" onclick="fapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
-        <button class="btn" onclick="fapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
+        <button class="btn" onclick="fapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
+        ${["succeeded", "failed", "cancelled", "stale"].includes(t.status) ? `<button class="btn danger" onclick="fapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
         <button class="btn" onclick="showLiveTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>
@@ -2023,11 +2064,14 @@ async function wireCommonVersions() {
   }
 }
 
+/* 任务列表翻页绑定（分页组件在 assets/live2.js，本文件加载时已就绪；functional2 的
+   runs 表容器，mock/live 通吃，宿主不存在即空操作） */
+uiPagerBind("#runsPager", "runs", runsApplyFilter);
+
 /* ---------------- 公共 · 数据集管理页（common2.html：目录 + 路径/在线源设置 + 导入抽屉） ---------------- */
-let DS_ROWS = [];    // 本机数据集行：GET /datasets 合并行 + kind:"local"
+let DS_ROWS = [];    // 本机数据集行：GET /datasets 合品行 + kind:"local"
 let DS_BENCH = [];   // evalscope 基准全集行：GET /datasets/online/datasets + kind:"bench"（type 固定 accuracy）
 let DS_BENCH_LIVE = false;             // DS_BENCH 已被 live 数据灌过（列举失败时防 mock 演示行冒充真数据）
-window.DS_PAGE = { num: 1, size: 15 }; // 目录表分页：num 当前页，size 每页行数（0 = 全部一页铺完）
 
 function dsRef(r) { return `${r.type}:${r.name}`; }
 function dsStatsCell(stats) {
@@ -2084,38 +2128,7 @@ function dsClip(text) {
   const t = String(text ?? "");
   return `<div style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${dsEsc(t)}">${dsEsc(t)}</div>`;
 }
-/* 分页切片（mock/live 共用）：size 0 = 全部；num 越界自动收拢回合法页 */
-function dsPageOf(rows) {
-  const size = window.DS_PAGE.size > 0 ? window.DS_PAGE.size : (rows.length || 1);
-  const pages = Math.max(1, Math.ceil(rows.length / size));
-  window.DS_PAGE.num = Math.min(Math.max(1, window.DS_PAGE.num), pages);
-  return { pages, slice: rows.slice((window.DS_PAGE.num - 1) * size, window.DS_PAGE.num * size) };
-}
-/* 页码条：页数 ≤9 全铺，否则 1 2 … n-1 n n+1 … 末页；右侧每页行数切换。
-   单页时不铺页码但保留每页条数下拉（「全部」的逃生口，选页数即恢复分页） */
-function dsPagerHtml(pages) {
-  const n = window.DS_PAGE.num;
-  const btn = (p, label, opts = {}) =>
-    `<button class="btn sm${opts.cur ? " primary" : ""}" data-ds-page="${p}"${opts.dis ? " disabled" : ""}>${label}</button>`;
-  const sizeSel = `<select class="in" id="dsPageSize" title="每页行数；「全部」一页铺完不翻页" style="width:auto">` +
-    [15, 30, 50].map(s => `<option value="${s}"${window.DS_PAGE.size === s ? " selected" : ""}>${s} 条/页</option>`).join("") +
-    `<option value="0"${!window.DS_PAGE.size ? " selected" : ""}>全部</option></select>`;
-  const nav = pages <= 1 ? "" :
-    btn("prev", "‹ 上一页", { dis: n <= 1 }) +
-    (() => {
-      const marks = [];
-      if (pages <= 9) { for (let i = 1; i <= pages; i++) marks.push(i); }
-      else {
-        const want = [...new Set([1, 2, n - 1, n, n + 1, pages - 1, pages])]
-          .filter(p => p >= 1 && p <= pages).sort((a, b) => a - b);
-        want.forEach((p, i) => { if (i && p - want[i - 1] > 1) marks.push("…"); marks.push(p); });
-      }
-      return marks.map(p => p === "…" ? '<span class="dim">…</span>' : btn(p, p, { cur: p === n })).join("");
-    })() +
-    btn("next", "下一页 ›", { dis: n >= pages }) +
-    `<span class="hint">第 ${n} / ${pages} 页</span>`;
-  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin-top:10px">${nav}${sizeSel}</div>`;
-}
+/* 分页走通用组件 uiPageSlice/uiPagerHtml（key="ds"） */
 function dsRenderTable() {
   const rows = dsAllRows().filter(r => dsFilterMatch(r, window.DS_FILTERS));
   const local = DS_ROWS.filter(r => r.kind !== "bench");
@@ -2124,13 +2137,13 @@ function dsRenderTable() {
   if (cnt) cnt.textContent =
     `共 ${rows.length} 行 · 本机 ${local.length}（自建 ${local.length - opened} · 开源 ${opened}）` +
     ` · 基准 ${DS_BENCH.length}（本机已有 ${DS_BENCH.filter(b => b.local).length}）`;
-  const { pages, slice } = dsPageOf(rows);
+  const { pages, slice } = uiPageSlice("ds", rows);
   document.getElementById("dsTbl").innerHTML = `
     <thead><tr><th style="width:7%">类型</th><th style="width:22%">名称</th><th style="width:18%;white-space:nowrap">来源</th><th style="width:15%">规模 / 概要</th><th style="width:18%">path · dataset_id</th><th style="width:20%;white-space:nowrap;text-align:right">操作</th></tr></thead>
     <tbody>${slice.map(r => r.kind === "bench" ? dsBenchRow(r) : dsLocalRow(r)).join("")
       || '<tr><td colspan="6" class="ds-empty">没有符合筛选条件的数据集 —— 调整筛选，或从「导入」区新增</td></tr>'}</tbody>`;
   const pager = document.getElementById("dsPager");
-  if (pager) pager.innerHTML = (pages > 1 || !window.DS_PAGE.size) ? dsPagerHtml(pages) : "";
+  if (pager) pager.innerHTML = (pages > 1 || !uiPageState("ds").size) ? uiPagerHtml("ds", pages) : "";
 }
 function dsLocalRow(r) {
   const ref = encodeURIComponent(dsRef(r));
@@ -2272,24 +2285,7 @@ function dsBindDatasetsTable() {
         await wireCommonDatasetsPage();
       });
     });
-  const pager = document.getElementById("dsPager");
-  if (pager && !pager.dataset.dsBound) {
-    pager.dataset.dsBound = "1";
-    pager.addEventListener("click", e => {
-      const b = e.target.closest("[data-ds-page]");
-      if (!b || b.disabled) return;
-      const p = b.dataset.dsPage;
-      window.DS_PAGE.num = p === "prev" ? window.DS_PAGE.num - 1
-        : p === "next" ? window.DS_PAGE.num + 1 : Number(p);
-      dsRenderTable();
-    });
-    pager.addEventListener("change", e => {
-      if (e.target.id !== "dsPageSize") return;
-      window.DS_PAGE.size = Number(e.target.value) || 0;   // 0 = 全部
-      window.DS_PAGE.num = 1;
-      dsRenderTable();
-    });
-  }
+  uiPagerBind("#dsPager", "ds", dsRenderTable);   // 翻页/档位/跳页 → 重渲染目录表
   const banner = document.getElementById("dsBenchBanner");
   if (banner && !banner.dataset.dsBound) {
     banner.dataset.dsBound = "1";

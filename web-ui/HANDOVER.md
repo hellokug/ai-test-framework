@@ -1658,3 +1658,14 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   雷达图（api32.js renderBoard）与趋势/模型图同源真归档数据，轴 = 真实评估维度。
   api-acc3 v=22→23（accuracy2）、api32 v=35→36（functional2/common2）。
   人工评测页仍为演示数据（送评链路未建）。
+
+## 2026-11-18
+
+- 任务删除 + 复制改「确认制草稿」（功能/精度两页同构）：复制不再点击即建任务——
+  改开「复制草稿」抽屉（teSetMode/aeSetMode 切标题与按钮文案，名字预填「原名 · 副本」），
+  点「创建副本（不运行）/创建并运行」才 POST /duplicate + PATCH 表单改动（teState/
+  aeState 记 copyFrom，duplicate 成功即切到新任务 id，改名 409 重存只 PATCH 不重复建），
+  「取消」直接关抽屉不建任何任务；新增删除按钮（列表行 + 详情操作栏，仅终态显示，
+  与后端 delete 仅限终态契约对齐，pending/运行中不渲染），confirm 确认后 DELETE，
+  详情页删除后回列表。api32 v=36→37（functional2/common2）、api-acc3 v=23→24
+  （accuracy2）。IAB 沙箱全流程验证过（删取消/删确认/复制取消不落库/创建副本落库）。

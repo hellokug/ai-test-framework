@@ -257,7 +257,8 @@ async function showAccTask(taskId, roundSel) {
         <button class="btn" onclick="aapiTaskAction('edit', '${taskId}')" title="改配置（非运行中可改）：模型/版本/数据集/抽样/Judge/阈值/压力">编辑</button>` : ""}
         ${running ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
         ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : ""}
-        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
+        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
+        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>
@@ -439,12 +440,14 @@ async function stopAccTask(taskId) {
   } catch (err) { aapiToast(`停止失败：${err.message}`, true); }
 }
 
-/* ------------------------------------ 任务操作：运行/停止/重试/复制/编辑（§编辑重试） */
+/* ------------------------------------ 任务操作：运行/停止/重试/复制/编辑/删除（§编辑重试） */
 /* 与功能域 api32.fapiTaskAction 同构（精度页不加载 api32，独立实现防重名，函数名带 aapi 前缀）：
    run pending 首发/终态重跑；retry 仅终态 = 同一任务同配置再跑一轮（后端
-   core/taskkit.py DomainTaskKit.retry，不新建任务）；copy 任意状态 = 同 spec
-   新 pending 任务（/duplicate）并自动打开编辑抽屉；edit 打开精度编辑抽屉
-   （保存 = PATCH /accuracy/tasks/{id}，后端仅 pending/终态可改，运行中 409）。
+   core/taskkit.py DomainTaskKit.retry，不新建任务）；copy 任意状态 = 打开「复制
+   草稿」抽屉（此刻不建任务，点「创建副本/创建并运行」才 POST /duplicate +
+   PATCH 表单改动，取消不复制）；edit 打开精度编辑抽屉（保存 = PATCH
+   /accuracy/tasks/{id}，后端仅 pending/终态可改，运行中 409）；delete 仅终态 =
+   confirm 后 DELETE（执行历史与结果一并移除，pending/运行中后端 409）。
    ref = 列表行下标（ACC_TASK_IDS 索引）或任务 id（详情页）；mock 模式点击只提示。 */
 async function aapiTaskAction(action, ref, ev) {
   ev?.stopPropagation();
@@ -474,10 +477,16 @@ async function aapiTaskAction(action, ref, ev) {
       const rt = await AAPI.post(`/accuracy/tasks/${tid}/retry`);
       aapiToast(`已重跑同一任务 ${rt.id.slice(0, 8)}（第 ${(rt.history || []).length} 轮，运行中）`);
     } else if (action === "copy") {
-      // RISK: 网络 POST，同 spec 深拷贝新建 pending 任务（原任务不变）
-      const nt = await AAPI.post(`/accuracy/tasks/${tid}/duplicate`);
-      aapiToast(`已复制为「${nt.name}」（${nt.id.slice(0, 8)}，pending）`);
-      await openAccTaskEdit(nt.id);
+      await openAccTaskEdit(tid, { copy: true });   // 草稿抽屉：保存才建副本，取消不复制
+    } else if (action === "delete") {
+      // RISK: 网络删除终态任务——执行历史与结果快照一并移除不可恢复（pending/运行中后端 409）
+      const t = await AAPI.get(`/accuracy/tasks/${tid}`);
+      if (!confirm(`删除任务「${t.name || "(未命名)"}」（${tid.slice(0, 8)}）？\n执行历史与结果快照一并移除，不可恢复。`)) return;
+      await AAPI.del(`/accuracy/tasks/${tid}`);
+      aapiToast(`任务 ${tid.slice(0, 8)} 已删除`);
+      await wireAccTasks();
+      if (onDetail) backToRuns();   // 详情页删除 → 回列表（refresh 会重拉已删任务，不走）
+      return;
     } else if (action === "edit") {
       await openAccTaskEdit(tid);
     }
@@ -512,13 +521,29 @@ function aeRenderDs() {
     : '<span class="hint" style="margin:0;color:var(--bad)">未选任何数据集 —— 至少保留一个才能保存</span>';
 }
 
-async function openAccTaskEdit(taskId) {
+/* 抽屉文案随模式切换：复制草稿（保存才建副本）/ 常规编辑（PATCH 原任务） */
+function aeSetMode(copy) {
+  const title = ae$("aeTitle");
+  const hint = ae$("aeHint");
+  const save = ae$("aeSaveBtn");
+  const run = ae$("aeRunBtn");
+  if (!title || !save || !run) return;
+  title.textContent = copy ? "复制为新任务（草稿）" : "编辑精度任务";
+  if (hint) hint.textContent = copy
+    ? "尚未创建任何任务——「创建副本 / 创建并运行」才以当前表单 POST duplicate 新建 pending 变体；「取消」直接放弃，不复制"
+    : "非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「重试」产出的新一轮会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史";
+  save.textContent = copy ? "创建副本（不运行）" : "保存（不运行）";
+  run.textContent = copy ? "创建并运行" : "保存并运行";
+}
+
+async function openAccTaskEdit(taskId, opts) {
+  const copy = !!(opts && opts.copy);   // 复制草稿：以源任务 spec 打底，保存才真建任务
   const drawer = ae$("accTaskEditDrawer");
   if (!drawer) return;
   let t;
   try { t = await AAPI.get(`/accuracy/tasks/${taskId}`); }   // RISK: 网络读任务详情（编辑底稿）
   catch (err) { aapiToast(`载入任务失败：${err.message}`, true); return; }
-  if (t.status !== "pending" && !ACC_TERMINAL.includes(t.status)) {
+  if (!copy && t.status !== "pending" && !ACC_TERMINAL.includes(t.status)) {
     aapiToast(`仅 pending / 终态任务可编辑（当前 ${t.status}）——「复制」可开出 pending 变体`, true);
     return;
   }
@@ -527,7 +552,8 @@ async function openAccTaskEdit(taskId) {
   const dsSeed = Array.isArray(spec.tools?.datasets) ? spec.tools.datasets.map(String)
     : (spec.datasets || []).map(d => typeof d === "string" ? d : (d.name || d.id || d.ref || d.path))
       .filter(Boolean).map(String);
-  aeState = { taskId, spec, cal, datasets: dsSeed };
+  aeState = { taskId: copy ? null : taskId, copyFrom: copy ? taskId : null,
+              spec, cal, datasets: dsSeed };
   ae$("aeSpecView").textContent = JSON.stringify(spec, null, 2);
   ae$("aeCalSpecView").textContent = JSON.stringify(spec, null, 2);
   // 候选重建（模型/Judge/rubric 与创建抽屉同源；ACC_MODEL_SOURCES/ACC_RUBRICS 由 boot 步骤装配）
@@ -540,7 +566,7 @@ async function openAccTaskEdit(taskId) {
   ae$("aeDsList").innerHTML = [...new Set([...(DS_ITEMS || []).map(d => d.n), ...aeState.datasets])]
     .map(n => `<option value="${escHtml(n)}">`).join("");
   if (cal) {
-    ae$("aeCalName").value = t.name || "";
+    ae$("aeCalName").value = copy ? `${t.name || "任务"} · 副本` : (t.name || "");
     ae$("aeCalLimit").value = spec.limit ?? "";
     ae$("aeCalJudgeSel").value = spec.judge?.profile
       || (spec.judge?.base_url ? "__custom__" : "");
@@ -565,7 +591,7 @@ async function openAccTaskEdit(taskId) {
     const tools = spec.tools || {};
     const extra = tools.extra_args || {};
     const target = spec.target || {};
-    ae$("aeName").value = t.name || spec.run_name || "";
+    ae$("aeName").value = copy ? `${t.name || spec.run_name || "任务"} · 副本` : (t.name || spec.run_name || "");
     ae$("aeVersion").value = spec.version || "";
     aeRenderDs();
     ae$("aeLimit").value = tools.limit_per_subset ?? "";
@@ -635,12 +661,13 @@ async function openAccTaskEdit(taskId) {
   }
   // 双面板显隐：suite 评测任务 / 判官校准任务二选一
   drawer.querySelectorAll("[data-ae-pane]").forEach(p => { p.hidden = p.dataset.aePane !== (cal ? "cal" : "eval"); });
+  aeSetMode(copy);
   drawer.hidden = false;
 }
 
 async function saveAccTaskEdit(runAfter) {
   if (!aeState) return;
-  const { taskId, spec: orig, cal } = aeState;
+  const { taskId: editId, copyFrom, spec: orig, cal } = aeState;
   const name = ae$(cal ? "aeCalName" : "aeName").value.trim();
   const spec = JSON.parse(JSON.stringify(orig || {}));   // 原样打底：表单未覆盖的字段不丢
   const bail = msg => { aapiToast(msg, true); };
@@ -748,11 +775,23 @@ async function saveAccTaskEdit(runAfter) {
     if (name) spec.run_name = name; else delete spec.run_name;
   }
   try {
-    // RISK: 网络 PATCH 覆盖任务 name/spec（深拷贝打底保未知键，但被改字段不可回退）
-    await AAPI.patch(`/accuracy/tasks/${taskId}`, { name: name || undefined, spec });
+    let taskId = editId;
+    if (copyFrom) {
+      // RISK: 网络 POST duplicate——从这一刻起才真建任务；随后 PATCH 表单改动。名字冲突时
+      // 副本已按默认「· 副本」名留在列表（不静默回滚），改完重存即可（aeState 已切到新任务，只 PATCH）
+      const nt = await AAPI.post(`/accuracy/tasks/${copyFrom}/duplicate`);
+      taskId = nt.id;
+      aeState.taskId = taskId;
+      aeState.copyFrom = null;
+      await AAPI.patch(`/accuracy/tasks/${taskId}`, { name, spec });
+      aapiToast(`已复制为「${name}」（${taskId.slice(0, 8)}，pending）`);
+    } else {
+      // RISK: 网络 PATCH 覆盖任务 name/spec（深拷贝打底保未知键，但被改字段不可回退）
+      await AAPI.patch(`/accuracy/tasks/${taskId}`, { name: name || undefined, spec });
+    }
     if (runAfter) await AAPI.post(`/accuracy/tasks/${taskId}/run`);   // RISK: 网络 POST，触发任务执行
     ae$("accTaskEditDrawer").hidden = true;
-    aapiToast(runAfter
+    if (!copyFrom) aapiToast(runAfter
       ? `配置已保存，任务 ${taskId.slice(0, 8)} 已发起运行`
       : `配置已保存（${taskId.slice(0, 8)}），未运行`);
     await wireAccTasks();
@@ -761,7 +800,9 @@ async function saveAccTaskEdit(runAfter) {
       await showAccTask(taskId);
     }
   } catch (err) {
-    aapiToast(`保存失败：${err.message}${/409/.test(err.message) ? "（任务已不在可编辑状态，或名称与同域其他任务冲突）" : ""}`, true);
+    aapiToast(`保存失败：${err.message}${/409/.test(err.message) ? (copyFrom && aeState.taskId
+      ? "（副本已创建，改名/改参失败——修正后重存即补写，或到列表中处理该副本）"
+      : "（任务已不在可编辑状态，或名称与同域其他任务冲突）") : ""}`, true);
   }
 }
 
@@ -1530,7 +1571,8 @@ async function accRenderCalDetail(t, taskId, seq) {
         <button class="btn" onclick="aapiTaskAction('edit', '${taskId}')" title="改校准配置（非运行中可改）：校准集/判官/rubric/抽样">编辑</button>` : ""}
         ${t.status === "running" ? `<button class="btn" onclick="stopAccTask('${taskId}')">停止</button>` : ""}
         ${ACC_TERMINAL.includes(t.status) ? `<button class="btn" onclick="aapiTaskAction('retry', '${taskId}')" title="同配置立即再校准一轮（同一任务，追加执行历史）">重试</button>` : ""}
-        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>
+        <button class="btn" onclick="aapiTaskAction('copy', '${taskId}')" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>
+        ${ACC_TERMINAL.includes(t.status) ? `<button class="btn danger" onclick="aapiTaskAction('delete', '${taskId}')" title="删除该终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : ""}
         <button class="btn" onclick="showAccTask('${taskId}')">刷新</button>
         <button class="btn" onclick="backToRuns()">← 任务列表</button></div>
     </header>

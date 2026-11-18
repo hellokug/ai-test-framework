@@ -45,7 +45,8 @@
       <input class="in" data-kw style="width:190px" placeholder="按名称 / ID / 模型…">
     </div>
     <section class="card"><table id="runsTbl"></table>
-      <div class="foot-note"><span>共 23 条记录（domain=functional）</span></div></section>
+      <div id="runsPager"></div>
+      <div class="foot-note"><span id="runsCount">共 23 条记录（domain=functional）</span></div></section>
   </section>
 
   <!-- ============ 运行详情 ============ -->
@@ -286,7 +287,7 @@
 
 <!-- 任务编辑抽屉（pending 限定）：复制/重试生成的草稿从这里改参再跑 -->
 <div class="drawer drawer-lg" id="taskEditDrawer" hidden>
-  <div class="drawer-head"><div><h3>编辑任务配置</h3><div style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
+  <div class="drawer-head"><div><h3 id="teTitle">编辑任务配置</h3><div id="teHint" style="font-size:12px;color:var(--tx3);margin-top:2px">非运行中任务可改（pending 改首发配置 / 终态改完可重跑）——「复制」开出的变体、「重试」产出的新一轮都会自动打开本抽屉；保存 = PATCH 原任务，每轮运行快照当时的 spec 入执行历史</div><button class="icon-btn" data-close>✕</button></div></div>
   <div class="drawer-body">
 
     <div class="form-sec" style="margin-top:0">
@@ -498,14 +499,19 @@ function evalCell(ev) {
   return `<span class="num mono" style="color:${color};font-weight:650">${pct}%</span>` +
     (ev.total ? ` <span class="dim" style="font-size:11px">${n}${ev.total} 例</span>` : "");
 }
+let RUNS_LAST_F = "";   // 筛选签名：变化时翻页回第 1 页；轮询/翻页重渲染保持当前页
 function renderRuns(status, owner, kw) {
+  const sig = `${status}|${owner}|${kw}`;
+  if (sig !== RUNS_LAST_F) { RUNS_LAST_F = sig; if (window.uiPageState) uiPageState("runs").num = 1; }
   syncStatusChips("runsFilter", RUNS, r => r[3]);
   const hits = RUNS.filter(r => (status === "all" || r[3] === status)
     && (owner === "all" || r[7] === owner)
     && (!kw || (r[0] + r[1] + r[2]).toLowerCase().includes(kw)));
+  // 分页切片（通用组件 key="runs"）；api32 未加载时的首渲染铺满不分页——此刻只有静态演示数据
+  const { pages, slice } = window.uiPageSlice ? uiPageSlice("runs", hits) : { pages: 1, slice: hits };
   document.getElementById("runsTbl").innerHTML = `
   <thead><tr><th>运行</th><th>目标模型</th><th>执行人</th><th>任务状态</th><th>评估结果</th><th>用例</th><th>开始时间</th><th style="text-align:right">操作</th></tr></thead>
-  <tbody>${hits.length ? hits.map(r => {
+  <tbody>${hits.length ? slice.map(r => {
     const i = RUNS.indexOf(r);
     // 操作按状态渲染（终态集合与后端 TASK_TERMINAL 对齐；行为见 api32 fapiTaskAction）
     const acts = [
@@ -514,7 +520,8 @@ function renderRuns(status, owner, kw) {
       <button class="btn sm" onclick="fapiTaskAction('edit', ${i}, event)" title="改配置（非运行中可改）：模型/版本/场景/用例过滤/超时">编辑</button>` : "",
       r[3] === "running" ? `<button class="btn sm" onclick="fapiTaskAction('stop', ${i}, event)" title="协作式停止">停止</button>` : "",
       ["succeeded", "failed", "cancelled", "stale"].includes(r[3]) ? `<button class="btn sm" onclick="fapiTaskAction('retry', ${i}, event)" title="同配置立即再跑一轮（同一任务，追加执行历史）">重试</button>` : "",
-      `<button class="btn sm" onclick="fapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务）并打开编辑">复制</button>`,
+      `<button class="btn sm" onclick="fapiTaskAction('copy', ${i}, event)" title="复制为独立分支变体（同 spec 新任务，保存才创建，取消不复制）">复制</button>`,
+      ["succeeded", "failed", "cancelled", "stale"].includes(r[3]) ? `<button class="btn sm danger" onclick="fapiTaskAction('delete', ${i}, event)" title="删除终态任务（执行历史与结果快照一并移除，不可恢复）">删除</button>` : "",
       `<button class="btn sm">报告 ↗</button>`,
     ].filter(Boolean).join("");
     return `<tr class="clickable" onclick="openRunDetail(${i})">
@@ -524,6 +531,11 @@ function renderRuns(status, owner, kw) {
     <td style="text-align:right;white-space:nowrap">${acts}</td></tr>`;
   }).join("")
     : '<tr><td colspan="8" class="ds-empty">当前筛选无匹配任务 —— 调整状态 / 执行人或关键词</td></tr>'}</tbody>`;
+  const note = document.getElementById("runsCount");
+  if (note) note.textContent = `共 ${hits.length} 条记录（domain=functional）`;
+  const pager = document.getElementById("runsPager");
+  if (pager) pager.innerHTML =
+    window.uiPagerHtml && (pages > 1 || !uiPageState("runs").size) ? uiPagerHtml("runs", pages) : "";
 }
 bindTaskFilter("runsFilter", renderRuns);
 bindModelCustom("ftModelSel", "ftModelCustom");
@@ -1446,6 +1458,6 @@ document.getElementById("scnDimOk").addEventListener("click", scnDimConfirm);
 document.getElementById("scnDimName").addEventListener("keydown", e => { if (e.key === "Enter") scnDimConfirm(); });
 renderScnDims();
 </script>
-<script src="api32.js?v=36"></script>
+<script src="api32.js?v=37"></script>
 </body>
 </html>
