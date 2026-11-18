@@ -1666,6 +1666,23 @@ REST/CLI/测试主提交 119c9d9）。静态稿侧本条目范围：
   点「创建副本（不运行）/创建并运行」才 POST /duplicate + PATCH 表单改动（teState/
   aeState 记 copyFrom，duplicate 成功即切到新任务 id，改名 409 重存只 PATCH 不重复建），
   「取消」直接关抽屉不建任何任务；新增删除按钮（列表行 + 详情操作栏，仅终态显示，
-  与后端 delete 仅限终态契约对齐，pending/运行中不渲染），confirm 确认后 DELETE，
+  与后端 delete 仅限终态对齐，pending/运行中不渲染），confirm 确认后 DELETE，
   详情页删除后回列表。api32 v=36→37（functional2/common2）、api-acc3 v=23→24
   （accuracy2）。IAB 沙箱全流程验证过（删取消/删确认/复制取消不落库/创建副本落库）。
+- 任务列表分页条四项能力（通用组件化）：assets/live2.js 新增通用分页
+  （UI_PAGES/uiPageState/uiPageSlice/uiPagerHtml/uiPagerBind——档位下拉 15/30/50/全部、
+  页码点击 ≤9 全铺 >9 首末+当前窗口+省略号、« » 最前最后直达、输入页码回车精准跳页
+  且越界自动收拢）；functional2/accuracy2 的 renderRuns 接 key="runs" 切片渲染
+  （筛选签名变化回第 1 页，轮询/翻页重渲染保持当前页），#runsPager 容器 + 底部计数
+  改真实命中数（runsCount），accuracy2 假静态 pager 移除；数据集目录 ds 分页从
+  api32 专有实现迁移到同一组件（行为不变 + 新增首末直达/跳页输入）；翻页绑定按域
+  分置 api32（runsApplyFilter）/api-acc3（aapiRerenderRuns）。live2 v=4→5
+  （三页）、api32 v=37→38（functional2/common2）、api-acc3 v=24→25（accuracy2）。
+  render_check.cjs 增通用分页断言组（切片/越界收拢/四项能力/委托绑定）；
+  IAB 灌 40 行实测两页翻页/直达/跳页/档位/筛选重置全过、截图验收布局正常。
+- 任务删除放行 pending（修「复制副本删不掉」，与上条「仅终态可删」的放宽）：后端
+  taskkit.delete 守卫 pending/终态可删（运行中仍 409 先停止），repo.delete_domain_task
+  增 expect_status 原子条件删防与 run/调度器竞态；前端功能页(api32)/精度页(api-acc3
+  任务卡+校准卡)删除按钮对 pending 任务渲染（确认文案不变），CLI rm 同步。
+  api32 v=38→39（functional2/common2）、api-acc3 v=25→26（accuracy2）。
+  后端行为改动须重启 aite serve；单测+集成 53 过（含 pending 删除/运行中 409）。
